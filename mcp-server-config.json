@@ -1,0 +1,18 @@
+{
+  "name": "task-manager",
+  "command": "node",
+  "args": ["src/mcp-server.ts"],
+  "env": {
+    "NODE_ENV": "development",
+    "LOG_LEVEL": "debug"
+  },
+  "description": "Task management MCP server for OpenCode",
+  "tools": [
+    "create_task",
+    "list_tasks",
+    "get_task",
+    "update_task_status",
+    "update_task_priority",
+    "delete_task"
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "name": "testingg",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "daemon": "node src/daemon.ts",
+    "mcp-server": "node src/mcp-server.ts",
+    "start-mcp": "node scripts/start-mcp-server.js",
+    "test-mcp": "node scripts/test-mcp-server.js",
+    "cli": "node src/cli-client.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.22.0",
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^0.8.0",
+    "@modelcontextprotocol/sdk": "^1.24.3",
+    "@types/level": "^6.0.3",
+    "@types/ws": "^8.18.1",
+    "level": "^10.0.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.2",
+    "typescript": "^5.9.3"
+  }
+}
