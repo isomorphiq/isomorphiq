@@ -1,8 +1,6 @@
 import { Level } from 'level'
-import { promises as fs } from 'fs'
-import { spawn } from 'child_process'
-import { ClientSideConnection, ndJsonStream } from '@agentclientprotocol/sdk'
 import path from 'path'
+import { ACPConnectionManager } from './acp-connection.ts'
 
 // Define task interface
 interface Task {
@@ -140,46 +138,55 @@ export class ProductManager {
     await db.del(id)
   }
 
-  // Execute task with realistic simulation (launch-ready implementation)
+  // Execute task using ACP protocol only
   async runOpencode(prompt: string): Promise<{ output: string; errorOutput: string }> {
-    return new Promise((resolve, reject) => {
-      console.log(`[TASK] Executing task: ${prompt}`)
+    console.log(`[ACP] Starting ACP protocol communication: ${prompt}`)
 
-      // Simulate realistic task processing time based on complexity
-      const wordCount = prompt.split(' ').length
-      const baseTime = 2000 // 2 seconds base
-      const processingTime = Math.min(baseTime + (wordCount * 100), 10000) // Max 10 seconds
+    try {
+      // Execute using ACP protocol only
+      const result = await this.executeWithACP(prompt)
+      console.log('[ACP] ACP protocol communication completed')
+      return result
+    } catch (error) {
+      console.error(`[ACP] ACP communication error: ${error}`)
+      
+      // Fail with error - no fallbacks
+      const errorMsg = `Task execution failed: ACP connection failed: ${(error as Error).message}`
+      return { output: '', errorOutput: errorMsg }
+    }
+  }
 
-      console.log(`[TASK] Estimated processing time: ${processingTime}ms`)
+  // Execute task using ACP protocol
+  private async executeWithACP(prompt: string): Promise<{ output: string; errorOutput: string }> {
+    let connectionResult
+    try {
+      // Create ACP connection
+      connectionResult = await ACPConnectionManager.createConnection()
+      
+      // Send prompt
+      await ACPConnectionManager.sendPrompt(
+        connectionResult.connection, 
+        connectionResult.sessionId, 
+        prompt
+      )
 
-      setTimeout(() => {
-        try {
-          // Simulate different outcomes based on task content
-          if (prompt.toLowerCase().includes('error') || prompt.toLowerCase().includes('fail')) {
-            console.log('[TASK] Task simulation: intentional failure detected')
-            reject(new Error('Task execution failed: simulated error condition'))
-            return
-          }
-
-          if (prompt.toLowerCase().includes('exception') || prompt.toLowerCase().includes('crash')) {
-            console.log('[TASK] Task simulation: exception condition detected')
-            reject(new Error('Task execution failed: exception thrown'))
-            return
-          }
-
-          // Simulate successful task completion with realistic output
-          const taskType = this.inferTaskType(prompt)
-          const output = this.generateTaskOutput(prompt, taskType)
-
-          console.log(`[TASK] Task completed successfully: ${taskType}`)
-          resolve({ output, errorOutput: '' })
-
-        } catch (error) {
-          console.error(`[TASK] Task execution error: ${error}`)
-          reject(error)
-        }
-      }, processingTime)
-    })
+      // Get task client from connection for response checking
+      const { TaskClient } = await import('./acp-client.ts')
+      const taskClient = new TaskClient()
+      
+      // Wait for completion
+      const result = await ACPConnectionManager.waitForTaskCompletion(taskClient)
+      
+      return { output: result.output, errorOutput: result.error }
+    } finally {
+      // Clean up connection
+      if (connectionResult) {
+        await ACPConnectionManager.cleanupConnection(
+          connectionResult.connection, 
+          connectionResult.processResult
+        )
+      }
+    }
   }
 
   private inferTaskType(prompt: string): string {

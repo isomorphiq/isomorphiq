@@ -75,7 +75,12 @@ async function main() {
           console.error('update_task_status requires id and status');
           process.exit(1);
         }
-        result = await sendCommand('update_task_status', { id: args[1], status: args[2] });
+        const validStatuses = ['todo', 'in-progress', 'done', 'failed'];
+        if (!validStatuses.includes(args[2]!)) {
+          console.error('Invalid status. Must be one of: todo, in-progress, done, failed');
+          process.exit(1);
+        }
+        result = await sendCommand('update_task_status', { id: args[1], status: args[2]! });
         break;
       case 'update_task_priority':
         if (args.length < 3) {
