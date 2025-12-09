@@ -1,4 +1,5 @@
 import { spawn } from 'child_process'
+import { Writable, Readable } from 'node:stream'
 
 export interface ProcessResult {
   process: any
@@ -10,13 +11,13 @@ export class ProcessSpawner {
   static spawnOpencode(): ProcessResult {
     console.log('[PROCESS] Spawning opencode as ACP server...')
     
-    const opencodeProcess = spawn('npx', ['opencode'], {
+    const opencodeProcess = spawn('opencode', ['acp'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: process.cwd(),
       env: { ...process.env }
     })
 
-    const { Writable, Readable } = require('node:stream')
+
     const input = Writable.toWeb(opencodeProcess.stdin)
     const outputStream = Readable.toWeb(opencodeProcess.stdout)
 

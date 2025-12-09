@@ -6,65 +6,89 @@ export interface ACPConnectionResult {
   connection: ClientSideConnection
   sessionId: string
   processResult: ProcessResult
+  taskClient: TaskClient
 }
 
 export class ACPConnectionManager {
   static async createConnection(): Promise<ACPConnectionResult> {
-    console.log('[ACP] Creating ACP connection...')
+    console.log('[ACP] 🔗 Creating ACP connection...')
     
-    // Spawn opencode process
-    const processResult = ProcessSpawner.spawnOpencode()
-    
-    // Set up ACP communication streams
-    const acp = await import('@agentclientprotocol/sdk')
-    const stream = acp.ndJsonStream(processResult.input, processResult.outputStream)
-    
-    // Create task client and connection
-    const taskClient = new TaskClient()
-    const connection = new acp.ClientSideConnection(() => taskClient, stream)
+    try {
+      // Spawn opencode process
+      console.log('[ACP] 🚀 Spawning opencode process...')
+      const processResult = ProcessSpawner.spawnOpencode()
+      
+      // Give process a moment to start
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      
+      // Set up ACP communication streams
+      console.log('[ACP] 📡 Setting up communication streams...')
+      const acp = await import('@agentclientprotocol/sdk')
+      console.log('[ACP] 📚 ACP SDK loaded')
+      const stream = acp.ndJsonStream(processResult.input, processResult.outputStream)
+      console.log('[ACP] 🌊 NDJSON stream created')
+      
+      // Create task client and connection
+      console.log('[ACP] 👤 Creating task client...')
+      const taskClient = new TaskClient()
+      console.log('[ACP] 🔌 Creating client-side connection...')
+      const connection = new acp.ClientSideConnection(() => taskClient, stream)
+      console.log('[ACP] ✅ Client-side connection created')
 
-    // Initialize connection
-    console.log('[ACP] Initializing ACP connection...')
-    const initResult = await connection.initialize({
-      protocolVersion: acp.PROTOCOL_VERSION,
-      clientCapabilities: {
-        fs: {
-          readTextFile: true,
-          writeTextFile: true,
+      // Initialize connection
+      console.log('[ACP] 🤝 Initializing ACP connection...')
+      console.log('[ACP] 📋 Protocol version:', acp.PROTOCOL_VERSION)
+      const initResult = await connection.initialize({
+        protocolVersion: acp.PROTOCOL_VERSION,
+        clientCapabilities: {
+          fs: {
+            readTextFile: true,
+            writeTextFile: true,
+          },
         },
-      },
-    })
-    console.log(`[ACP] Connected to opencode (protocol v${initResult.protocolVersion})`)
+      })
+      console.log('[ACP] ✅ Connected to opencode (protocol v' + initResult.protocolVersion + ')')
+      console.log('[ACP] 📊 Init result:', JSON.stringify(initResult, null, 2))
 
-    // Create session
-    console.log('[ACP] Creating new session...')
-    const sessionResult = await connection.newSession({
-      cwd: process.cwd(),
-      mcpServers: [],
-    })
-    console.log(`[ACP] Session created: ${sessionResult.sessionId}`)
+      // Create session
+      console.log('[ACP] 🆔 Creating new session...')
+      console.log('[ACP] 📁 Working directory:', process.cwd())
+      const sessionResult = await connection.newSession({
+        cwd: process.cwd(),
+        mcpServers: [],
+      })
+      console.log('[ACP] ✅ Session created:', sessionResult.sessionId)
+      console.log('[ACP] 📊 Session result:', JSON.stringify(sessionResult, null, 2))
 
-    return {
-      connection,
-      sessionId: sessionResult.sessionId,
-      processResult
+      return {
+        connection,
+        sessionId: sessionResult.sessionId,
+        processResult,
+        taskClient
+      }
+    } catch (error) {
+      console.error('[ACP] ❌ Connection creation failed:', error)
+      console.error('[ACP] 📋 Error details:', JSON.stringify(error, null, 2))
+      throw error
     }
   }
 
   static async cleanupConnection(connection: ClientSideConnection, processResult: ProcessResult): Promise<void> {
     try {
-      console.log('[ACP] Cleaning up connection...')
+      console.log('[ACP] 🧹 Cleaning up connection...')
       await connection.closed
-      console.log('[ACP] Connection closed')
+      console.log('[ACP] ✅ Connection closed')
     } catch (error) {
-      console.log('[ACP] Error closing connection:', error)
+      console.log('[ACP] ❌ Error closing connection:', error)
     }
     
     ProcessSpawner.cleanupProcess(processResult)
   }
 
   static async sendPrompt(connection: ClientSideConnection, sessionId: string, prompt: string): Promise<any> {
-    console.log('[ACP] Sending prompt turn request...')
+    console.log('[ACP] 📤 Sending prompt turn request...')
+    console.log('[ACP] 📝 Prompt content (' + prompt.length + ' chars):', prompt.substring(0, 200) + (prompt.length > 200 ? '...' : ''))
+    console.log('[ACP] 🆔 Session ID:', sessionId)
     const result = await connection.prompt({
       sessionId,
       prompt: [
@@ -74,29 +98,52 @@ export class ACPConnectionManager {
         }
       ],
     })
-    console.log(`[ACP] Prompt completed with stop reason: ${result.stopReason}`)
+    console.log('[ACP] ✅ Prompt completed with stop reason:', result.stopReason)
+    console.log('[ACP] 📊 Prompt result:', JSON.stringify(result, null, 2))
     return result
   }
 
-  static async waitForTaskCompletion(taskClient: TaskClient, timeoutMs: number = 30000): Promise<{ output: string; error: string }> {
-    console.log(`[ACP] Waiting for task completion (timeout: ${timeoutMs}ms)...`)
+  static async waitForTaskCompletion(taskClient: TaskClient, timeoutMs: number = 30000, profileName: string): Promise<{ output: string; error: string }> {
+    console.log(`[ACP][${profileName}] ⏳ Waiting for task completion (timeout: ${timeoutMs}ms)...`)
     const startTime = Date.now()
+    let lastOutputLength = 0
     
-    while (!taskClient.getResponse().output && !taskClient.getResponse().error && Date.now() - startTime < timeoutMs) {
+    while (!taskClient.getResponse().error && Date.now() - startTime < timeoutMs) {
+      const currentResponse = taskClient.getResponse()
+      
+      // Check if turn is complete - this is the key fix!
+      if (taskClient.isTurnComplete()) {
+        console.log(`[ACP][${profileName}] 🔄 Turn completed detected - finishing task`)
+        break
+      }
+      
+      // Log progress if we're getting output
+      if (currentResponse.output && currentResponse.output.length > lastOutputLength) {
+        console.log(`[ACP][${profileName}] 📈 Progress: ${currentResponse.output.length} characters received`)
+        lastOutputLength = currentResponse.output.length
+      }
+      
+      // Log status every 5 seconds
+      const elapsed = Date.now() - startTime
+      if (elapsed % 5000 < 100) {
+        console.log(`[ACP][${profileName}] ⏱️ Elapsed: ${elapsed}ms, Turn complete: ${taskClient.isTurnComplete()}, Output length: ${currentResponse.output.length}`)
+      }
+      
       await new Promise(resolve => setTimeout(resolve, 100))
     }
 
     const response = taskClient.getResponse()
     
     if (response.output) {
-      console.log('[ACP] Task completed successfully via ACP')
+      console.log(`[ACP][${profileName}] ✅ Task completed successfully via ACP (${response.output.length} chars)`)
+      console.log(`[ACP][${profileName}] 📄 Final output preview:`, response.output.substring(0, 300) + (response.output.length > 300 ? '...' : ''))
       return { output: response.output, error: '' }
     } else if (response.error) {
-      console.error('[ACP] Task failed via ACP:', response.error)
+      console.error(`[ACP][${profileName}] ❌ Task failed via ACP:`, response.error)
       return { output: '', error: response.error }
     } else {
       const errorMsg = `Task timed out after ${timeoutMs}ms`
-      console.log('[ACP] Task timed out')
+      console.log(`[ACP][${profileName}] ⏰ Task timed out after ${timeoutMs}ms`)
       return { output: '', error: errorMsg }
     }
   }
