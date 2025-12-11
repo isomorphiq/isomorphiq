@@ -1,15 +1,45 @@
 export interface ACPProfile {
-  name: string
-  role: string
-  systemPrompt: string
-  getTaskPrompt: (context: any) => string
+	name: string;
+	role: string;
+	systemPrompt: string;
+	getTaskPrompt: (context: Record<string, unknown>) => string;
+	capabilities?: string[];
+	maxConcurrentTasks?: number;
+	priority?: number;
+	color?: string;
+	icon?: string;
+}
+
+export interface ProfileState {
+	name: string;
+	isActive: boolean;
+	currentTasks: number;
+	completedTasks: number;
+	failedTasks: number;
+	averageProcessingTime: number;
+	lastActivity: Date;
+	queueSize: number;
+	isProcessing: boolean;
+}
+
+export interface ProfileMetrics {
+	throughput: number; // tasks per hour
+	successRate: number; // percentage
+	averageTaskDuration: number; // in seconds
+	queueWaitTime: number; // average time in queue
+	errorRate: number; // percentage
 }
 
 export class ProductManagerProfile implements ACPProfile {
-  name = 'product-manager'
-  role = 'Product Manager'
-  
-  systemPrompt = `You are a Product Manager AI assistant. Your role is to:
+	name = "product-manager";
+	role = "Product Manager";
+	capabilities = ["analysis", "feature-identification", "user-story-creation", "prioritization"];
+	maxConcurrentTasks = 3;
+	priority = 1;
+	color = "#3b82f6";
+	icon = "📋";
+
+	systemPrompt = `You are a Product Manager AI assistant. Your role is to:
 
 1. Analyze the current codebase and understand its functionality
 2. Think about how users would want to interact with this system
@@ -28,10 +58,10 @@ Create feature tickets with:
 - Acceptance criteria
 - Priority level (high/medium/low)
 
-Return your response as a structured list of feature tickets.`
+Return your response as a structured list of feature tickets.`;
 
-  getTaskPrompt(context: any): string {
-    return `As a Product Manager, analyze this task manager system and create feature tickets.
+	getTaskPrompt(_context: Record<string, unknown>): string {
+		return `As a Product Manager, analyze this task manager system and create feature tickets.
 
 Current System Overview:
 - Task manager daemon with ACP protocol execution
@@ -46,15 +76,20 @@ Please:
 3. Create 3-5 feature tickets with clear descriptions and priorities
 4. Focus on features that would make this system more useful for users
 
-Return the feature tickets in a structured format that can be parsed and added to the task system.`
-  }
+Return the feature tickets in a structured format that can be parsed and added to the task system.`;
+	}
 }
 
 export class RefinementProfile implements ACPProfile {
-  name = 'refinement'
-  role = 'Refinement Specialist'
-  
-  systemPrompt = `You are a Refinement Specialist. Your role is to:
+	name = "refinement";
+	role = "Refinement Specialist";
+	capabilities = ["task-breakdown", "dependency-analysis", "estimation", "technical-planning"];
+	maxConcurrentTasks = 2;
+	priority = 2;
+	color = "#10b981";
+	icon = "⚡";
+
+	systemPrompt = `You are a Refinement Specialist. Your role is to:
 
 1. Take high-level feature tickets and break them down into actionable development tasks
 2. Identify dependencies and technical requirements
@@ -73,16 +108,16 @@ Break down features into:
 - Testing tasks
 - Documentation tasks
 
-Return your response as a structured list of development tasks.`
+Return your response as a structured list of development tasks.`;
 
-  getTaskPrompt(context: any): string {
-    const { featureTickets } = context
-    return `As a Refinement Specialist, break down these feature tickets into actionable development tasks:
+	getTaskPrompt(context: Record<string, unknown>): string {
+		const { featureTickets } = context;
+		return `As a Refinement Specialist, break down these feature tickets into actionable development tasks:
 
 Feature Tickets to Refine:
-${featureTickets.map((ticket: any, i: number) => 
-  `${i + 1}. ${ticket.title}: ${ticket.description}`
-).join('\n')}
+${(featureTickets as Array<{ title: string; description: string }>)
+	.map((ticket, i: number) => `${i + 1}. ${ticket.title}: ${ticket.description}`)
+	.join("\n")}
 
 Please:
 1. Analyze each feature ticket for technical requirements
@@ -91,15 +126,20 @@ Please:
 4. Order tasks logically considering dependencies
 5. Assign appropriate priority levels
 
-Return the development tasks in a structured format that can be added to the task system.`
-  }
+Return the development tasks in a structured format that can be added to the task system.`;
+	}
 }
 
 export class DevelopmentProfile implements ACPProfile {
-  name = 'development'
-  role = 'Developer'
-  
-  systemPrompt = `You are a Developer. Your role is to:
+	name = "development";
+	role = "Developer";
+	capabilities = ["coding", "testing", "debugging", "documentation"];
+	maxConcurrentTasks = 1;
+	priority = 3;
+	color = "#f59e0b";
+	icon = "👨‍💻";
+
+	systemPrompt = `You are a Developer. Your role is to:
 
 1. Execute specific development tasks
 2. Write clean, maintainable code
@@ -126,15 +166,16 @@ Return your results with:
 - What was implemented
 - Files changed/created
 - Testing performed
-- Any notes or considerations`
+- Any notes or considerations`;
 
-  getTaskPrompt(context: any): string {
-    const { task } = context
-    return `As a Developer, execute this development task:
+	getTaskPrompt(context: Record<string, unknown>): string {
+		const { task } = context;
+		const taskObj = task as { title: string; description: string; priority: string };
+		return `As a Developer, execute this development task:
 
-Task: ${task.title}
-Description: ${task.description}
-Priority: ${task.priority}
+Task: ${taskObj.title}
+Description: ${taskObj.description}
+Priority: ${taskObj.priority}
 
 Please:
 1. Analyze the current codebase to understand the context
@@ -143,36 +184,288 @@ Please:
 4. Document any important changes
 5. Return a summary of what was accomplished
 
-Focus on writing clean, maintainable code that integrates well with the existing system.`
-  }
+Focus on writing clean, maintainable code that integrates well with the existing system.`;
+	}
+}
+
+export class UXSpecialistProfile implements ACPProfile {
+	name = "ux-specialist";
+	role = "UX Specialist";
+	capabilities = ["user-research", "story-writing", "acceptance-criteria", "journey-mapping"];
+	maxConcurrentTasks = 2;
+	priority = 2;
+	color = "#a855f7";
+	icon = "🎨";
+
+	systemPrompt = `You are a UX Specialist focused on turning prioritized features into clear, user-centered stories.
+
+Your goals:
+- Capture user goals, contexts, and pain points.
+- Write concise user stories with acceptance criteria.
+- Identify UX risks and open questions.
+
+Output:
+- 3-5 user stories per feature
+- Each with title, description, user value, acceptance criteria, and priority
+- Note any design/UX risks or open questions.`;
+
+	getTaskPrompt(context: Record<string, unknown>): string {
+		const feature = (context?.feature || context?.task || {}) as {
+			title?: string;
+			description?: string;
+		};
+		return `Convert this feature into user stories with UX focus:
+Feature: ${feature.title ?? "Unnamed"}
+Description: ${feature.description ?? ""}
+
+Produce 3-5 stories with AC, priority, and UX notes.`;
+	}
+}
+
+export class QAProfile implements ACPProfile {
+	name = "qa-specialist";
+	role = "QA Specialist";
+	capabilities = ["test-design", "regression", "failure-analysis"];
+	maxConcurrentTasks = 1;
+	priority = 4;
+	color = "#22c55e";
+	icon = "✅";
+
+	systemPrompt = `You are a QA Specialist ensuring changes meet acceptance criteria and quality bars.
+
+Your goals:
+- Interpret the task and recent changes.
+- Design/execute appropriate tests (unit+integration/regression).
+- Summarize failures with actionable guidance.
+- Confirm pass criteria when all tests are green.`;
+
+	getTaskPrompt(context: Record<string, unknown>): string {
+		const result = context?.lastTestResult as { output?: string } | undefined;
+		return `Act as QA:
+Test output (if any):
+${result?.output ?? "No prior test output provided."}
+If tests failed: summarize failures and next steps.
+If tests passed: confirm readiness to ship.`;
+	}
 }
 
 export class ProfileManager {
-  private profiles: Map<string, ACPProfile> = new Map()
-  
-  constructor() {
-    this.registerProfile(new ProductManagerProfile())
-    this.registerProfile(new RefinementProfile())
-    this.registerProfile(new DevelopmentProfile())
-  }
-  
-  private registerProfile(profile: ACPProfile): void {
-    this.profiles.set(profile.name, profile)
-  }
-  
-  getProfile(name: string): ACPProfile | undefined {
-    return this.profiles.get(name)
-  }
-  
-  getAllProfiles(): ACPProfile[] {
-    return Array.from(this.profiles.values())
-  }
-  
-  getProfileSequence(): ACPProfile[] {
-    return [
-      this.getProfile('product-manager')!,
-      this.getProfile('refinement')!,
-      this.getProfile('development')!
-    ]
-  }
+	private profiles: Map<string, ACPProfile> = new Map();
+	private profileStates: Map<string, ProfileState> = new Map();
+	private taskQueues: Map<string, unknown[]> = new Map();
+	private processingHistory: Map<
+		string,
+		Array<{ timestamp: Date; duration: number; success: boolean }>
+	> = new Map();
+
+	constructor() {
+		this.registerProfile(new ProductManagerProfile());
+		this.registerProfile(new RefinementProfile());
+		this.registerProfile(new DevelopmentProfile());
+		this.registerProfile(new UXSpecialistProfile());
+		this.registerProfile(new QAProfile());
+		this.initializeProfileStates();
+	}
+
+	private registerProfile(profile: ACPProfile): void {
+		this.profiles.set(profile.name, profile);
+		this.taskQueues.set(profile.name, []);
+		this.processingHistory.set(profile.name, []);
+	}
+
+	private initializeProfileStates(): void {
+		for (const profile of this.profiles.values()) {
+			this.profileStates.set(profile.name, {
+				name: profile.name,
+				isActive: true,
+				currentTasks: 0,
+				completedTasks: 0,
+				failedTasks: 0,
+				averageProcessingTime: 0,
+				lastActivity: new Date(),
+				queueSize: 0,
+				isProcessing: false,
+			});
+		}
+	}
+
+	getProfile(name: string): ACPProfile | undefined {
+		return this.profiles.get(name);
+	}
+
+	getAllProfiles(): ACPProfile[] {
+		return Array.from(this.profiles.values());
+	}
+
+	getProfileSequence(): ACPProfile[] {
+		const profiles = [
+			this.getProfile("product-manager"),
+			this.getProfile("ux-specialist"),
+			this.getProfile("refinement"),
+			this.getProfile("development"),
+			this.getProfile("qa-specialist"),
+		];
+
+		// Filter out undefined profiles and assert they exist
+		return profiles.filter((profile): profile is ACPProfile => profile !== undefined);
+	}
+
+	// Profile state management
+	getProfileState(name: string): ProfileState | undefined {
+		return this.profileStates.get(name);
+	}
+
+	getAllProfileStates(): ProfileState[] {
+		return Array.from(this.profileStates.values());
+	}
+
+	updateProfileState(name: string, updates: Partial<ProfileState>): void {
+		const currentState = this.profileStates.get(name);
+		if (currentState) {
+			const updatedState = { ...currentState, ...updates, lastActivity: new Date() };
+			this.profileStates.set(name, updatedState);
+		}
+	}
+
+	// Task queue management
+	getTaskQueue(name: string): unknown[] {
+		return this.taskQueues.get(name) || [];
+	}
+
+	addToTaskQueue(name: string, task: unknown): void {
+		const queue = this.taskQueues.get(name) || [];
+		queue.push(task);
+		this.taskQueues.set(name, queue);
+		this.updateProfileState(name, { queueSize: queue.length });
+	}
+
+	removeFromTaskQueue(name: string, taskIndex: number): unknown | undefined {
+		const queue = this.taskQueues.get(name) || [];
+		const task = queue.splice(taskIndex, 1)[0];
+		if (task) {
+			this.taskQueues.set(name, queue);
+			this.updateProfileState(name, { queueSize: queue.length });
+		}
+		return task;
+	}
+
+	// Profile metrics
+	getProfileMetrics(name: string): ProfileMetrics | undefined {
+		const state = this.profileStates.get(name);
+		const history = this.processingHistory.get(name) || [];
+
+		if (!state) return undefined;
+
+		const recentHistory = history.filter(
+			(h) => Date.now() - h.timestamp.getTime() < 3600000, // Last hour
+		);
+
+		const successfulTasks = recentHistory.filter((h) => h.success);
+		const throughput = recentHistory.length / (recentHistory.length > 0 ? 1 : 1); // tasks per hour
+		const successRate =
+			recentHistory.length > 0 ? (successfulTasks.length / recentHistory.length) * 100 : 100;
+		const averageTaskDuration =
+			recentHistory.length > 0
+				? recentHistory.reduce((sum, h) => sum + h.duration, 0) / recentHistory.length
+				: 0;
+		const queueWaitTime = state.queueSize > 0 ? averageTaskDuration * state.queueSize : 0;
+		const errorRate = 100 - successRate;
+
+		return {
+			throughput,
+			successRate,
+			averageTaskDuration,
+			queueWaitTime,
+			errorRate,
+		};
+	}
+
+	getAllProfileMetrics(): Map<string, ProfileMetrics> {
+		const metrics = new Map<string, ProfileMetrics>();
+		for (const profileName of this.profiles.keys()) {
+			const profileMetrics = this.getProfileMetrics(profileName);
+			if (profileMetrics) {
+				metrics.set(profileName, profileMetrics);
+			}
+		}
+		return metrics;
+	}
+
+	// Task processing tracking
+	recordTaskProcessing(name: string, duration: number, success: boolean): void {
+		const history = this.processingHistory.get(name) || [];
+		history.push({ timestamp: new Date(), duration, success });
+
+		// Keep only last 100 records
+		if (history.length > 100) {
+			history.splice(0, history.length - 100);
+		}
+
+		this.processingHistory.set(name, history);
+
+		// Update profile state
+		const state = this.profileStates.get(name);
+		if (state) {
+			const completedTasks = success ? state.completedTasks + 1 : state.completedTasks;
+			const failedTasks = success ? state.failedTasks : state.failedTasks + 1;
+			const totalTasks = completedTasks + failedTasks;
+			const averageProcessingTime =
+				totalTasks > 0
+					? (state.averageProcessingTime * (totalTasks - 1) + duration) / totalTasks
+					: duration;
+
+			this.updateProfileState(name, {
+				completedTasks,
+				failedTasks,
+				averageProcessingTime,
+				currentTasks: Math.max(0, state.currentTasks - 1),
+			});
+		}
+	}
+
+	startTaskProcessing(name: string): void {
+		this.updateProfileState(name, {
+			isProcessing: true,
+			currentTasks: (this.profileStates.get(name)?.currentTasks || 0) + 1,
+		});
+	}
+
+	endTaskProcessing(name: string): void {
+		this.updateProfileState(name, { isProcessing: false });
+	}
+
+	// Profile capabilities
+	getProfilesByCapability(capability: string): ACPProfile[] {
+		return this.getAllProfiles().filter((profile) => profile.capabilities?.includes(capability));
+	}
+
+	// Smart task routing
+	getBestProfileForTask(_task: Record<string, unknown>): ACPProfile | undefined {
+		const availableProfiles = this.getAllProfiles().filter((profile) => {
+			const state = this.profileStates.get(profile.name);
+			return state?.isActive && state.currentTasks < (profile.maxConcurrentTasks || 1);
+		});
+
+		if (availableProfiles.length === 0) return undefined;
+
+		// Sort by priority and current load
+		availableProfiles.sort((a, b) => {
+			const stateA = this.profileStates.get(a.name);
+			const stateB = this.profileStates.get(b.name);
+
+			if (!stateA || !stateB) {
+				return 0;
+			}
+
+			// Primary sort by priority
+			if ((a.priority || 0) !== (b.priority || 0)) {
+				return (b.priority || 0) - (a.priority || 0);
+			}
+
+			// Secondary sort by current load
+			return stateA.currentTasks - stateB.currentTasks;
+		});
+
+		return availableProfiles[0];
+	}
 }

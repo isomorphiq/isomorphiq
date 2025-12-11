@@ -1,0 +1,26 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.3.8/schema.json",
+	"formatter": {
+		"enabled": true,
+		"indentWidth": 2,
+		"lineWidth": 100
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"a11y": {
+				"useSemanticElements": "off",
+				"noStaticElementInteractions": "off"
+			}
+		}
+	},
+	"files": {
+		"includes": [
+			"src/**/*.{ts,tsx,js,jsx}",
+			"web/**/*.{ts,tsx,js,jsx}",
+			"scripts/**/*.{ts,js}",
+			"*.json"
+		]
+	}
+}

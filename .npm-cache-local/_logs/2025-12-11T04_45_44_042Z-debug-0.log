@@ -1,0 +1,48 @@
+0 verbose cli /home/nyan/.local/share/mise/installs/node/25.2.1/bin/node /home/nyan/.local/share/mise/installs/node/25.2.1/lib/node_modules/npm/bin/npm-cli.js
+1 info using npm@11.6.2
+2 info using node@v25.2.1
+3 silly config load:file:/home/nyan/.local/share/mise/installs/node/25.2.1/lib/node_modules/npm/npmrc
+4 silly config load:file:/home/nyan/testingg/.npmrc
+5 silly config load:file:/home/nyan/.npmrc
+6 silly config load:file:/home/nyan/.local/share/mise/installs/node/25.2.1/etc/npmrc
+7 verbose title npm exec playwright install chromium
+8 verbose argv "exec" "--" "playwright" "install" "chromium"
+9 verbose logfile logs-max:10 dir:/home/nyan/testingg/.npm-cache-local/_logs/2025-12-11T04_45_44_042Z-
+10 verbose logfile /home/nyan/testingg/.npm-cache-local/_logs/2025-12-11T04_45_44_042Z-debug-0.log
+11 silly logfile done cleaning log files
+12 silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+13 http fetch GET 200 https://registry.npmjs.org/npm 184ms
+14 http fetch GET 200 https://registry.npmjs.org/playwright 247ms (cache miss)
+15 silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+16 silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+17 warn exec The following package was not found and will be installed: playwright@1.57.0
+18 silly idealTree buildDeps
+19 silly fetch manifest playwright@1.57.0
+20 silly packumentCache full:https://registry.npmjs.org/playwright cache-miss
+21 http fetch GET 200 https://registry.npmjs.org/playwright 251ms (cache miss)
+22 silly packumentCache full:https://registry.npmjs.org/playwright set size:undefined disposed:false
+23 silly placeDep ROOT playwright@1.57.0 OK for:  want: 1.57.0
+24 silly fetch manifest playwright-core@1.57.0
+25 silly packumentCache full:https://registry.npmjs.org/playwright-core cache-miss
+26 silly fetch manifest fsevents@2.3.2
+27 silly packumentCache full:https://registry.npmjs.org/fsevents cache-miss
+28 http fetch GET 200 https://registry.npmjs.org/fsevents 48ms (cache miss)
+29 silly packumentCache full:https://registry.npmjs.org/fsevents set size:undefined disposed:false
+30 http fetch GET 200 https://registry.npmjs.org/playwright-core 222ms (cache miss)
+31 silly packumentCache full:https://registry.npmjs.org/playwright-core set size:undefined disposed:false
+32 silly placeDep ROOT fsevents@2.3.2 OK for: playwright@1.57.0 want: 2.3.2
+33 silly placeDep ROOT playwright-core@1.57.0 OK for: playwright@1.57.0 want: 1.57.0
+34 silly reify moves {}
+35 silly audit bulk request {
+35 silly audit   playwright: [ '1.57.0' ],
+35 silly audit   fsevents: [ '2.3.2' ],
+35 silly audit   'playwright-core': [ '1.57.0' ]
+35 silly audit }
+36 http cache playwright@https://registry.npmjs.org/playwright/-/playwright-1.57.0.tgz 0ms (cache hit)
+37 http cache playwright-core@https://registry.npmjs.org/playwright-core/-/playwright-core-1.57.0.tgz 0ms (cache hit)
+38 silly tarball no local data for playwright@https://registry.npmjs.org/playwright/-/playwright-1.57.0.tgz. Extracting by manifest.
+39 silly tarball no local data for playwright-core@https://registry.npmjs.org/playwright-core/-/playwright-core-1.57.0.tgz. Extracting by manifest.
+40 http fetch GET 200 https://registry.npmjs.org/playwright/-/playwright-1.57.0.tgz 110ms (cache miss)
+41 http fetch POST 200 https://registry.npmjs.org/-/npm/v1/security/advisories/bulk 128ms
+42 silly audit report {}
+43 http fetch GET 200 https://registry.npmjs.org/playwright-core/-/playwright-core-1.57.0.tgz 228ms (cache miss)

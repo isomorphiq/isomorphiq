@@ -63,3 +63,6 @@ Watch for these log patterns:
 - **Refactoring & Maintenance** - Code cleanup, optimization, debt reduction
 - **Documentation & Knowledge** - API docs, guides, specifications
 - **Examples** - Ready-to-use prompts for common tasks
+
+## ⚠️ Module Resolution (Critical)
+- Runtime is Node ESM without transpilation. Always include the `.ts` extension on local TypeScript imports, e.g., `import { foo } from "./foo.ts"`. Missing extensions will crash the daemon/webapp; double-check imports before finishing.

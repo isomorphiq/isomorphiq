@@ -51,3 +51,6 @@ Implement integration between [SYSTEM A] and [SYSTEM B]. Requirements:
 
 Use [PROTOCOL/STANDARD] for communication and ensure backward compatibility.
 ```
+
+## Module Resolution Note
+- The runtime is Node ESM with no transpilation. Always include the `.ts` extension on local TypeScript imports, e.g., `import { foo } from "./foo.ts"`. Missing extensions will break the app.

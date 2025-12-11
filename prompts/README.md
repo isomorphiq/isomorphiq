@@ -81,6 +81,7 @@ All prompts work with the MCP task management server. The agent can:
 3. **Specify technologies** - Mention frameworks, libraries, and tools
 4. **Define success criteria** - What constitutes completion
 5. **Request deliverables** - Tests, documentation, examples
+6. **Module resolution** - Node runs ESM with no transpilation; all local TS imports must include the `.ts` extension (e.g., `import { foo } from "./foo.ts"`). Omitting extensions will break the app.
 
 ## Monitoring Agent Work
 

@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "playwright": "^1.57.0"
+  },
+  "_npx": {
+    "packages": [
+      "playwright"
+    ]
+  }
+}

@@ -29,3 +29,15 @@ The daemon automatically processes tasks in priority order:
 4. Completed tasks are marked as "done"
 
 If you need to intervene with task processing, use the MCP tools to update task status rather than killing the daemon.
+
+## Coding style:
+
+This application runs directly in node with no transpilation, so relative imports of typescript files must use the full path to the file, including extension.
+Since most source files for this application are ts, that means `import * as Something from "./things/something.ts"`
+
+If you ever add or edit imports, always include the `.ts` extension on local modules. Missing extensions break runtime resolution (ESM) and will crash the daemon/webapp. Do a quick `rg 'from "./' src web/src | rg -v '\\.ts\"'` before finishing to catch mistakes.
+
+Use functional programming style that avoids mutation of data.
+
+4-space indentation (...we are not heathen)
+use `"` double quotes for quoting strings; eg do not use `'` apostrophes; (again... we are not heathen.)
