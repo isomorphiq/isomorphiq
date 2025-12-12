@@ -25,6 +25,7 @@ export interface TimeUtilizationReport {
 /**
  * Service interface for Time Tracking operations
  */
+/* eslint-disable no-unused-vars */
 export interface ITimeTrackingService {
 	// Time Entry operations
 	startTimeEntry(input: TimeEntryCreateInput, createdBy: string): Promise<Result<TimeEntry>>;
@@ -78,6 +79,7 @@ export interface ITimeTrackingService {
 		endDate: Date,
 	): Promise<Result<TimeUtilizationReport>>;
 }
+/* eslint-enable no-unused-vars */
 
 /**
  * Time tracking service implementation
@@ -498,6 +500,7 @@ export class TimeTrackingService implements ITimeTrackingService {
 		entries: TimeEntry[],
 		_updatedBy: string,
 	): Promise<Result<Timesheet>> {
+		void _updatedBy;
 		const existingResult = await this.getTimesheet(id);
 		if (!existingResult.success || !existingResult.data) {
 			return existingResult.success
@@ -663,6 +666,8 @@ export class TimeTrackingService implements ITimeTrackingService {
 		_userId: string,
 		_period: "daily" | "weekly" | "monthly",
 	): Promise<Result<ProductivityReport>> {
+		void _userId;
+		void _period;
 		// TODO: Implement detailed productivity report
 		return { success: true, data: { message: "Productivity report not yet implemented" } };
 	}
@@ -672,6 +677,9 @@ export class TimeTrackingService implements ITimeTrackingService {
 		_startDate: Date,
 		_endDate: Date,
 	): Promise<Result<TimeUtilizationReport>> {
+		void _userId;
+		void _startDate;
+		void _endDate;
 		// TODO: Implement time utilization report
 		return { success: true, data: { message: "Time utilization report not yet implemented" } };
 	}

@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import type { EventBus } from "../core/event-bus.ts";
 import type { DomainEvent } from "../core/events.ts";
 import type { Task, TaskPriority, TaskStatus, WebSocketEvent } from "../types.ts";

@@ -14,6 +14,7 @@ import type { TaskSearchOptions, TaskStatus } from "../types.ts";
 /**
  * Service interface for Task operations
  */
+/* eslint-disable no-unused-vars */
 export interface ITaskService {
 	// CRUD operations
 	createTask(input: CreateTaskInputWithPriority, createdBy: string): Promise<Result<TaskEntity>>;
@@ -63,6 +64,7 @@ export interface ITaskService {
 		createdBy: string,
 	): Promise<Result<TaskEntity[]>>;
 }
+/* eslint-enable no-unused-vars */
 
 /**
  * Task service implementation
@@ -120,6 +122,7 @@ export class TaskService implements ITaskService {
 		input: ExtendedUpdateTaskInput,
 		_updatedBy: string,
 	): Promise<Result<TaskEntity>> {
+		void _updatedBy;
 		// Get existing task
 		const existingResult = await this.getTask(id);
 		if (!existingResult.success) {

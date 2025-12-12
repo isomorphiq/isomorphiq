@@ -329,6 +329,7 @@ export class SimpleModularApiServer {
 
 		// Error handler
 		this.app.use((err: unknown, _req: Request, res: Response, _next: () => void) => {
+			void _next;
 			console.error("[HTTP API] Error:", err);
 			const message = err instanceof Error ? err.message : "Internal server error";
 			res.status(500).json({ error: message });

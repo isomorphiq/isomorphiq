@@ -375,6 +375,7 @@ export class WorkflowExecutionEngine {
 /**
  * Base interface for workflow node executors
  */
+/* eslint-disable no-unused-vars */
 export interface WorkflowNodeExecutor {
 	execute(
 		node: WorkflowNode,
@@ -382,6 +383,7 @@ export interface WorkflowNodeExecutor {
 		execution: WorkflowExecution,
 	): Promise<Record<string, unknown>>;
 }
+/* eslint-enable no-unused-vars */
 
 /**
  * Trigger node executor
@@ -391,6 +393,7 @@ export class TriggerNodeExecutor implements WorkflowNodeExecutor {
 		node: WorkflowNode,
 		_context: WorkflowExecutionContext,
 	): Promise<Record<string, unknown>> {
+		void _context;
 		console.log(`[WORKFLOW] Trigger node ${node.id} executed`);
 		return { triggered: true, timestamp: new Date() };
 	}

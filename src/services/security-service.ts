@@ -442,7 +442,7 @@ export class SecurityService {
 		const logs: AuditLog[] = [];
 		try {
 			const iterator = this.auditDb.iterator();
-			for await (const [_key, value] of iterator) {
+			for await (const [, value] of iterator) {
 				if (this.matchesFilters(value, filters)) {
 					logs.push(value);
 				}
@@ -505,7 +505,7 @@ export class SecurityService {
 		const alerts: SecurityAlert[] = [];
 		try {
 			const iterator = this.alertsDb.iterator();
-			for await (const [_key, value] of iterator) {
+			for await (const [, value] of iterator) {
 				if (this.matchesAlertFilters(value, filters)) {
 					alerts.push(value);
 				}
@@ -685,10 +685,6 @@ export class SecurityService {
 		await this.ensureDatabasesOpen();
 
 		const metrics = await this.generateSecurityMetrics(startDate, endDate);
-		const _logs = await this.getAuditLogs({
-			dateFrom: startDate.toISOString(),
-			dateTo: endDate.toISOString(),
-		});
 		const alerts = await this.getSecurityAlerts({
 			dateFrom: startDate.toISOString(),
 			dateTo: endDate.toISOString(),
