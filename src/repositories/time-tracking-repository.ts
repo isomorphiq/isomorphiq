@@ -6,6 +6,7 @@ import type { TimeEntry, TimeSearchOptions, Timesheet } from "../core/time-track
 /**
  * Repository interface for Time Tracking data access
  */
+/* eslint-disable no-unused-vars */
 export interface ITimeTrackingRepository {
 	// Time Entry operations
 	createTimeEntry(timeEntry: TimeEntry): Promise<Result<TimeEntry>>;
@@ -39,6 +40,7 @@ export interface ITimeTrackingRepository {
 		endDate: Date,
 	): Promise<Result<Timesheet[]>>;
 }
+/* eslint-enable no-unused-vars */
 
 /**
  * LevelDB implementation of TimeTrackingRepository

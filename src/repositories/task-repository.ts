@@ -5,6 +5,7 @@ import type { TaskFilters, TaskSearchOptions } from "../types.ts";
 /**
  * Repository interface for Task data access
  */
+/* eslint-disable no-unused-vars */
 export interface ITaskRepository {
 	// CRUD operations
 	create(task: TaskEntity): Promise<Result<TaskEntity>>;
@@ -33,6 +34,7 @@ export interface ITaskRepository {
 	updateMany(tasks: TaskEntity[]): Promise<Result<TaskEntity[]>>;
 	deleteMany(ids: string[]): Promise<Result<void>>;
 }
+/* eslint-enable no-unused-vars */
 
 /**
  * In-memory implementation of TaskRepository for testing

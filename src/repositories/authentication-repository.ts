@@ -62,25 +62,27 @@ export class AuthenticationRepository {
 		db: Level<string, unknown>,
 		indexKey: string,
 		value: string,
-	): Promise<void> {
-		try {
-			await db.del(`${indexKey}${value}`);
-		} catch (_error) {
-			// Index might not exist, ignore
+		): Promise<void> {
+			try {
+				await db.del(`${indexKey}${value}`);
+			} catch (_error) {
+				void _error;
+				// Index might not exist, ignore
+			}
 		}
-	}
 
 	private async findByIndex(
 		db: Level<string, unknown>,
 		indexKey: string,
 		value: string,
-	): Promise<string | null> {
-		try {
-			return (await db.get(`${indexKey}${value}`)) as string;
-		} catch (_error) {
-			return null;
+		): Promise<string | null> {
+			try {
+				return (await db.get(`${indexKey}${value}`)) as string;
+			} catch (_error) {
+				void _error;
+				return null;
+			}
 		}
-	}
 
 	async createUser(input: CreateUserInput): Promise<Result<User>> {
 		await this.ensureDatabasesOpen();
@@ -218,6 +220,7 @@ export class AuthenticationRepository {
 			const user = await this.userDb.get(id);
 			return { success: true, data: user };
 		} catch (_error) {
+			void _error;
 			return { success: true, data: null };
 		}
 	}
