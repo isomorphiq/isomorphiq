@@ -14,6 +14,7 @@ import { createSchedulingRoutes } from "./routes/scheduling-routes.ts";
 import { createSecurityRoutes } from "./routes/security-routes.ts";
 import { setupWorkflowRoutes } from "./routes/workflow-routes.ts";
 import type {
+	AdminSettings,
 	AuthCredentials,
 	ChangePasswordInput,
 	CreateUserInput,
@@ -24,6 +25,7 @@ import type {
 	User,
 	WebSocketEvent,
 } from "./types.ts";
+import { isAdminUser, loadAdminSettings, saveAdminSettings } from "./admin-settings.ts";
 import { getUserManager } from "./user-manager.ts";
 import type { WebSocketManager } from "./websocket-server.ts";
 
@@ -62,6 +64,25 @@ const priorityWeight: Record<Task["priority"], number> = {
 	high: 0,
 	medium: 1,
 	low: 2,
+};
+
+const canUserWrite = async (user?: User | null): Promise<boolean> => {
+	const adminSettings = await loadAdminSettings();
+	if (adminSettings.allowNonAdminWrites) return true;
+	return isAdminUser(user?.username);
+};
+
+const enforceAdminWriteAccess = async (
+	req: AuthenticatedRequest,
+	res: express.Response,
+	next: express.NextFunction,
+) => {
+	const user = req.user;
+	const allowed = await canUserWrite(user);
+	if (!allowed) {
+		return res.status(403).json({ error: "Write access is restricted to the admin user nyan" });
+	}
+	next();
 };
 
 type AuthenticatedRequest = express.Request & { user?: User };
@@ -244,6 +265,14 @@ const requirePermission = (resource: string, action: string) => {
 		}
 
 		try {
+			const adminSettings = await loadAdminSettings();
+
+			if (!isAdminUser(user.username) && !adminSettings.allowNonAdminWrites && action !== "read") {
+				return res.status(403).json({
+					error: "Write access is restricted to the admin user nyan",
+				});
+			}
+
 			const userManager = getUserManager();
 			const hasPermission = await userManager.hasPermission(user, resource, action);
 
@@ -274,21 +303,36 @@ export function buildHttpApiApp(pm: ProductManager) {
 	// GET /api/auth/registration-status - Public status endpoint
 	app.get("/api/auth/registration-status", (_req, res) => {
 		const disabled = process.env.DISABLE_REGISTRATION === "true";
-		return res.json({
-			disabled,
-			message: disabled
-				? "Registration is currently disabled while we are in beta."
-				: "Registration is open.",
-		});
+		loadAdminSettings()
+			.then((settings) => {
+				const adminDisabled = !settings.registrationEnabled;
+				const isDisabled = disabled || adminDisabled;
+				return res.json({
+					disabled: isDisabled,
+					message: isDisabled
+						? "Registration is currently disabled."
+						: "Registration is open.",
+				});
+			})
+			.catch(() =>
+				res.json({
+					disabled: true,
+					message: "Registration is currently disabled.",
+				}),
+			);
 	});
 
 	// POST /api/auth/register - Public user registration
 	app.post("/api/auth/register", async (req, res, next) => {
 		try {
-			if (process.env.DISABLE_REGISTRATION === "true") {
+			const adminSettings = await loadAdminSettings();
+			const registrationsDisabled =
+				process.env.DISABLE_REGISTRATION === "true" || !adminSettings.registrationEnabled;
+
+			if (registrationsDisabled) {
 				return res
 					.status(403)
-					.json({ error: "Registration is currently disabled while we are in beta." });
+					.json({ error: "Registration is currently disabled by the administrator." });
 			}
 
 			const { username, email, password, role } = req.body as Partial<CreateUserInput> & {
@@ -419,48 +463,58 @@ export function buildHttpApiApp(pm: ProductManager) {
 	});
 
 	// PUT /api/auth/profile - Update user profile
-	app.put("/api/auth/profile", authenticateToken, async (req: AuthenticatedRequest, res, next) => {
-		try {
-			const user = req.user;
-			const { profile, preferences } = req.body as UpdateProfileInput;
+	app.put(
+		"/api/auth/profile",
+		authenticateToken,
+		enforceAdminWriteAccess,
+		async (req: AuthenticatedRequest, res, next) => {
+			try {
+				const user = req.user;
+				const { profile, preferences } = req.body as UpdateProfileInput;
 
-			const userManager = getUserManager();
-			const updateData: UpdateProfileInput = { userId: user.id };
-			if (profile) updateData.profile = profile;
-			if (preferences) updateData.preferences = preferences;
+				const userManager = getUserManager();
+				const updateData: UpdateProfileInput = { userId: user.id };
+				if (profile) updateData.profile = profile;
+				if (preferences) updateData.preferences = preferences;
 
-			const updatedUser = await userManager.updateProfile(updateData);
+				const updatedUser = await userManager.updateProfile(updateData);
 
-			res.json({ user: { ...updatedUser, passwordHash: undefined } });
-		} catch (error) {
-			next(error);
-		}
-	});
+				res.json({ user: { ...updatedUser, passwordHash: undefined } });
+			} catch (error) {
+				next(error);
+			}
+		},
+	);
 
 	// PUT /api/auth/password - Change password
-	app.put("/api/auth/password", authenticateToken, async (req: AuthenticatedRequest, res, next) => {
-		try {
-			const user = req.user;
-			const { currentPassword, newPassword } = req.body as ChangePasswordInput;
+	app.put(
+		"/api/auth/password",
+		authenticateToken,
+		enforceAdminWriteAccess,
+		async (req: AuthenticatedRequest, res, next) => {
+			try {
+				const user = req.user;
+				const { currentPassword, newPassword } = req.body as ChangePasswordInput;
 
-			if (!currentPassword || !newPassword) {
-				return res.status(400).json({
-					error: "Current password and new password are required",
+				if (!currentPassword || !newPassword) {
+					return res.status(400).json({
+						error: "Current password and new password are required",
+					});
+				}
+
+				const userManager = getUserManager();
+				await userManager.changePassword({
+					userId: user.id,
+					currentPassword,
+					newPassword,
 				});
+
+				res.json({ message: "Password changed successfully" });
+			} catch (error) {
+				next(error);
 			}
-
-			const userManager = getUserManager();
-			await userManager.changePassword({
-				userId: user.id,
-				currentPassword,
-				newPassword,
-			});
-
-			res.json({ message: "Password changed successfully" });
-		} catch (error) {
-			next(error);
-		}
-	});
+		},
+	);
 
 	// GET /api/auth/sessions - Get user sessions
 	app.get("/api/auth/sessions", authenticateToken, async (req: AuthenticatedRequest, res, next) => {
@@ -480,6 +534,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 	app.delete(
 		"/api/auth/sessions",
 		authenticateToken,
+		enforceAdminWriteAccess,
 		async (req: AuthenticatedRequest, res, next) => {
 			try {
 				const user = req.user;
@@ -511,6 +566,53 @@ export function buildHttpApiApp(pm: ProductManager) {
 					permissionMatrix: matrix,
 					availableResources: userManager.getAvailableResources(),
 				});
+			} catch (error) {
+				next(error);
+			}
+		},
+	);
+
+	// Admin settings (admin only)
+	app.get(
+		"/api/admin/settings",
+		authenticateToken,
+		async (req: AuthenticatedRequest, res, next) => {
+			try {
+				const user = req.user;
+				if (!user || !isAdminUser(user.username)) {
+					return res.status(403).json({ error: "Admin access required" });
+				}
+
+				const settings = await loadAdminSettings();
+				res.json({ settings });
+			} catch (error) {
+				next(error);
+			}
+		},
+	);
+
+	app.put(
+		"/api/admin/settings",
+		authenticateToken,
+		async (req: AuthenticatedRequest, res, next) => {
+			try {
+				const user = req.user;
+				if (!user || !isAdminUser(user.username)) {
+					return res.status(403).json({ error: "Admin access required" });
+				}
+
+				const incoming = req.body as Partial<AdminSettings>;
+				const updates: Partial<AdminSettings> = {};
+
+				if (typeof incoming.registrationEnabled === "boolean") {
+					updates.registrationEnabled = incoming.registrationEnabled;
+				}
+				if (typeof incoming.allowNonAdminWrites === "boolean") {
+					updates.allowNonAdminWrites = incoming.allowNonAdminWrites;
+				}
+
+				const settings = await saveAdminSettings(updates);
+				res.json({ settings });
 			} catch (error) {
 				next(error);
 			}
@@ -1698,7 +1800,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 	app.post(
 		"/api/saved-searches",
 		authenticateToken,
-		requirePermission("tasks", "read"),
+		requirePermission("tasks", "update"),
 		async (req: AuthenticatedRequest, res, next) => {
 			try {
 				const user = req.user;
@@ -1731,7 +1833,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 	app.put(
 		"/api/saved-searches/:id",
 		authenticateToken,
-		requirePermission("tasks", "read"),
+		requirePermission("tasks", "update"),
 		async (req: AuthenticatedRequest, res, next) => {
 			try {
 				const user = req.user;
@@ -1761,7 +1863,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 	app.delete(
 		"/api/saved-searches/:id",
 		authenticateToken,
-		requirePermission("tasks", "read"),
+		requirePermission("tasks", "update"),
 		async (req: AuthenticatedRequest, res, next) => {
 			try {
 				const user = req.user;

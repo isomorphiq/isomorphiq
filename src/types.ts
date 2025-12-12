@@ -199,6 +199,11 @@ export interface ListDirResult {
 	entries: DirEntry[];
 }
 
+export interface AdminSettings {
+	registrationEnabled: boolean;
+	allowNonAdminWrites: boolean;
+}
+
 export interface CreateTerminalParams {
 	command: string;
 	args?: string[];

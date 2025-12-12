@@ -11,6 +11,11 @@ type LayoutProps = {
 	showFooter?: boolean;
 };
 
+type AdminSettings = {
+	registrationEnabled: boolean;
+	allowNonAdminWrites: boolean;
+};
+
 const getIsMobile = () => (typeof window !== "undefined" ? window.innerWidth <= 900 : false);
 
 export function Layout({ children, showNav = true, showFooter = true }: LayoutProps) {
@@ -19,6 +24,11 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 	const [showUserMenu, setShowUserMenu] = useState(false);
 	const [navOpen, setNavOpen] = useState(false);
 	const [isMobile, setIsMobile] = useState(getIsMobile());
+	const [adminSettings, setAdminSettings] = useState<AdminSettings>({
+		registrationEnabled: false,
+		allowNonAdminWrites: false,
+	});
+	const [adminSettingsError, setAdminSettingsError] = useState<string | null>(null);
 
 	const navItems = [
 		{ to: "/", label: "Dashboard", icon: "📊" },
