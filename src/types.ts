@@ -33,6 +33,8 @@ export interface UpdateTaskInput {
 	status?: TaskStatus;
 	title?: string;
 	description?: string;
+	priority?: "low" | "medium" | "high";
+	dependencies?: string[];
 	assignedTo?: string;
 	collaborators?: string[];
 	watchers?: string[];
@@ -541,21 +543,75 @@ export interface TaskSearchOptions {
 	offset?: number;
 }
 
-// Search query interface for API
+// Advanced search query interface for API
 export interface SearchQuery {
 	q?: string; // Full-text search query
 	status?: TaskStatus[];
 	priority?: Task["priority"][];
+	type?: TaskType[];
+	assignedTo?: string[];
+	createdBy?: string[];
+	collaborators?: string[];
+	watchers?: string[];
 	dateFrom?: string; // ISO date string
 	dateTo?: string; // ISO date string
+	updatedFrom?: string; // ISO date string
+	updatedTo?: string; // ISO date string
+	tags?: string[];
+	dependencies?: string[]; // Task IDs
+	hasDependencies?: boolean; // Filter by whether task has dependencies
+	sort?: SearchSort;
 	limit?: number;
 	offset?: number;
+}
+
+export interface SearchSort {
+	field: "relevance" | "title" | "createdAt" | "updatedAt" | "priority" | "status";
+	direction: "asc" | "desc";
 }
 
 export interface SearchResult {
 	tasks: Task[];
 	total: number;
 	query: SearchQuery;
-	highlights?: { taskId: string; titleMatches?: number[]; descriptionMatches?: number[] };
+	highlights?: Record<string, { titleMatches?: number[]; descriptionMatches?: number[] }>;
+	facets?: SearchFacets;
+	suggestions?: string[];
+}
+
+export interface SearchFacets {
+	status: Record<TaskStatus, number>;
+	priority: Record<Task["priority"], number>;
+	type: Record<TaskType, number>;
+	assignedTo: Record<string, number>;
+	createdBy: Record<string, number>;
+}
+
+// Saved search interface
+export interface SavedSearch {
+	id: string;
+	name: string;
+	description?: string;
+	query: SearchQuery;
+	createdBy: string;
+	isPublic: boolean;
+	createdAt: Date;
+	updatedAt: Date;
+	usageCount: number;
+}
+
+export interface CreateSavedSearchInput {
+	name: string;
+	description?: string;
+	query: SearchQuery;
+	isPublic?: boolean;
+}
+
+export interface UpdateSavedSearchInput {
+	id: string;
+	name?: string;
+	description?: string;
+	query?: SearchQuery;
+	isPublic?: boolean;
 }
 import type { WebSocket } from "ws";

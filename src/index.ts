@@ -15,7 +15,7 @@ import { acpTurnEffect } from "./effects/acp-turn.ts";
 import { gitCommitIfChanges } from "./git-utils.ts";
 import { runLintAndTests } from "./run-tests.ts";
 import { TemplateManager } from "./template-manager.ts";
-import type { CreateTaskFromTemplateInput, Task } from "./types.ts";
+import type { CreateTaskFromTemplateInput, Task, SavedSearch } from "./types.ts";
 import type { TaskStatus, TaskType, WebSocketEventType } from "./types.ts";
 import { buildWorkflowWithEffects } from "./workflow.ts";
 import { advanceToken, createToken } from "./workflow-engine.ts";
@@ -24,6 +24,10 @@ import type { WebSocketManager } from "./websocket-server.ts";
 // Initialize LevelDB
 const dbPath = path.join(process.cwd(), "db");
 const db = new Level<string, Task>(dbPath, { valueEncoding: "json" });
+
+// Initialize separate database for saved searches
+const savedSearchesDbPath = path.join(process.cwd(), "saved-searches-db");
+const savedSearchesDb = new Level<string, SavedSearch>(savedSearchesDbPath, { valueEncoding: "json" });
 
 // Product Manager class to handle task operations
 export class ProductManager {
@@ -1217,5 +1221,457 @@ export class ProductManager {
 			console.error(`[PROFILE] Failed to assign task to ${profileName}:`, error);
 			return false;
 		}
+	}
+
+	// Advanced search functionality
+	async searchTasks(query: import("./types.ts").SearchQuery): Promise<import("./types.ts").SearchResult> {
+		await this.ensureDbOpen();
+		
+		const allTasks = await this.getAllTasks();
+		let filteredTasks = [...allTasks];
+
+		// Apply filters
+		if (query.status && query.status.length > 0) {
+			filteredTasks = filteredTasks.filter(task => query.status!.includes(task.status));
+		}
+
+		if (query.priority && query.priority.length > 0) {
+			filteredTasks = filteredTasks.filter(task => query.priority!.includes(task.priority));
+		}
+
+		if (query.type && query.type.length > 0) {
+			filteredTasks = filteredTasks.filter(task => query.type!.includes(task.type));
+		}
+
+		if (query.assignedTo && query.assignedTo.length > 0) {
+			filteredTasks = filteredTasks.filter(task => 
+				task.assignedTo && query.assignedTo!.includes(task.assignedTo)
+			);
+		}
+
+		if (query.createdBy && query.createdBy.length > 0) {
+			filteredTasks = filteredTasks.filter(task => 
+				query.createdBy!.includes(task.createdBy)
+			);
+		}
+
+		if (query.collaborators && query.collaborators.length > 0) {
+			filteredTasks = filteredTasks.filter(task => 
+				task.collaborators && task.collaborators.some(col => query.collaborators!.includes(col))
+			);
+		}
+
+		if (query.watchers && query.watchers.length > 0) {
+			filteredTasks = filteredTasks.filter(task => 
+				task.watchers && task.watchers.some(watcher => query.watchers!.includes(watcher))
+			);
+		}
+
+		if (query.dateFrom) {
+			const fromDate = new Date(query.dateFrom);
+			filteredTasks = filteredTasks.filter(task => new Date(task.createdAt) >= fromDate);
+		}
+
+		if (query.dateTo) {
+			const toDate = new Date(query.dateTo);
+			filteredTasks = filteredTasks.filter(task => new Date(task.createdAt) <= toDate);
+		}
+
+		if (query.updatedFrom) {
+			const fromDate = new Date(query.updatedFrom);
+			filteredTasks = filteredTasks.filter(task => new Date(task.updatedAt) >= fromDate);
+		}
+
+		if (query.updatedTo) {
+			const toDate = new Date(query.updatedTo);
+			filteredTasks = filteredTasks.filter(task => new Date(task.updatedAt) <= toDate);
+		}
+
+		if (query.dependencies && query.dependencies.length > 0) {
+			filteredTasks = filteredTasks.filter(task => 
+				query.dependencies!.some(dep => task.dependencies.includes(dep))
+			);
+		}
+
+		if (query.hasDependencies !== undefined) {
+			filteredTasks = filteredTasks.filter(task => 
+				query.hasDependencies ? task.dependencies.length > 0 : task.dependencies.length === 0
+			);
+		}
+
+		// Apply text search with relevance scoring
+		let searchResults: {
+			task: import("./types.ts").Task;
+			score: number;
+			matches?: { title: number[]; description: number[] };
+		}[];
+
+		if (query.q && query.q.trim().length > 0) {
+			searchResults = this.performTextSearch(filteredTasks, query.q);
+		} else {
+			searchResults = filteredTasks.map(task => ({ task, score: 0 }));
+		}
+
+		// Apply sorting
+		if (query.sort) {
+			searchResults = this.sortSearchResults(searchResults, query.sort);
+		} else {
+			// Default sort: relevance (if search query) then priority then creation date
+			searchResults.sort((a, b) => {
+				if (query.q && query.q.trim().length > 0) {
+					if (a.score !== b.score) return b.score - a.score;
+				}
+				const priorityOrder = { high: 3, medium: 2, low: 1 };
+				const priorityDiff = priorityOrder[b.task.priority] - priorityOrder[a.task.priority];
+				if (priorityDiff !== 0) return priorityDiff;
+				return new Date(b.task.createdAt).getTime() - new Date(a.task.createdAt).getTime();
+			});
+		}
+
+		// Apply pagination
+		const total = searchResults.length;
+		const offset = query.offset || 0;
+		const limit = query.limit || 50;
+		const paginatedResults = searchResults.slice(offset, offset + limit);
+
+		// Prepare highlights
+		const highlights: Record<string, { titleMatches?: number[]; descriptionMatches?: number[] }> = {};
+		paginatedResults.forEach(result => {
+			if (result.matches) {
+				highlights[result.task.id] = {
+					titleMatches: result.matches.title,
+					descriptionMatches: result.matches.description,
+				};
+			}
+		});
+
+		// Generate facets
+		const facets = this.generateSearchFacets(allTasks, filteredTasks);
+
+		// Generate suggestions based on query
+		const suggestions = this.generateSearchSuggestions(query.q, allTasks);
+
+		return {
+			tasks: paginatedResults.map(result => result.task),
+			total,
+			query,
+			highlights: Object.keys(highlights).length > 0 ? highlights : undefined,
+			facets,
+			suggestions: suggestions.length > 0 ? suggestions : undefined,
+		};
+	}
+
+	private performTextSearch(
+		tasks: import("./types.ts").Task[],
+		query: string
+	): {
+		task: import("./types.ts").Task;
+		score: number;
+		matches?: { title: number[]; description: number[] };
+	}[] {
+		const searchTerms = query
+			.toLowerCase()
+			.split(/\s+/)
+			.filter(term => term.length > 0);
+
+		return tasks
+			.map(task => {
+				const title = task.title.toLowerCase();
+				const description = task.description.toLowerCase();
+
+				let score = 0;
+				const titleMatches: number[] = [];
+				const descriptionMatches: number[] = [];
+
+				searchTerms.forEach(term => {
+					// Title matches (higher weight)
+					let titleIndex = title.indexOf(term);
+					while (titleIndex !== -1) {
+						score += 10; // Title matches get 10 points
+						titleMatches.push(titleIndex);
+						titleIndex = title.indexOf(term, titleIndex + 1);
+					}
+
+					// Description matches (lower weight)
+					let descIndex = description.indexOf(term);
+					while (descIndex !== -1) {
+						score += 5; // Description matches get 5 points
+						descriptionMatches.push(descIndex);
+						descIndex = description.indexOf(term, descIndex + 1);
+					}
+				});
+
+				// Exact phrase match bonus
+				if (title.includes(query.toLowerCase()) || description.includes(query.toLowerCase())) {
+					score += 20;
+				}
+
+				// Priority bonus
+				if (task.priority === "high") score += 2;
+				else if (task.priority === "medium") score += 1;
+
+				// Recent task bonus (created in last 7 days)
+				const weekAgo = new Date();
+				weekAgo.setDate(weekAgo.getDate() - 7);
+				if (new Date(task.createdAt) > weekAgo) score += 1;
+
+				const result: {
+					task: import("./types.ts").Task;
+					score: number;
+					matches?: { title: number[]; description: number[] };
+				} = {
+					task,
+					score,
+				};
+
+				if (titleMatches.length > 0 || descriptionMatches.length > 0) {
+					result.matches = {
+						title: titleMatches,
+						description: descriptionMatches,
+					};
+				}
+
+				return result;
+			})
+			.filter(result => result.score > 0)
+			.sort((a, b) => b.score - a.score);
+	}
+
+	private sortSearchResults(
+		results: {
+			task: import("./types.ts").Task;
+			score: number;
+			matches?: { title: number[]; description: number[] };
+		}[], 
+		sort: import("./types.ts").SearchSort
+	): typeof results {
+		const { field, direction } = sort;
+		const multiplier = direction === "asc" ? 1 : -1;
+
+		return results.sort((a, b) => {
+			let comparison = 0;
+
+			switch (field) {
+				case "relevance":
+					comparison = a.score - b.score;
+					break;
+				case "title":
+					comparison = a.task.title.localeCompare(b.task.title);
+					break;
+				case "createdAt":
+					comparison = new Date(a.task.createdAt).getTime() - new Date(b.task.createdAt).getTime();
+					break;
+				case "updatedAt":
+					comparison = new Date(a.task.updatedAt).getTime() - new Date(b.task.updatedAt).getTime();
+					break;
+				case "priority":
+					const priorityOrder = { high: 3, medium: 2, low: 1 };
+					comparison = priorityOrder[a.task.priority] - priorityOrder[b.task.priority];
+					break;
+				case "status":
+					const statusOrder = { "todo": 1, "in-progress": 2, "done": 3 };
+					comparison = statusOrder[a.task.status] - statusOrder[b.task.status];
+					break;
+			}
+
+			return comparison * multiplier;
+		});
+	}
+
+	private generateSearchFacets(
+		allTasks: import("./types.ts").Task[],
+		filteredTasks: import("./types.ts").Task[]
+	): import("./types.ts").SearchFacets {
+		const statusCounts: Record<import("./types.ts").TaskStatus, number> = {
+			"todo": 0,
+			"in-progress": 0,
+			"done": 0,
+		};
+
+		const priorityCounts: Record<import("./types.ts").Task["priority"], number> = {
+			"low": 0,
+			"medium": 0,
+			"high": 0,
+		};
+
+		const typeCounts: Record<import("./types.ts").TaskType, number> = {
+			"feature": 0,
+			"story": 0,
+			"task": 0,
+			"integration": 0,
+			"research": 0,
+		};
+
+		const assignedToCounts: Record<string, number> = {};
+		const createdByCounts: Record<string, number> = {};
+
+		filteredTasks.forEach(task => {
+			statusCounts[task.status]++;
+			priorityCounts[task.priority]++;
+			typeCounts[task.type]++;
+			
+			if (task.assignedTo) {
+				assignedToCounts[task.assignedTo] = (assignedToCounts[task.assignedTo] || 0) + 1;
+			}
+			
+			createdByCounts[task.createdBy] = (createdByCounts[task.createdBy] || 0) + 1;
+		});
+
+		return {
+			status: statusCounts,
+			priority: priorityCounts,
+			type: typeCounts,
+			assignedTo: assignedToCounts,
+			createdBy: createdByCounts,
+		};
+	}
+
+	generateSearchSuggestions(query: string | undefined, tasks: import("./types.ts").Task[]): string[] {
+		if (!query || query.trim().length < 2) return [];
+
+		const suggestions = new Set<string>();
+		const queryLower = query.toLowerCase();
+
+		// Extract words from task titles and descriptions
+		tasks.forEach(task => {
+			const titleWords = task.title.toLowerCase().split(/\s+/);
+			const descWords = task.description.toLowerCase().split(/\s+/);
+
+			[...titleWords, ...descWords].forEach(word => {
+				if (word.includes(queryLower) && word.length > queryLower.length) {
+					suggestions.add(word);
+				}
+			});
+		});
+
+		return Array.from(suggestions).slice(0, 10); // Limit to 10 suggestions
+	}
+
+	// Saved searches functionality
+	private async ensureSavedSearchesDbOpen(): Promise<void> {
+		try {
+			await savedSearchesDb.open();
+		} catch (error) {
+			console.error("[SAVED_SEARCHES_DB] Failed to open database:", error);
+			throw error;
+		}
+	}
+
+	async createSavedSearch(input: import("./types.ts").CreateSavedSearchInput, createdBy: string): Promise<import("./types.ts").SavedSearch> {
+		await this.ensureSavedSearchesDbOpen();
+
+		const id = `saved-search-${Date.now()}`;
+		const savedSearch: import("./types.ts").SavedSearch = {
+			id,
+			name: input.name,
+			description: input.description,
+			query: input.query,
+			createdBy,
+			isPublic: input.isPublic || false,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+			usageCount: 0,
+		};
+
+		await savedSearchesDb.put(id, savedSearch);
+		console.log(`[SAVED_SEARCHES_DB] Created saved search: ${id}`);
+		return savedSearch;
+	}
+
+	async getSavedSearches(userId?: string): Promise<import("./types.ts").SavedSearch[]> {
+		await this.ensureSavedSearchesDbOpen();
+
+		const searches: import("./types.ts").SavedSearch[] = [];
+		let iterator: (AsyncIterableIterator<[string, import("./types.ts").SavedSearch]> & { close: () => Promise<void> }) | undefined;
+
+		try {
+			iterator = savedSearchesDb.iterator() as unknown as AsyncIterableIterator<[string, import("./types.ts").SavedSearch]> & {
+				close: () => Promise<void>;
+			};
+
+			for await (const [, value] of iterator) {
+				// Include public searches or user's own searches
+				if (value.isPublic || (userId && value.createdBy === userId)) {
+					searches.push(value);
+				}
+			}
+		} catch (error) {
+			console.error("[SAVED_SEARCHES_DB] Error reading saved searches:", error);
+			throw error;
+		} finally {
+			if (iterator) {
+				try {
+					await iterator.close();
+				} catch (closeError) {
+					console.error("[SAVED_SEARCHES_DB] Error closing iterator:", closeError);
+				}
+			}
+		}
+
+		return searches.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+	}
+
+	async getSavedSearch(id: string, userId?: string): Promise<import("./types.ts").SavedSearch | null> {
+		await this.ensureSavedSearchesDbOpen();
+
+		try {
+			const savedSearch = await savedSearchesDb.get(id);
+
+			// Check access permissions
+			if (!savedSearch.isPublic && (!userId || savedSearch.createdBy !== userId)) {
+				return null;
+			}
+
+			// Increment usage count
+			savedSearch.usageCount++;
+			savedSearch.updatedAt = new Date();
+			await savedSearchesDb.put(id, savedSearch);
+
+			return savedSearch;
+		} catch (error) {
+			return null;
+		}
+	}
+
+	async updateSavedSearch(input: import("./types.ts").UpdateSavedSearchInput, userId: string): Promise<import("./types.ts").SavedSearch> {
+		await this.ensureSavedSearchesDbOpen();
+
+		const existingSearch = await savedSearchesDb.get(input.id).catch(() => null);
+		if (!existingSearch) {
+			throw new Error("Saved search not found");
+		}
+
+		if (existingSearch.createdBy !== userId) {
+			throw new Error("Not authorized to update this saved search");
+		}
+
+		const updatedSearch: import("./types.ts").SavedSearch = {
+			...existingSearch,
+			...(input.name && { name: input.name }),
+			...(input.description !== undefined && { description: input.description }),
+			...(input.query && { query: input.query }),
+			...(input.isPublic !== undefined && { isPublic: input.isPublic }),
+			updatedAt: new Date(),
+		};
+
+		await savedSearchesDb.put(input.id, updatedSearch);
+		console.log(`[SAVED_SEARCHES_DB] Updated saved search: ${input.id}`);
+		return updatedSearch;
+	}
+
+	async deleteSavedSearch(id: string, userId: string): Promise<void> {
+		await this.ensureSavedSearchesDbOpen();
+
+		const existingSearch = await savedSearchesDb.get(id).catch(() => null);
+		if (!existingSearch) {
+			throw new Error("Saved search not found");
+		}
+
+		if (existingSearch.createdBy !== userId) {
+			throw new Error("Not authorized to delete this saved search");
+		}
+
+		await savedSearchesDb.del(id);
+		console.log(`[SAVED_SEARCHES_DB] Deleted saved search: ${id}`);
 	}
 }

@@ -45,7 +45,6 @@ export function DashboardView({
 			</section>
 
 			<CreateTaskSection
-				isMobile={isMobile}
 				isAuthenticated={auth.isAuthenticated}
 				showCreateForm={showCreateForm}
 				onToggle={onToggleCreate}

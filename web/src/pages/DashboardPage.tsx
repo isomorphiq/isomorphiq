@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Header, Layout } from "../components/Layout.tsx";
-import { MobileLayout } from "../components/MobileLayout.tsx";
 import { PWAInstallPrompt } from "../components/PWAInstallPrompt.tsx";
 import { EnhancedErrorBoundary } from "../components/UIComponents.tsx";
 import { useDashboardTasks } from "../hooks/useDashboardTasks.ts";
@@ -22,11 +21,10 @@ export function DashboardPage() {
     } = useDashboardTasks();
     const [showCreateForm, setShowCreateForm] = useState(false);
     const isMobile = useIsMobile();
-    const LayoutComponent = isMobile ? MobileLayout : Layout;
 
     return (
         <EnhancedErrorBoundary>
-            <LayoutComponent>
+            <Layout>
                 {!isMobile && <Header title="" showAuthControls={false} />}
 
                 <DashboardView
@@ -44,7 +42,7 @@ export function DashboardPage() {
                     isOnline={isOnline}
                     syncInProgress={syncInProgress}
                 />
-            </LayoutComponent>
+            </Layout>
 
             <PWAInstallPrompt />
         </EnhancedErrorBoundary>

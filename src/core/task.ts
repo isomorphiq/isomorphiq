@@ -331,8 +331,8 @@ export const TaskFactory = {
 			updatedTask.description = input.description.trim();
 		}
 		if (input.status !== undefined) {
-			// Validate status transition
-			if (!TaskDomainRules.canTransitionStatus(task.status, input.status)) {
+			// Validate status transition only if status is actually different
+			if (input.status !== task.status && !TaskDomainRules.canTransitionStatus(task.status, input.status)) {
 				return {
 					success: false,
 					error: new ValidationError(
@@ -351,6 +351,13 @@ export const TaskFactory = {
 		}
 		if (input.watchers !== undefined) {
 			updatedTask.watchers = input.watchers;
+		}
+		if (input.priority !== undefined) {
+			updatedTask.priority = input.priority;
+		}
+		// Preserve dependencies if not explicitly updated
+		if (input.dependencies === undefined) {
+			updatedTask.dependencies = task.dependencies;
 		}
 
 		return { success: true, data: updatedTask };

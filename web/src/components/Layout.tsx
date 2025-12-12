@@ -1,6 +1,6 @@
 import { useAtomValue } from "jotai";
 import type { CSSProperties, ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { authAtom } from "../authAtoms.ts";
 import { ThemeToggle } from "./ThemeToggle.tsx";
@@ -15,8 +15,8 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 	const auth = useAtomValue(authAtom);
 	const location = useLocation();
 	const [showUserMenu, setShowUserMenu] = useState(false);
-	// Registration always open for now; adjust when status endpoint is wired
-	const registrationDisabled = false;
+	const [navOpen, setNavOpen] = useState(false);
+	const [isMobile, setIsMobile] = useState(window.innerWidth <= 900);
 
 	const navItems = [
 		{ to: "/", label: "Dashboard", icon: "📊" },
@@ -28,18 +28,47 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 		{ to: "/users/me", label: "My Profile", icon: "👤", requireAuth: true },
 	];
 
+	useEffect(() => {
+		const handleResize = () => {
+			setIsMobile(window.innerWidth <= 900);
+		};
+		window.addEventListener("resize", handleResize);
+		return () => window.removeEventListener("resize", handleResize);
+	}, []);
+
+	useEffect(() => {
+		if (!isMobile) {
+			setNavOpen(false);
+		}
+	}, [isMobile]);
+
 	return (
 		<div
 			style={{
-				padding: "24px",
+				padding: isMobile ? "16px" : "24px",
 				fontFamily: "Inter, system-ui, sans-serif",
 				background: "var(--color-bg-primary)",
 				minHeight: "100vh",
 				color: "var(--color-text-primary)",
 			}}
 		>
-			<header style={headerShell}>
-				<div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+			<header
+				style={{
+					...headerShell,
+					flexDirection: isMobile ? "column" : "row",
+					alignItems: isMobile ? "flex-start" : "center",
+				}}
+			>
+				<div
+					style={{
+						display: "flex",
+						alignItems: "center",
+						gap: "12px",
+						flexWrap: "wrap",
+						width: isMobile ? "100%" : "auto",
+						justifyContent: "space-between",
+					}}
+				>
 					<Link
 						to="/"
 						style={{
@@ -53,8 +82,38 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 					>
 						isomorphiq
 					</Link>
+					{showNav && isMobile && (
+						<button
+							type="button"
+							onClick={() => setNavOpen((value) => !value)}
+							style={{
+								padding: "10px 12px",
+								borderRadius: "10px",
+								border: "1px solid var(--color-border-primary)",
+								background: "var(--color-surface-secondary)",
+								color: "var(--color-text-primary)",
+								fontWeight: 700,
+								cursor: "pointer",
+							}}
+						>
+							{navOpen ? "Close" : "Menu"}
+						</button>
+					)}
 					{showNav && (
-						<nav style={navShell}>
+						<nav
+							style={
+								isMobile
+									? {
+											...navShell,
+											display: navOpen ? "flex" : "none",
+											flexDirection: "column",
+											alignItems: "stretch",
+											width: "100%",
+											gap: "8px",
+									  }
+									: navShell
+							}
+						>
 							{navItems
 								.filter((item) => !item.requireAuth || auth.isAuthenticated)
 								.map((item) => {
@@ -63,18 +122,25 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 										<Link
 											key={item.to}
 											to={item.to}
+											onClick={() => {
+												if (navOpen) {
+													setNavOpen(false);
+												}
+											}}
 											style={{
 												textDecoration: "none",
 												color: active ? "var(--color-bg-primary)" : "var(--color-text-primary)",
 												background: active ? "var(--color-accent-primary)" : "transparent",
-												padding: "8px 12px",
-												borderRadius: "8px",
+												padding: isMobile ? "10px 12px" : "8px 12px",
+												borderRadius: "10px",
 												fontWeight: 700,
 												display: "flex",
 												alignItems: "center",
 												gap: "6px",
 												border: active ? "1px solid var(--color-accent-primary)" : "1px solid transparent",
 												transition: "all 0.2s ease",
+												justifyContent: "space-between",
+												width: isMobile ? "100%" : "auto",
 											}}
 										>
 											<span>{item.icon}</span>
@@ -86,7 +152,15 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 					)}
 				</div>
 
-				<div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+				<div
+					style={{
+						display: "flex",
+						alignItems: "center",
+						gap: "12px",
+						width: isMobile ? "100%" : "auto",
+						justifyContent: isMobile ? "space-between" : "flex-end",
+					}}
+				>
 					<ThemeToggle size="small" />
 					{auth.isAuthenticated && auth.user ? (
 					<div style={{ position: "relative" }}>

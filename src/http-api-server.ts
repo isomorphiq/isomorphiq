@@ -66,27 +66,15 @@ const priorityWeight: Record<Task["priority"], number> = {
 
 type AuthenticatedRequest = express.Request & { user?: User };
 
-// Search and filter types
-interface SearchQuery {
-	q?: string; // Full-text search query
-	status?: TaskStatus[];
-	priority?: Task["priority"][];
-	dateFrom?: string; // ISO date string
-	dateTo?: string; // ISO date string
-	limit?: number;
-	offset?: number;
-}
-
-interface SearchResult {
-	tasks: Task[];
-	total: number;
-	query: SearchQuery;
-	highlights?: {
-		taskId: string;
-		titleMatches?: number[];
-		descriptionMatches?: number[];
-	};
-}
+// Import advanced search types
+import type { 
+	SearchQuery, 
+	SearchResult, 
+	SearchSort,
+	SavedSearch, 
+	CreateSavedSearchInput, 
+	UpdateSavedSearchInput 
+} from "./types.ts";
 
 // Simple text search and relevance scoring
 function searchTasks(
@@ -165,73 +153,41 @@ type TrpcContext = { pm: ProductManager; wsManager?: WebSocketManager };
 
 const t = initTRPC.context<TrpcContext>().create();
 
-const appRouter = t.router({
+const appRouter: ReturnType<typeof t.router> = t.router({
 	tasks: t.procedure.query(async ({ ctx }) => ctx.pm.getAllTasks()),
 	queue: t.procedure.query(async ({ ctx }) => ctx.pm.getTasksSortedByDependencies()),
-	searchTasks: t.procedure
+	// Advanced search endpoint
+	advancedSearch: t.procedure
 		.input((query: unknown) => query as SearchQuery)
 		.query(async ({ ctx, input }) => {
-			const allTasks = (await ctx.pm.getAllTasks()) ?? [];
-			let filteredTasks = allTasks;
-
-			// Apply filters
-			if (input.status && input.status.length > 0) {
-				filteredTasks = filteredTasks.filter((task) => input.status?.includes(task.status));
-			}
-
-			if (input.priority && input.priority.length > 0) {
-				filteredTasks = filteredTasks.filter((task) => input.priority?.includes(task.priority));
-			}
-
-			if (input.dateFrom) {
-				const fromDate = new Date(input.dateFrom);
-				filteredTasks = filteredTasks.filter((task) => new Date(task.createdAt) >= fromDate);
-			}
-
-			if (input.dateTo) {
-				const toDate = new Date(input.dateTo);
-				filteredTasks = filteredTasks.filter((task) => new Date(task.createdAt) <= toDate);
-			}
-
-			// Apply text search
-			let searchResults: {
-				task: Task;
-				score: number;
-				matches?: { title: number[]; description: number[] };
-			}[];
-			if (input.q && input.q.trim().length > 0) {
-				searchResults = searchTasks(filteredTasks, input.q);
-			} else {
-				searchResults = filteredTasks.map((task) => ({
-					task,
-					score: 0,
-				}));
-			}
-
-			// Apply pagination
-			const total = searchResults.length;
-			const offset = input.offset || 0;
-			const limit = input.limit || 50;
-			const paginatedResults = searchResults.slice(offset, offset + limit);
-
-			// Prepare highlights
-			const highlights: Record<string, { titleMatches?: number[]; descriptionMatches?: number[] }> =
-				{};
-			paginatedResults.forEach((result) => {
-				if (result.matches) {
-					highlights[result.task.id] = {
-						titleMatches: result.matches.title,
-						descriptionMatches: result.matches.description,
-					};
-				}
-			});
-
-			return {
-				tasks: paginatedResults.map((result) => result.task),
-				total,
-				query: input,
-				highlights: Object.keys(highlights).length > 0 ? highlights : undefined,
-			} as SearchResult;
+			return await ctx.pm.searchTasks(input);
+		}),
+	// Saved searches endpoints
+	getSavedSearches: t.procedure
+		.input((input: unknown) => input as { userId?: string })
+		.query(async ({ ctx, input }) => {
+			return await ctx.pm.getSavedSearches(input.userId);
+		}),
+	getSavedSearch: t.procedure
+		.input((input: unknown) => input as { id: string; userId?: string })
+		.query(async ({ ctx, input }) => {
+			return await ctx.pm.getSavedSearch(input.id, input.userId);
+		}),
+	createSavedSearch: t.procedure
+		.input((input: unknown) => input as { search: CreateSavedSearchInput; userId: string })
+		.mutation(async ({ ctx, input }) => {
+			return await ctx.pm.createSavedSearch(input.search, input.userId);
+		}),
+	updateSavedSearch: t.procedure
+		.input((input: unknown) => input as { search: UpdateSavedSearchInput; userId: string })
+		.mutation(async ({ ctx, input }) => {
+			return await ctx.pm.updateSavedSearch(input.search, input.userId);
+		}),
+	deleteSavedSearch: t.procedure
+		.input((input: unknown) => input as { id: string; userId: string })
+		.mutation(async ({ ctx, input }) => {
+			await ctx.pm.deleteSavedSearch(input.id, input.userId);
+			return { success: true };
 		}),
 	taskUpdates: t.procedure.subscription(({ ctx }) => {
 		return observable<WebSocketEvent>((emit) => {
@@ -1627,6 +1583,212 @@ export function buildHttpApiApp(pm: ProductManager) {
 		}
 	});
 
+	// Advanced search endpoints
+
+	// POST /api/search/advanced - Advanced task search with filtering
+	app.post("/api/search/advanced", authenticateToken, async (req: AuthenticatedRequest, res, next) => {
+		try {
+			const user = req.user;
+			if (!user) {
+				return res.status(401).json({ error: "Authentication required" });
+			}
+			
+			const searchQuery = req.body as SearchQuery;
+			console.log(`[HTTP API] POST /api/search/advanced - Advanced search by user: ${user.username}`);
+
+			// Check if user has permission to read tasks
+			const userManager = getUserManager();
+			const hasAdminPermission = await userManager.hasPermission(user, "tasks", "read");
+
+			// If not admin, filter search to only include user's tasks
+			if (!hasAdminPermission) {
+				searchQuery.createdBy = [user.id];
+				// Also include tasks assigned to user or where user is collaborator
+				const userTasks = await pm.getTasksForUser(user.id, ["created", "assigned", "collaborating"]);
+				searchQuery.assignedTo = [user.id];
+				searchQuery.collaborators = [user.id];
+			}
+
+			const searchResult = await pm.searchTasks(searchQuery);
+			res.json(searchResult);
+		} catch (error) {
+			next(error);
+		}
+	});
+
+	// GET /api/search/suggestions - Get search suggestions
+	app.get("/api/search/suggestions", authenticateToken, async (req: AuthenticatedRequest, res, next) => {
+		try {
+			const user = req.user;
+			if (!user) {
+				return res.status(401).json({ error: "Authentication required" });
+			}
+
+			const { q } = req.query;
+			console.log(`[HTTP API] GET /api/search/suggestions - Getting suggestions for: ${q}`);
+
+			if (!q || typeof q !== "string" || q.trim().length < 2) {
+				return res.json({ suggestions: [] });
+			}
+
+			const allTasks = await pm.getAllTasks();
+			
+			// Filter tasks based on user permissions
+			const userManager = getUserManager();
+			const hasAdminPermission = await userManager.hasPermission(user, "tasks", "read");
+			let searchableTasks = allTasks;
+			
+			if (!hasAdminPermission) {
+				searchableTasks = await pm.getTasksForUser(user.id, ["created", "assigned", "collaborating"]);
+			}
+
+			const suggestions = pm.generateSearchSuggestions(q, searchableTasks);
+			res.json({ suggestions });
+		} catch (error) {
+			next(error);
+		}
+	});
+
+	// Saved searches endpoints
+
+	// GET /api/saved-searches - Get saved searches
+	app.get("/api/saved-searches", authenticateToken, async (req: AuthenticatedRequest, res, next) => {
+		try {
+			const user = req.user;
+			if (!user) {
+				return res.status(401).json({ error: "Authentication required" });
+			}
+
+			console.log(`[HTTP API] GET /api/saved-searches - Getting saved searches for user: ${user.username}`);
+
+			const savedSearches = await pm.getSavedSearches(user.id);
+			res.json({ savedSearches, count: savedSearches.length });
+		} catch (error) {
+			next(error);
+		}
+	});
+
+	// GET /api/saved-searches/:id - Get specific saved search
+	app.get("/api/saved-searches/:id", authenticateToken, async (req: AuthenticatedRequest, res, next) => {
+		try {
+			const user = req.user;
+			if (!user) {
+				return res.status(401).json({ error: "Authentication required" });
+			}
+
+			const { id } = req.params;
+			if (!id) {
+				return res.status(400).json({ error: "Saved search ID is required" });
+			}
+
+			console.log(`[HTTP API] GET /api/saved-searches/${id} - Getting saved search`);
+
+			const savedSearch = await pm.getSavedSearch(id, user.id);
+			if (!savedSearch) {
+				return res.status(404).json({ error: "Saved search not found" });
+			}
+
+			res.json({ savedSearch });
+		} catch (error) {
+			next(error);
+		}
+	});
+
+	// POST /api/saved-searches - Create saved search
+	app.post(
+		"/api/saved-searches",
+		authenticateToken,
+		requirePermission("tasks", "read"),
+		async (req: AuthenticatedRequest, res, next) => {
+			try {
+				const user = req.user;
+				if (!user) {
+					return res.status(401).json({ error: "Authentication required" });
+				}
+
+				const searchInput = req.body as CreateSavedSearchInput;
+				console.log(
+					`[HTTP API] POST /api/saved-searches - Creating saved search: ${searchInput.name} by user: ${user.username}`,
+				);
+
+				if (!searchInput.name || searchInput.name.trim().length === 0) {
+					return res.status(400).json({ error: "Saved search name is required" });
+				}
+
+				if (!searchInput.query) {
+					return res.status(400).json({ error: "Search query is required" });
+				}
+
+				const savedSearch = await pm.createSavedSearch(searchInput, user.id);
+				res.status(201).json({ savedSearch });
+			} catch (error) {
+				next(error);
+			}
+		},
+	);
+
+	// PUT /api/saved-searches/:id - Update saved search
+	app.put(
+		"/api/saved-searches/:id",
+		authenticateToken,
+		requirePermission("tasks", "read"),
+		async (req: AuthenticatedRequest, res, next) => {
+			try {
+				const user = req.user;
+				if (!user) {
+					return res.status(401).json({ error: "Authentication required" });
+				}
+
+				const { id } = req.params;
+				if (!id) {
+					return res.status(400).json({ error: "Saved search ID is required" });
+				}
+
+				const updateInput = req.body as UpdateSavedSearchInput;
+				console.log(
+					`[HTTP API] PUT /api/saved-searches/${id} - Updating saved search by user: ${user.username}`,
+				);
+
+				const updatedSearch = await pm.updateSavedSearch({ id, ...updateInput }, user.id);
+				res.json({ savedSearch: updatedSearch });
+			} catch (error) {
+				next(error);
+			}
+		},
+	);
+
+	// DELETE /api/saved-searches/:id - Delete saved search
+	app.delete(
+		"/api/saved-searches/:id",
+		authenticateToken,
+		requirePermission("tasks", "read"),
+		async (req: AuthenticatedRequest, res, next) => {
+			try {
+				const user = req.user;
+				if (!user) {
+					return res.status(401).json({ error: "Authentication required" });
+				}
+
+				const { id } = req.params;
+				if (!id) {
+					return res.status(400).json({ error: "Saved search ID is required" });
+				}
+
+				console.log(
+					`[HTTP API] DELETE /api/saved-searches/${id} - Deleting saved search by user: ${user.username}`,
+				);
+
+				await pm.deleteSavedSearch(id, user.id);
+				res.json({
+					success: true,
+					message: "Saved search deleted successfully",
+				});
+			} catch (error) {
+				next(error);
+			}
+		},
+	);
+
 	// Scheduling endpoints
 	const taskRepository = new InMemoryTaskRepository();
 	app.use("/api/schedule", createSchedulingRoutes(taskRepository));
@@ -1679,10 +1841,17 @@ export async function startHttpApi(
 			console.log("[HTTP API]   DELETE /api/tasks/:id - Delete task");
 			console.log("[HTTP API]   GET    /api/tasks/status/:status - Get tasks by status");
 			console.log("[HTTP API]   GET    /api/tasks/priority/:priority - Get tasks by priority");
+			console.log("[HTTP API]   POST   /api/search/advanced - Advanced task search with filtering");
+			console.log("[HTTP API]   GET    /api/search/suggestions - Get search suggestions");
+			console.log("[HTTP API]   GET    /api/saved-searches - Get saved searches");
+			console.log("[HTTP API]   POST   /api/saved-searches - Create saved search");
+			console.log("[HTTP API]   GET    /api/saved-searches/:id - Get specific saved search");
+			console.log("[HTTP API]   PUT    /api/saved-searches/:id - Update saved search");
+			console.log("[HTTP API]   DELETE /api/saved-searches/:id - Delete saved search");
 			console.log("[HTTP API]   GET    /api/health - Health check");
 			console.log("[HTTP API]   GET    /api/stats - Task statistics");
 			console.log("[HTTP API]   GET    /api/analytics - Advanced analytics");
-			console.log("[HTTP API]   tRPC   /trpc (http & ws) - tasks, queue, taskUpdates subscription");
+			console.log("[HTTP API]   tRPC   /trpc (http & ws) - tasks, queue, advancedSearch, savedSearches, taskUpdates subscription");
 			resolve(server);
 		});
 

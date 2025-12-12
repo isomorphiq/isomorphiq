@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Task } from "../../../../src/types.ts";
 import { LegendBand } from "../../components/Band.tsx";
-import { MobileTaskList } from "../../components/MobileTaskCard.tsx";
 import { SearchAndFilter } from "../../components/SearchAndFilter.tsx";
 import { SectionCard } from "../../components/SectionCard.tsx";
 import { TaskList } from "../../components/TaskCard.tsx";
@@ -111,65 +110,6 @@ export function TaskSection({
         </div>
     );
 
-    if (isMobile) {
-        return (
-            <section>
-                <div
-                    style={{
-                        background: "#0b1220",
-                        borderRadius: "12px",
-                        border: "1px solid #1f2937",
-                        padding: "16px",
-                        boxShadow: "0 10px 20px rgba(0,0,0,0.25)",
-                    }}
-                >
-                    <section
-                        style={{
-                            marginBottom: "16px",
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "12px",
-                        }}
-                    >
-                        <div style={{ flex: 1 }}>
-                            <SearchAndFilter />
-                        </div>
-                        {isAuthenticated && (
-                            <button
-                                type="button"
-                                onClick={onToggleCreate}
-                                style={{
-                                    padding: "12px 16px",
-                                    borderRadius: "8px",
-                                    border: "none",
-                                    background: "#3b82f6",
-                                    color: "white",
-                                    fontSize: "14px",
-                                    fontWeight: "600",
-                                    cursor: "pointer",
-                                    width: "100%",
-                                    justifyContent: "center",
-                                }}
-                            >
-                                {showCreateForm ? "Cancel" : "+ Create Task"}
-                            </button>
-                        )}
-                    </section>
-                    <LegendBand />
-                    {renderPagination()}
-                    <MobileTaskList
-                        tasks={visibleTasks}
-                        empty="No tasks match your filters."
-                        onStatusChange={onStatusChange}
-                        onPriorityChange={onPriorityChange}
-                        onDelete={onDelete}
-                    />
-                    {renderPagination()}
-                </div>
-            </section>
-        );
-    }
-
     return (
         <section>
             <SectionCard
@@ -181,10 +121,12 @@ export function TaskSection({
                         marginBottom: "16px",
                         display: "flex",
                         justifyContent: "space-between",
-                        alignItems: "center",
+                        alignItems: isMobile ? "stretch" : "center",
+                        gap: "12px",
+                        flexWrap: "wrap",
                     }}
                 >
-                    <div style={{ flex: 1 }}>
+                    <div style={{ flex: "1 1 260px" }}>
                         <SearchAndFilter />
                     </div>
                     {isAuthenticated && (
@@ -192,15 +134,16 @@ export function TaskSection({
                             type="button"
                             onClick={onToggleCreate}
                             style={{
-                                padding: "10px 20px",
+                                padding: isMobile ? "12px" : "10px 20px",
                                 borderRadius: "8px",
                                 border: "none",
                                 background: "#3b82f6",
                                 color: "white",
                                 fontSize: "14px",
-                                fontWeight: "500",
+                                fontWeight: "600",
                                 cursor: "pointer",
-                                marginLeft: "16px",
+                                minWidth: isMobile ? "100%" : "140px",
+                                alignSelf: isMobile ? "stretch" : "center",
                             }}
                         >
                             {showCreateForm ? "Cancel" : "+ Create Task"}

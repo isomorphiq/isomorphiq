@@ -254,7 +254,7 @@ export function CreateTaskForm({ onSuccess }: CreateTaskFormProps) {
 				/>
 			</div>
 
-			<div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
+			<div style={{ display: "flex", gap: "12px", justifyContent: "flex-end", flexWrap: "wrap" }}>
 				<button
 					type="button"
 					onClick={onSuccess}
@@ -267,6 +267,7 @@ export function CreateTaskForm({ onSuccess }: CreateTaskFormProps) {
 						color: "#f9fafb",
 						fontSize: "14px",
 						cursor: isSubmitting ? "not-allowed" : "pointer",
+						minWidth: "140px",
 					}}
 				>
 					Cancel
@@ -283,6 +284,7 @@ export function CreateTaskForm({ onSuccess }: CreateTaskFormProps) {
 						fontSize: "14px",
 						fontWeight: "500",
 						cursor: isSubmitting ? "not-allowed" : "pointer",
+						minWidth: "160px",
 					}}
 				>
 					{isSubmitting ? "Creating..." : "Create Task"}

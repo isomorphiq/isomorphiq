@@ -92,9 +92,10 @@ export function TaskCard({
                     alignItems: "center",
                     gap: "10px",
                     marginBottom: "12px",
+                    flexWrap: "wrap",
                 }}
             >
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                     {typeof showIndex === "number" && (
                         <span style={{ color: "#a5b4fc", fontWeight: 600, fontSize: "14px" }}>
                             {showIndex + 1}
@@ -104,7 +105,7 @@ export function TaskCard({
                     <PriorityBadge priority={task.priority} />
                 </div>
 
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                     <span
                         style={{
                             fontSize: "12px",
@@ -269,12 +270,13 @@ export function TaskCard({
             {/* Footer */}
             <div
                 style={{
-                    display: "flex",
-                    justifyContent: "space-between",
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
                     color: "#64748b",
                     fontSize: "11px",
                     borderTop: "1px solid #1f2937",
                     paddingTop: "8px",
+                    gap: "8px",
                 }}
             >
                 <span>Created: {new Date(task.createdAt).toLocaleDateString()}</span>
@@ -302,7 +304,13 @@ export function TaskList({
 }: TaskListProps) {
     if (!tasks.length) return <p style={{ color: "#94a3b8", margin: 0 }}>{empty}</p>;
     return (
-        <div style={{ display: "grid", gap: "12px" }}>
+        <div
+            style={{
+                display: "grid",
+                gap: "12px",
+                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            }}
+        >
             {tasks.map((task) => (
                 <TaskCard
                     key={task.id}
@@ -323,6 +331,7 @@ interface QueueListProps {
     onDelete?: (taskId: string) => void;
     remainingCount?: number;
     onLoadMore?: () => void;
+    stacked?: boolean;
 }
 
 export function QueueList({
@@ -332,18 +341,72 @@ export function QueueList({
     onDelete,
     remainingCount = 0,
     onLoadMore,
+    stacked = false,
 }: QueueListProps) {
     // Render with highest-priority/rightmost; we reverse so natural scroll keeps current at right edge.
     const ordered = [...tasks].reverse();
     const scrollRef = useRef<HTMLDivElement | null>(null);
 
     useLayoutEffect(() => {
-        if (scrollRef.current) {
+        if (!stacked && scrollRef.current) {
             scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
         }
-    }, []);
+    }, [stacked]);
 
     if (!tasks.length) return <p style={{ color: "#94a3b8", margin: 0 }}>Queue is empty.</p>;
+
+    const renderLoadMore = () =>
+        remainingCount > 0 && onLoadMore ? (
+            <div
+                style={{
+                    minWidth: stacked ? "auto" : "300px",
+                    maxWidth: stacked ? "none" : "320px",
+                    flex: stacked ? "1 1 100%" : "0 0 auto",
+                    display: "flex",
+                    alignItems: "stretch",
+                    marginTop: "4px",
+                }}
+            >
+                <button
+                    type="button"
+                    onClick={onLoadMore}
+                    style={{
+                        width: "100%",
+                        padding: stacked ? "12px" : "16px",
+                        borderRadius: "10px",
+                        border: "1px dashed #374151",
+                        background: "#0b1220",
+                        color: "#e5e7eb",
+                        fontSize: "14px",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        textAlign: "center",
+                        boxShadow: "0 10px 20px rgba(0,0,0,0.25)",
+                    }}
+                >
+                    Load more ({remainingCount} remaining)
+                </button>
+            </div>
+        ) : null;
+
+    if (stacked) {
+        return (
+            <div style={{ display: "grid", gap: "12px" }}>
+                {ordered.map((task, idx) => (
+                    <TaskCard
+                        key={task.id}
+                        task={task}
+                        highlight={idx === ordered.length - 1}
+                        showIndex={ordered.length - 1 - idx}
+                        onStatusChange={onStatusChange}
+                        onPriorityChange={onPriorityChange}
+                        onDelete={onDelete}
+                    />
+                ))}
+                {renderLoadMore()}
+            </div>
+        );
+    }
 
     return (
         <div
@@ -365,37 +428,7 @@ export function QueueList({
                     justifyContent: "flex-start",
                 }}
             >
-                {remainingCount > 0 && onLoadMore && (
-                    <div
-                        style={{
-                            minWidth: "300px",
-                            maxWidth: "320px",
-                            flex: "0 0 auto",
-                            display: "flex",
-                            alignItems: "stretch",
-                        }}
-                    >
-                        <button
-                            type="button"
-                            onClick={onLoadMore}
-                            style={{
-                                width: "100%",
-                                padding: "16px",
-                                borderRadius: "10px",
-                                border: "1px dashed #374151",
-                                background: "#0b1220",
-                                color: "#e5e7eb",
-                                fontSize: "14px",
-                                fontWeight: 600,
-                                cursor: "pointer",
-                                textAlign: "center",
-                                boxShadow: "0 10px 20px rgba(0,0,0,0.25)",
-                            }}
-                        >
-                            Load more ({remainingCount} remaining)
-                        </button>
-                    </div>
-                )}
+                {renderLoadMore()}
                 {/* render so the rightmost item is the highest priority (original first) */}
                 {ordered.map((task, idx) => (
                     <div

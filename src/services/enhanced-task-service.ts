@@ -301,7 +301,7 @@ export class EnhancedTaskService {
 
 		const oldPriority = currentResult.data.priority;
 
-		const updateResult = await this.updateTask(taskId, { id: taskId, priority }, updatedBy);
+		const updateResult = await this.updateTask(taskId, { ...currentResult.data, id: taskId, priority }, updatedBy);
 		if (!updateResult.success) {
 			return updateResult;
 		}

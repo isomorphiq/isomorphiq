@@ -16,14 +16,17 @@ export function SectionCard({
 				border: "1px solid #1f2937",
 				borderRadius: "12px",
 				padding: "16px",
+				boxShadow: "0 10px 24px rgba(0,0,0,0.2)",
 			}}
 		>
 			<div
 				style={{
 					display: "flex",
 					justifyContent: "space-between",
-					alignItems: "center",
+					alignItems: "flex-start",
 					marginBottom: "12px",
+					flexWrap: "wrap",
+					gap: "8px",
 				}}
 			>
 				<h2 style={{ margin: 0, fontSize: "18px" }}>{title}</h2>
