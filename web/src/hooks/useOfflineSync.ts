@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+const LOG_PREFIX = "[offlineSync]";
+
+const logDebug = (...args: unknown[]) => console.debug(LOG_PREFIX, ...args);
+const logError = (...args: unknown[]) => console.error(LOG_PREFIX, ...args);
+
+let storageReadyGlobal = false;
+let storageInitPromise: Promise<boolean> | null = null;
 
 export interface OfflineTask {
 	id: string;
@@ -43,7 +51,6 @@ class OfflineStorage {
 			request.onupgradeneeded = (event) => {
 				const db = (event.target as IDBOpenDBRequest).result;
 
-				// Tasks store
 				if (!db.objectStoreNames.contains("tasks")) {
 					const taskStore = db.createObjectStore("tasks", { keyPath: "id" });
 					taskStore.createIndex("status", "status", { unique: false });
@@ -51,7 +58,6 @@ class OfflineStorage {
 					taskStore.createIndex("createdAt", "createdAt", { unique: false });
 				}
 
-				// Sync queue store
 				if (!db.objectStoreNames.contains("syncQueue")) {
 					const queueStore = db.createObjectStore("syncQueue", { keyPath: "id" });
 					queueStore.createIndex("timestamp", "timestamp", { unique: false });
@@ -73,14 +79,23 @@ class OfflineStorage {
 			return this.db;
 		} catch (error) {
 			this.initPromise = null;
-			console.error("OfflineStorage: failed to open IndexedDB", error);
+			logError("failed to open IndexedDB", error);
 			return null;
 		}
 	}
 
 	async init(): Promise<boolean> {
-		const db = await this.ensureDb();
-		return Boolean(db);
+		if (this.db) return true;
+		if (this.initPromise) {
+			await this.initPromise;
+			return Boolean(this.db);
+		}
+		logDebug("init start");
+		this.initPromise = this.ensureDb();
+		const db = await this.initPromise;
+		const ready = Boolean(db);
+		logDebug("init completed", { ready });
+		return ready;
 	}
 
 	async saveTask(task: OfflineTask): Promise<void> {
@@ -206,15 +221,23 @@ export const offlineStorage = new OfflineStorage();
 export function useOfflineSync() {
 	const [isOnline, setIsOnline] = useState(navigator.onLine);
 	const [syncInProgress, setSyncInProgress] = useState(false);
+	const syncInProgressRef = useRef(false);
 	const [storageReady, setStorageReady] = useState(false);
 	const [lastSyncTime, setLastSyncTime] = useState<string | null>(
 		localStorage.getItem("lastSyncTime"),
 	);
 	const canUseIndexedDB = typeof window !== "undefined" && "indexedDB" in window;
+	const initializedRef = useRef(false);
 
 	useEffect(() => {
-		const handleOnline = () => setIsOnline(true);
-		const handleOffline = () => setIsOnline(false);
+		const handleOnline = () => {
+			logDebug("navigator online event");
+			setIsOnline(true);
+		};
+		const handleOffline = () => {
+			logDebug("navigator offline event");
+			setIsOnline(false);
+		};
 
 		window.addEventListener("online", handleOnline);
 		window.addEventListener("offline", handleOffline);
@@ -225,23 +248,50 @@ export function useOfflineSync() {
 		};
 	}, []);
 
-	// Ensure the offline database is opened once on mount
+	const ensureStorageReady = useCallback(async (): Promise<boolean> => {
+		if (!canUseIndexedDB) return false;
+		if (initializedRef.current && storageReady) return true;
+		if (storageReadyGlobal) {
+			initializedRef.current = true;
+			setStorageReady(true);
+			return true;
+		}
+		if (!storageInitPromise) {
+			storageInitPromise = offlineStorage.init().then((ready) => {
+				storageReadyGlobal = ready;
+				if (!ready) {
+					storageInitPromise = null;
+				}
+				return ready;
+			});
+		}
+		const ready = await storageInitPromise;
+		if (ready) {
+			initializedRef.current = true;
+			setStorageReady(true);
+		}
+		return ready;
+	}, [canUseIndexedDB, storageReady]);
+
 	useEffect(() => {
-		if (!canUseIndexedDB) return;
+		if (!canUseIndexedDB) {
+			logDebug("IndexedDB unavailable; offline mode disabled");
+			return;
+		}
 		let cancelled = false;
-		offlineStorage
-			.init()
+		ensureStorageReady()
 			.then((ready) => {
-				if (!cancelled) setStorageReady(ready);
+				if (cancelled) return;
+				setStorageReady(ready);
 			})
 			.catch((error) => {
-				console.error("Failed to initialize offline storage:", error);
+				logError("failed to initialize offline storage", error);
 				if (!cancelled) setStorageReady(false);
 			});
 		return () => {
 			cancelled = true;
 		};
-	}, [canUseIndexedDB]);
+	}, [canUseIndexedDB, ensureStorageReady]);
 
 	const processSyncItem = useCallback(async (item: OfflineQueueItem): Promise<void> => {
 		const authToken = localStorage.getItem("authToken");
@@ -251,6 +301,8 @@ export function useOfflineSync() {
 			"Content-Type": "application/json",
 			Authorization: `Bearer ${authToken}`,
 		};
+
+		logDebug("processing sync item", { id: item.id, type: item.type, taskId: item.taskId });
 
 		switch (item.type) {
 			case "create":
@@ -282,20 +334,33 @@ export function useOfflineSync() {
 	}, []);
 
 	const syncOfflineChanges = useCallback(async (): Promise<void> => {
-		if (!isOnline || !canUseIndexedDB || !storageReady) return;
+		if (!isOnline || !canUseIndexedDB || !storageReady) {
+			logDebug("skip sync", { isOnline, canUseIndexedDB, storageReady });
+			return;
+		}
+		if (syncInProgressRef.current) {
+			logDebug("skip sync; already in progress");
+			return;
+		}
 
+		syncInProgressRef.current = true;
 		setSyncInProgress(true);
 		try {
-			await offlineStorage.init();
+			const ready = await ensureStorageReady();
+			if (!ready) {
+				logDebug("sync aborted; storage not ready");
+				return;
+			}
 			const queue = await offlineStorage.getSyncQueue();
+			logDebug("sync start", { queueSize: queue.length });
 
 			for (const item of queue) {
 				try {
 					await processSyncItem(item);
 					await offlineStorage.removeFromSyncQueue(item.id);
+					logDebug("synced item", { id: item.id, type: item.type });
 				} catch (_error) {
-					console.error("Failed to sync item:", item, _error);
-					// Update retry count
+					logError("failed to sync item; will retry", { item, error: _error });
 					const updatedItem = { ...item, retryCount: (item.retryCount || 0) + 1 };
 					await offlineStorage.addToSyncQueue(updatedItem);
 					await offlineStorage.removeFromSyncQueue(item.id);
@@ -305,16 +370,20 @@ export function useOfflineSync() {
 			const now = new Date().toISOString();
 			setLastSyncTime(now);
 			localStorage.setItem("lastSyncTime", now);
+			logDebug("sync complete", { lastSyncTime: now });
 		} finally {
+			syncInProgressRef.current = false;
 			setSyncInProgress(false);
 		}
-	}, [isOnline, canUseIndexedDB, storageReady, processSyncItem]);
+	}, [ensureStorageReady, isOnline, canUseIndexedDB, storageReady, processSyncItem]);
 
 	useEffect(() => {
-		if (isOnline && !syncInProgress) {
-			syncOfflineChanges();
-		}
-	}, [isOnline, syncInProgress, syncOfflineChanges]);
+		if (!isOnline) return;
+		// Run immediately once coming online, then poll on interval
+		void syncOfflineChanges();
+		const interval = window.setInterval(syncOfflineChanges, 5000);
+		return () => window.clearInterval(interval);
+	}, [isOnline, syncOfflineChanges]);
 
 	const createOfflineTask = async (
 		taskData: Omit<OfflineTask, "id" | "createdAt" | "updatedAt">,
@@ -322,7 +391,8 @@ export function useOfflineSync() {
 		if (!canUseIndexedDB) {
 			throw new Error("Offline storage is unavailable in this environment");
 		}
-		await offlineStorage.init();
+		const ready = await ensureStorageReady();
+		if (!ready) throw new Error("Offline storage failed to initialize");
 
 		const now = new Date().toISOString();
 		const task: OfflineTask = {
@@ -334,6 +404,7 @@ export function useOfflineSync() {
 		};
 
 		await offlineStorage.saveTask(task);
+		logDebug("created offline task", { id: task.id, isOnline });
 
 		if (isOnline) {
 			try {
@@ -347,7 +418,9 @@ export function useOfflineSync() {
 				await processSyncItem(syncItem);
 				task.isOffline = false;
 				await offlineStorage.saveTask(task);
+				logDebug("immediate sync of offline task succeeded", { id: task.id });
 			} catch (_error) {
+				logError("immediate sync of offline task failed; queued", { id: task.id, error: _error });
 				await offlineStorage.addToSyncQueue({
 					id: `create-${task.id}-${now}`,
 					type: "create",
@@ -364,6 +437,7 @@ export function useOfflineSync() {
 				data: task,
 				timestamp: now,
 			});
+			logDebug("queued offline task for later sync", { id: task.id });
 		}
 
 		return task;
@@ -376,7 +450,8 @@ export function useOfflineSync() {
 		if (!canUseIndexedDB) {
 			throw new Error("Offline storage is unavailable in this environment");
 		}
-		await offlineStorage.init();
+		const ready = await ensureStorageReady();
+		if (!ready) throw new Error("Offline storage failed to initialize");
 
 		const existingTask = await offlineStorage.getTask(taskId);
 		if (!existingTask) throw new Error("Task not found");
@@ -388,6 +463,7 @@ export function useOfflineSync() {
 		};
 
 		await offlineStorage.saveTask(updatedTask);
+		logDebug("updated offline task", { taskId, isOnline, isOffline: existingTask.isOffline });
 
 		if (isOnline && !existingTask.isOffline) {
 			try {
@@ -399,7 +475,9 @@ export function useOfflineSync() {
 					timestamp: updatedTask.updatedAt,
 				};
 				await processSyncItem(syncItem);
+				logDebug("immediate sync of update succeeded", { taskId });
 			} catch (_error) {
+				logError("immediate sync of update failed; queued", { taskId, error: _error });
 				await offlineStorage.addToSyncQueue({
 					id: `update-${taskId}-${updatedTask.updatedAt}`,
 					type: "update",
@@ -416,6 +494,7 @@ export function useOfflineSync() {
 				data: updates,
 				timestamp: updatedTask.updatedAt,
 			});
+			logDebug("queued update for later sync", { taskId });
 		}
 	};
 
@@ -423,9 +502,11 @@ export function useOfflineSync() {
 		if (!canUseIndexedDB) {
 			throw new Error("Offline storage is unavailable in this environment");
 		}
-		await offlineStorage.init();
+		const ready = await ensureStorageReady();
+		if (!ready) throw new Error("Offline storage failed to initialize");
 
 		await offlineStorage.deleteTask(taskId);
+		logDebug("deleted offline task locally", { taskId, isOnline });
 
 		const deleteTimestamp = new Date().toISOString();
 		if (isOnline) {
@@ -438,7 +519,9 @@ export function useOfflineSync() {
 					timestamp: deleteTimestamp,
 				};
 				await processSyncItem(syncItem);
+				logDebug("immediate delete sync succeeded", { taskId });
 			} catch (_error) {
+				logError("immediate delete sync failed; queued", { taskId, error: _error });
 				await offlineStorage.addToSyncQueue({
 					id: `delete-${taskId}-${deleteTimestamp}`,
 					type: "delete",
@@ -455,8 +538,25 @@ export function useOfflineSync() {
 				data: {},
 				timestamp: deleteTimestamp,
 			});
+			logDebug("queued delete for later sync", { taskId });
 		}
 	};
+
+	const getOfflineTasks = useCallback(async () => {
+		if (!canUseIndexedDB) return [];
+		const ready = await ensureStorageReady();
+		if (!ready) return [];
+		return offlineStorage.getTasks();
+	}, [canUseIndexedDB, ensureStorageReady]);
+
+	const getSyncQueueSize = useCallback(async () => {
+		if (!canUseIndexedDB) return 0;
+		const ready = await ensureStorageReady();
+		if (!ready) return 0;
+		const queue = await offlineStorage.getSyncQueue();
+		logDebug("queue size requested", { size: queue.length });
+		return queue.length;
+	}, [canUseIndexedDB, ensureStorageReady]);
 
 	return {
 		isOnline,
@@ -466,12 +566,7 @@ export function useOfflineSync() {
 		createOfflineTask,
 		updateOfflineTask,
 		deleteOfflineTask,
-		getOfflineTasks: () => (canUseIndexedDB ? offlineStorage.getTasks() : Promise.resolve([])),
-		getSyncQueueSize: async () => {
-			if (!canUseIndexedDB) return 0;
-			await offlineStorage.init();
-			const queue = await offlineStorage.getSyncQueue();
-			return queue.length;
-		},
+		getOfflineTasks,
+		getSyncQueueSize,
 	};
 }

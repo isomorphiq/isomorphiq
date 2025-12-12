@@ -1,4 +1,5 @@
 import type { Result } from "../core/result.ts";
+import type { Task } from "../types.ts";
 import { ValidationError } from "../core/result.ts";
 import { CalendarIntegration } from "./calendar-adapter.ts";
 import { GitHubIntegration } from "./github-adapter.ts";
@@ -7,6 +8,7 @@ import { LevelDbIntegrationRepository } from "./integration-repository.ts";
 import { SlackIntegration } from "./slack-adapter.ts";
 import type {
 	IntegrationConfig,
+	IntegrationConfigInput,
 	IntegrationHealth,
 	IntegrationStats,
 	IntegrationType,
@@ -20,7 +22,35 @@ export class IntegrationService {
 	private integrationManager: IntegrationManager;
 
 	constructor(db: unknown) {
-		const repository = new LevelDbIntegrationRepository(db);
+		const baseDb = db as {
+			open: () => Promise<void>;
+			put: (key: string, value: unknown) => Promise<void>;
+			get: (key: string) => Promise<unknown>;
+			del: (key: string) => Promise<void>;
+			iterator: (opts?: Record<string, unknown>) => AsyncIterableIterator<[string, unknown]>;
+		};
+
+		// Adapt iterator to expose close() for typing consistency
+		const repository = new LevelDbIntegrationRepository({
+			open: () => baseDb.open(),
+			put: (...args) => baseDb.put(...args),
+			get: (...args) => baseDb.get(...args),
+			del: (...args) => baseDb.del(...args),
+			iterator: (opts?: Record<string, unknown>) => {
+				const it = baseDb.iterator(opts);
+				const closer =
+					typeof (it as unknown as { close?: () => Promise<void> }).close === "function"
+						? (it as unknown as { close: () => Promise<void> }).close
+						: async () => {
+								if (typeof (it as AsyncIterableIterator<[string, unknown]>).return === "function") {
+									await (it as AsyncIterableIterator<[string, unknown]>).return?.();
+								}
+							};
+				return Object.assign(it, {
+					close: closer,
+				}) as AsyncIterableIterator<[string, unknown]> & { close: () => Promise<void> };
+			},
+		});
 		this.integrationManager = new IntegrationManager(repository);
 
 		// Register built-in adapters
@@ -68,12 +98,12 @@ export class IntegrationService {
 	 * Create a new integration
 	 */
 	async createIntegration(
-		config: Omit<IntegrationConfig, "id" | "createdAt" | "updatedAt">,
+		config: IntegrationConfigInput,
 	): Promise<Result<IntegrationConfig>> {
 		// Validate integration configuration
 		const validationResult = this.validateIntegrationConfig(config);
 		if (!validationResult.success) {
-			return validationResult;
+			return { success: false, error: validationResult.error };
 		}
 
 		// Create integration through manager
@@ -185,11 +215,11 @@ export class IntegrationService {
 	 * Get integration statistics
 	 */
 	async getIntegrationStats(): Promise<Result<IntegrationStats>> {
-		try {
-			const allIntegrationsResult = await this.getAllIntegrations();
-			if (!allIntegrationsResult.success) {
-				return allIntegrationsResult as Result<IntegrationStats>;
-			}
+			try {
+				const allIntegrationsResult = await this.getAllIntegrations();
+				if (!allIntegrationsResult.success) {
+					return { success: false, error: allIntegrationsResult.error };
+				}
 
 			const integrations = allIntegrationsResult.data;
 			const stats: IntegrationStats = {
@@ -232,11 +262,11 @@ export class IntegrationService {
 	 * Sync task with all relevant integrations
 	 */
 	async syncTaskWithIntegrations(task: Task): Promise<Result<void>> {
-		try {
-			const allIntegrationsResult = await this.getAllIntegrations();
-			if (!allIntegrationsResult.success) {
-				return allIntegrationsResult as Result<void>;
-			}
+			try {
+				const allIntegrationsResult = await this.getAllIntegrations();
+				if (!allIntegrationsResult.success) {
+					return { success: false, error: allIntegrationsResult.error };
+				}
 
 			const enabledIntegrations = allIntegrationsResult.data.filter(
 				(i) =>

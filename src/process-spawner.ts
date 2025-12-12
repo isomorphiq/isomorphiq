@@ -2,14 +2,20 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import type { ReadableStream, WritableStream } from "node:stream/web";
 
-export interface ProcessResult {
+type DomReadable = globalThis.ReadableStream<Uint8Array>;
+type DomWritable = globalThis.WritableStream<Uint8Array>;
+
+export interface ProcessResult<
+	InputStream extends WritableStream = DomWritable,
+	OutputStream extends ReadableStream = DomReadable,
+> {
 	process: ChildProcessWithoutNullStreams;
-	input: WritableStream;
-	outputStream: ReadableStream;
+	input: InputStream;
+	outputStream: OutputStream;
 }
 
 export const ProcessSpawner = {
-	spawnOpencode(): ProcessResult {
+	spawnOpencode(): ProcessResult<DomWritable, DomReadable> {
 		console.log("[PROCESS] Spawning opencode as ACP server...");
 
 		const opencodeProcess = spawn("opencode", ["acp"], {
@@ -18,8 +24,8 @@ export const ProcessSpawner = {
 			env: { ...process.env },
 		});
 
-		const input = Writable.toWeb(opencodeProcess.stdin);
-		const outputStream = Readable.toWeb(opencodeProcess.stdout);
+		const input = Writable.toWeb(opencodeProcess.stdin) as DomWritable;
+		const outputStream = Readable.toWeb(opencodeProcess.stdout) as DomReadable;
 
 		console.log("[PROCESS] Opencode process spawned successfully");
 
@@ -30,7 +36,9 @@ export const ProcessSpawner = {
 		};
 	},
 
-	cleanupProcess(processResult: ProcessResult): void {
+	cleanupProcess<I extends WritableStream, O extends ReadableStream>(
+		processResult: ProcessResult<I, O>,
+	): void {
 		try {
 			if (processResult.process) {
 				processResult.process.kill("SIGTERM");

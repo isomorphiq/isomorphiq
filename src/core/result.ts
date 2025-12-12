@@ -1,15 +1,16 @@
 /**
  * Result type for handling operations that can fail
  */
-export type Result<T, E = Error> =
-	| {
-			success: true;
-			data: T;
-	  }
-	| {
-			success: false;
-			error: E;
-	  };
+/**
+ * Lightweight Result that matches how the codebase currently handles responses.
+ * Both `data` and `error` are optional so callers that access `result.error`
+ * without narrowing remain type-safe while still carrying the success flag.
+ */
+export type Result<T, E = Error> = {
+	success: boolean;
+	data?: T;
+	error?: E;
+};
 
 /**
  * Helper functions for working with Result types
@@ -33,17 +34,17 @@ export const ResultUtils = {
 	},
 
 	map<T, U>(result: Result<T>, fn: (data: T) => U): Result<U> {
-		if (result.success) {
+		if (result.success && result.data !== undefined) {
 			return ResultUtils.ok(fn(result.data));
 		}
-		return result as Result<U>;
+		return { success: result.success, error: result.error } as Result<U>;
 	},
 
 	flatMap<T, U>(result: Result<T>, fn: (data: T) => Result<U>): Result<U> {
-		if (result.success) {
+		if (result.success && result.data !== undefined) {
 			return fn(result.data);
 		}
-		return result as Result<U>;
+		return { success: result.success, error: result.error } as Result<U>;
 	},
 };
 

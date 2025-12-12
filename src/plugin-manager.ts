@@ -114,6 +114,14 @@ export class PluginManager extends EventEmitter implements IPluginManager {
 		return this.getAllPlugins().filter((plugin) => plugin.state === "active");
 	}
 
+	getPluginConfig(name: string): PluginConfig | undefined {
+		return this.registry.get(name)?.config;
+	}
+
+	getPluginLoader(): FileSystemPluginLoader {
+		return this.loader;
+	}
+
 	async setPluginEnabled(name: string, enabled: boolean): Promise<void> {
 		const entry = this.registry.get(name);
 		if (!entry) {

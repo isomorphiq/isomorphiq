@@ -345,15 +345,15 @@ export class SimpleModularApiServer {
 		return new Promise((resolve, reject) => {
 			const server = this.app.listen(port, () => {
 				console.log(`[HTTP API] Simple modular API server listening on port ${port}`);
-				console.log(`[HTTP API] Available endpoints:`);
-				console.log(`[HTTP API]   GET    /health - Health check`);
-				console.log(`[HTTP API]   POST   /api/auth/login - User login`);
-				console.log(`[HTTP API]   GET    /api/tasks - List tasks`);
-				console.log(`[HTTP API]   POST   /api/tasks - Create task`);
-				console.log(`[HTTP API]   GET    /api/tasks/:id - Get task`);
-				console.log(`[HTTP API]   PUT    /api/tasks/:id/status - Update task status`);
-				console.log(`[HTTP API]   PUT    /api/tasks/:id/priority - Update task priority`);
-				console.log(`[HTTP API]   DELETE /api/tasks/:id - Delete task`);
+				console.log("[HTTP API] Available endpoints:");
+				console.log("[HTTP API]   GET    /health - Health check");
+				console.log("[HTTP API]   POST   /api/auth/login - User login");
+				console.log("[HTTP API]   GET    /api/tasks - List tasks");
+				console.log("[HTTP API]   POST   /api/tasks - Create task");
+				console.log("[HTTP API]   GET    /api/tasks/:id - Get task");
+				console.log("[HTTP API]   PUT    /api/tasks/:id/status - Update task status");
+				console.log("[HTTP API]   PUT    /api/tasks/:id/priority - Update task priority");
+				console.log("[HTTP API]   DELETE /api/tasks/:id - Delete task");
 				resolve();
 			});
 

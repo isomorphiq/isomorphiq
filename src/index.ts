@@ -8,43 +8,18 @@ import {
 	type ProfileMetrics,
 	type ProfileState,
 } from "./acp-profiles.ts";
-import { startAcpSession } from "./acp-session.ts";
+import { startAcpSession, type AcpSession } from "./acp-session.ts";
 import { AutomationRuleEngine } from "./automation-rule-engine.ts";
 import { acpCleanupEffect } from "./effects/acp-cleanup.ts";
 import { acpTurnEffect } from "./effects/acp-turn.ts";
 import { gitCommitIfChanges } from "./git-utils.ts";
 import { runLintAndTests } from "./run-tests.ts";
 import { TemplateManager } from "./template-manager.ts";
-import type {
-	CreateTaskFromTemplateInput,
-	Task,
-	TaskStatus,
-	TaskType,
-	WebSocketEventType,
-} from "./types.ts";
+import type { CreateTaskFromTemplateInput, Task } from "./types.ts";
+import type { TaskStatus, TaskType, WebSocketEventType } from "./types.ts";
 import { buildWorkflowWithEffects } from "./workflow.ts";
 import { advanceToken, createToken } from "./workflow-engine.ts";
-
-interface TaskWebSocketManager {
-	broadcastTaskCreated(task: Task): void;
-	broadcastTaskUpdated(task: Task, updates: Partial<Task>): void;
-	broadcastTaskDeleted(taskId: string): void;
-	broadcastTaskStatusChanged(
-		taskId: string,
-		oldStatus: TaskStatus,
-		newStatus: TaskStatus,
-		task: Task,
-	): void;
-	broadcastTaskPriorityChanged(
-		taskId: string,
-		oldPriority: "low" | "medium" | "high",
-		newPriority: "low" | "medium" | "high",
-		task: Task,
-	): void;
-	broadcastTaskAssigned(task: Task, assignedTo: string, assignedBy: string): void;
-	broadcastTaskCollaboratorsUpdated(task: Task, collaborators: string[], updatedBy: string): void;
-	broadcastTaskWatchersUpdated(task: Task, watchers: string[], updatedBy: string): void;
-}
+import type { WebSocketManager } from "./websocket-server.ts";
 
 // Initialize LevelDB
 const dbPath = path.join(process.cwd(), "db");
@@ -56,7 +31,7 @@ export class ProductManager {
 	private templateManager: TemplateManager;
 	private automationEngine: AutomationRuleEngine;
 	private dbReady = false;
-	private wsManager: TaskWebSocketManager | null = null;
+	private wsManager: WebSocketManager | null = null;
 
 	private async ensureDbOpen(): Promise<void> {
 		if (this.dbReady) return;
@@ -73,7 +48,6 @@ export class ProductManager {
 
 	constructor() {
 		this.profileManager = new ProfileManager();
-		this.profileSequence = this.profileManager.getProfileSequence();
 		this.templateManager = new TemplateManager();
 		this.automationEngine = new AutomationRuleEngine();
 		this.setupAutomationEngine();
@@ -81,11 +55,11 @@ export class ProductManager {
 	}
 
 	// Set WebSocket manager for broadcasting
-	setWebSocketManager(wsManager: TaskWebSocketManager): void {
+	setWebSocketManager(wsManager: WebSocketManager): void {
 		this.wsManager = wsManager;
 	}
 
-	getWebSocketManager(): TaskWebSocketManager | null {
+	getWebSocketManager(): WebSocketManager | null {
 		return this.wsManager;
 	}
 
@@ -275,7 +249,7 @@ export class ProductManager {
 
 			return task;
 		} catch (error) {
-			console.error(`[DB] Failed to create task:`, error);
+			console.error("[DB] Failed to create task:", error);
 			throw error;
 		}
 	}
@@ -286,9 +260,13 @@ export class ProductManager {
 		await this.ensureDbOpen();
 
 		const tasks: Task[] = [];
-		let iterator: AsyncIterableIterator<[string, Task]> | undefined;
+		let iterator:
+			| (AsyncIterableIterator<[string, Task]> & { close: () => Promise<void> })
+			| undefined;
 		try {
-			iterator = db.iterator();
+			iterator = db.iterator() as unknown as AsyncIterableIterator<[string, Task]> & {
+				close: () => Promise<void>;
+			};
 			for await (const [, value] of iterator) {
 				// Normalize missing fields (legacy tasks may lack dependencies)
 				const raw = value as Partial<Task>;
@@ -316,7 +294,7 @@ export class ProductManager {
 	}
 
 	// Update task status
-	async updateTaskStatus(id: string, status: "todo" | "in-progress" | "done"): Promise<Task> {
+	async updateTaskStatus(id: string, status: TaskStatus): Promise<Task> {
 		// Ensure database is open
 		if (!this.dbReady) {
 			await db.open();
@@ -597,7 +575,8 @@ export class ProductManager {
 			};
 		}
 
-		const currentTaskId = context?.task?.id ?? context?.taskId ?? "n/a";
+		const taskContext = context.task as { id?: string } | undefined;
+		const currentTaskId = taskContext?.id ?? (context.taskId as string | undefined) ?? "n/a";
 		const prompt = `${profile.systemPrompt}\n\n${profile.getTaskPrompt(context)}`;
 		console.log(`[ACP] Starting ${profile.role} profile communication (taskId=${currentTaskId})`);
 
@@ -659,7 +638,11 @@ export class ProductManager {
 			// Mark the task client as complete as soon as the prompt returns a stop reason
 			if (promptResult?.stopReason) {
 				console.log(`[ACP] Prompt completed with stop reason: ${promptResult.stopReason}`);
-				connectionResult.taskClient.markTurnComplete(promptResult.stopReason);
+				const stopReason =
+					typeof promptResult.stopReason === "string"
+						? promptResult.stopReason
+						: String(promptResult.stopReason);
+				connectionResult.taskClient.markTurnComplete(stopReason);
 			}
 
 			// Get task client from connection for response checking
@@ -693,7 +676,7 @@ export class ProductManager {
 	// Workflow-driven loop placeholder
 	private async runWorkflowLoop(): Promise<void> {
 		type WorkflowContext = {
-			session?: { profile: string } & Record<string, unknown>;
+			session?: AcpSession;
 			lastTestResult?: unknown;
 		} & Record<string, unknown>;
 
@@ -831,10 +814,16 @@ export class ProductManager {
 						)();
 					}),
 				"tests-failed": (payload) =>
-					acpEffect(
-						"qa-specialist",
-						`Tests failed. Here is the output:\n${payload?.token?.context?.lastTestResult?.output ?? "No output"}\nPropose fixes and plan next steps.`,
-					)(),
+					(() => {
+						const ctxPayload = payload as { token?: typeof token } | undefined;
+						const lastOutput = (
+							ctxPayload?.token?.context?.lastTestResult as { output?: string } | undefined
+						)?.output;
+						return acpEffect(
+							"qa-specialist",
+							`Tests failed. Here is the output:\n${lastOutput ?? "No output"}\nPropose fixes and plan next steps.`,
+						)();
+					})(),
 			},
 			"task-completed": {
 				"pick-up-next-task": acpEffect(

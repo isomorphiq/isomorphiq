@@ -360,9 +360,14 @@ export abstract class BaseIntegrationAdapter implements IntegrationAdapter {
 		// In a real implementation, this would verify webhook signatures
 	}
 
-	protected async getMetrics(): Promise<Record<string, unknown>> {
+	protected async getMetrics(): Promise<IntegrationHealth["metrics"]> {
 		// Default implementation - can be overridden by subclasses
-		return {};
+		return {
+			syncsCompleted: 0,
+			syncsFailed: 0,
+			averageSyncTime: 0,
+			lastSyncDuration: 0,
+		};
 	}
 
 	// Helper methods

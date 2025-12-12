@@ -38,7 +38,7 @@ function _assertThrows(fn: () => Promise<unknown> | unknown, expectedMessage?: s
 		if (result instanceof Promise) {
 			result
 				.then(() => {
-					throw new Error(`Expected function to throw, but it resolved successfully`);
+					throw new Error("Expected function to throw, but it resolved successfully");
 				})
 				.catch((error) => {
 					if (expectedMessage && !error.message.includes(expectedMessage)) {
@@ -48,7 +48,7 @@ function _assertThrows(fn: () => Promise<unknown> | unknown, expectedMessage?: s
 					}
 				});
 		} else {
-			throw new Error(`Expected function to throw, but it returned successfully`);
+			throw new Error("Expected function to throw, but it returned successfully");
 		}
 	} catch (error) {
 		if (expectedMessage && !(error as Error).message.includes(expectedMessage)) {
@@ -65,7 +65,7 @@ async function assertThrowsAsync(
 ): Promise<void> {
 	try {
 		await fn();
-		throw new Error(`Expected function to throw, but it resolved successfully`);
+		throw new Error("Expected function to throw, but it resolved successfully");
 	} catch (error) {
 		if (expectedMessage && !(error as Error).message.includes(expectedMessage)) {
 			throw new Error(
@@ -78,7 +78,7 @@ async function assertThrowsAsync(
 // Test suite
 class TestSuite {
 	private pm: ProductManager;
-	private testResults: { name: string; passed: boolean; error?: string; duration: number }[] = [];
+	testResults: { name: string; passed: boolean; error?: string; duration: number }[] = [];
 
 	constructor() {
 		this.pm = new ProductManager();
@@ -685,7 +685,7 @@ async function main(): Promise<void> {
 			console.log(`\n[TEST] 💥 ${failed} tests failed!`);
 			process.exit(1);
 		} else {
-			console.log(`\n[TEST] 🎉 All tests passed!`);
+			console.log("\n[TEST] 🎉 All tests passed!");
 			process.exit(0);
 		}
 	} catch (error) {

@@ -5,3 +5,6 @@ certs/
 .npm-cache/
 test-db-comprehensive/
 test-db/
+.npm-cache/
+.npm-cache-local/
+.playwright-browsers/

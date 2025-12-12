@@ -94,20 +94,19 @@ export class PluginSandbox extends EventEmitter {
 	 */
 	validateConfig(config: Record<string, unknown>): SecurityValidationResult {
 		const violations: SecurityViolation[] = [];
+		const settings = (config as { settings?: SandboxConfig }).settings || {};
 
 		// Check for dangerous settings
-		if (config.settings) {
-			this.checkDangerousSettings(config.settings, violations);
-		}
+		this.checkDangerousSettings(settings, violations);
 
 		// Check file access patterns
-		if (config.settings?.allowedPaths) {
-			this.checkPathSecurity(config.settings.allowedPaths, violations);
+		if (settings.allowedPaths) {
+			this.checkPathSecurity(settings.allowedPaths, violations);
 		}
 
 		// Check network permissions
-		if (config.settings?.networkAccess) {
-			this.checkNetworkSecurity(config.settings.networkAccess, violations);
+		if (settings.networkAccess) {
+			this.checkNetworkSecurity(settings.networkAccess, violations);
 		}
 
 		return {
@@ -177,18 +176,23 @@ export class PluginSandbox extends EventEmitter {
 		// For now, we'll just track time and memory
 
 		return {
-			stop: () => ({
-				duration: Date.now() - startTime,
-				memoryUsed: process.memoryUsage().heapUsed - startMemory.heapUsed,
-				fileOperations: fileOps,
-				networkRequests: networkReqs,
-			}),
+			stop: () => {
+				const duration = Date.now() - startTime;
+				return {
+					duration,
+					cpuTime: duration,
+					memoryUsed: process.memoryUsage().heapUsed - startMemory.heapUsed,
+					fileOperations: fileOps,
+					networkRequests: networkReqs,
+				};
+			},
 		};
 	}
 
 	private validateResourceUsage(usage: {
 		memoryUsed: number;
 		cpuTime: number;
+		duration: number;
 		fileOperations: number;
 		networkRequests: number;
 	}): void {
@@ -198,9 +202,9 @@ export class PluginSandbox extends EventEmitter {
 			);
 		}
 
-		if (usage.duration > this.resourceLimits.maxCpuTime) {
+		if (usage.cpuTime > this.resourceLimits.maxCpuTime) {
 			throw new Error(
-				`CPU time limit exceeded: ${usage.duration} > ${this.resourceLimits.maxCpuTime}`,
+				`CPU time limit exceeded: ${usage.cpuTime} > ${this.resourceLimits.maxCpuTime}`,
 			);
 		}
 
@@ -272,7 +276,7 @@ export class PluginSandbox extends EventEmitter {
 	}
 
 	private checkNetworkSecurity(
-		networkAccess: { allowInternal?: boolean; allowExternal?: boolean },
+		networkAccess: { allowInternal?: boolean; allowExternal?: boolean; allowedHosts?: string[] },
 		violations: SecurityViolation[],
 	): void {
 		if (networkAccess.allowInternal !== false) {
@@ -317,7 +321,21 @@ export interface SandboxOptions {
 	maxFileOperations?: number;
 	maxNetworkRequests?: number;
 	resourceLimits?: Partial<ResourceLimits>;
+	networkAccess?: {
+		allowInternal?: boolean;
+		allowExternal?: boolean;
+		allowedHosts?: string[];
+	};
 }
+
+type SandboxConfig = {
+	allowedPaths?: string[];
+	networkAccess?: {
+		allowInternal?: boolean;
+		allowExternal?: boolean;
+		allowedHosts?: string[];
+	};
+};
 
 export interface ResourceLimits {
 	maxMemory: number;
@@ -360,6 +378,7 @@ export interface SecurityViolation {
 interface ResourceMonitor {
 	stop(): {
 		duration: number;
+		cpuTime: number;
 		memoryUsed: number;
 		fileOperations: number;
 		networkRequests: number;
@@ -421,17 +440,18 @@ export class PluginSecurityManager {
 		}
 	}
 
-	validateAllPlugins(plugins: ProfilePlugin[]): Map<string, SecurityValidationResult> {
-		const results = new Map<string, SecurityValidationResult>();
+		validateAllPlugins(plugins: ProfilePlugin[]): Map<string, SecurityValidationResult> {
+			const results = new Map<string, SecurityValidationResult>();
 
-		for (const plugin of plugins) {
-			const sandbox = this.sandboxes.get(plugin.metadata.name);
-			if (sandbox && typeof plugin.getConfig === "function") {
-				const config = plugin.getConfig();
-				const validation = sandbox.validateConfig(config as Record<string, unknown>);
-				results.set(plugin.metadata.name, validation);
+			for (const plugin of plugins) {
+				const sandbox = this.sandboxes.get(plugin.metadata.name);
+				const getConfig = (plugin as { getConfig?: () => unknown }).getConfig;
+				if (sandbox && typeof getConfig === "function") {
+					const config = getConfig();
+					const validation = sandbox.validateConfig(config as Record<string, unknown>);
+					results.set(plugin.metadata.name, validation);
+				}
 			}
-		}
 
 		return results;
 	}

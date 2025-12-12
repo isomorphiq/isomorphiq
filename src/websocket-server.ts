@@ -36,7 +36,6 @@ export class WebSocketManager {
 
 		try {
 			if (server) {
-				this.httpServer = server;
 				// When sharing an HTTP server we optionally attach the upgrade listener ourselves
 				// to avoid clashing with other WebSocket handlers (e.g., tRPC).
 				if (attachUpgradeListener) {

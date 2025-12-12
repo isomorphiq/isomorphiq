@@ -1,4 +1,5 @@
 import type http from "node:http";
+import type { Socket } from "node:net";
 import path from "node:path";
 import { initTRPC } from "@trpc/server";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
@@ -722,7 +723,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 		requirePermission("users", "update"),
 		async (_req, res, next) => {
 			try {
-				console.log(`[HTTP API] POST /api/admin/unlock-all - Unlocking all user accounts`);
+				console.log("[HTTP API] POST /api/admin/unlock-all - Unlocking all user accounts");
 
 				const userManager = getUserManager();
 				const users = await userManager.getAllUsers();
@@ -1300,7 +1301,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 			console.log("[HTTP API] GET /api/tasks/critical-path - Getting critical path analysis");
 
 			const allTasks = await pm.getAllTasks();
-			const { CriticalPathService } = await import("./services/critical-path-service");
+			const { CriticalPathService } = await import("./services/critical-path-service.ts");
 			const criticalPathResult = CriticalPathService.calculateCriticalPath(allTasks);
 
 			res.json(criticalPathResult);
@@ -1315,7 +1316,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 			console.log("[HTTP API] GET /api/tasks/available - Getting available tasks");
 
 			const allTasks = await pm.getAllTasks();
-			const { CriticalPathService } = await import("./services/critical-path-service");
+			const { CriticalPathService } = await import("./services/critical-path-service.ts");
 			const availableTasks = CriticalPathService.getAvailableTasks(allTasks);
 
 			res.json({ tasks: availableTasks, count: availableTasks.length });
@@ -1330,7 +1331,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 			console.log("[HTTP API] GET /api/tasks/blocking - Getting blocking tasks");
 
 			const allTasks = await pm.getAllTasks();
-			const { CriticalPathService } = await import("./services/critical-path-service");
+			const { CriticalPathService } = await import("./services/critical-path-service.ts");
 			const blockingTasks = CriticalPathService.getBlockingTasks(allTasks);
 
 			res.json({ tasks: blockingTasks, count: blockingTasks.length });
@@ -1353,7 +1354,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 			);
 
 			const allTasks = await pm.getAllTasks();
-			const { CriticalPathService } = await import("./services/critical-path-service");
+			const { CriticalPathService } = await import("./services/critical-path-service.ts");
 			const impactAnalysis = CriticalPathService.analyzeDelayImpact(allTasks, taskId, delayDays);
 
 			res.json(impactAnalysis);
@@ -1668,20 +1669,20 @@ export async function startHttpApi(
 	return new Promise((resolve, reject) => {
 		const server = app.listen(port, () => {
 			console.log(`[HTTP API] REST API server listening on port ${port}`);
-			console.log(`[HTTP API] Available endpoints:`);
-			console.log(`[HTTP API]   GET    /api/tasks - List all tasks`);
-			console.log(`[HTTP API]   GET    /api/queue - Prioritized task queue (next up)`);
-			console.log(`[HTTP API]   GET    /api/tasks/:id - Get specific task`);
-			console.log(`[HTTP API]   POST   /api/tasks - Create new task`);
-			console.log(`[HTTP API]   PUT    /api/tasks/:id/status - Update task status`);
-			console.log(`[HTTP API]   PUT    /api/tasks/:id/priority - Update task priority`);
-			console.log(`[HTTP API]   DELETE /api/tasks/:id - Delete task`);
-			console.log(`[HTTP API]   GET    /api/tasks/status/:status - Get tasks by status`);
-			console.log(`[HTTP API]   GET    /api/tasks/priority/:priority - Get tasks by priority`);
-			console.log(`[HTTP API]   GET    /api/health - Health check`);
-			console.log(`[HTTP API]   GET    /api/stats - Task statistics`);
-			console.log(`[HTTP API]   GET    /api/analytics - Advanced analytics`);
-			console.log(`[HTTP API]   tRPC   /trpc (http & ws) - tasks, queue, taskUpdates subscription`);
+			console.log("[HTTP API] Available endpoints:");
+			console.log("[HTTP API]   GET    /api/tasks - List all tasks");
+			console.log("[HTTP API]   GET    /api/queue - Prioritized task queue (next up)");
+			console.log("[HTTP API]   GET    /api/tasks/:id - Get specific task");
+			console.log("[HTTP API]   POST   /api/tasks - Create new task");
+			console.log("[HTTP API]   PUT    /api/tasks/:id/status - Update task status");
+			console.log("[HTTP API]   PUT    /api/tasks/:id/priority - Update task priority");
+			console.log("[HTTP API]   DELETE /api/tasks/:id - Delete task");
+			console.log("[HTTP API]   GET    /api/tasks/status/:status - Get tasks by status");
+			console.log("[HTTP API]   GET    /api/tasks/priority/:priority - Get tasks by priority");
+			console.log("[HTTP API]   GET    /api/health - Health check");
+			console.log("[HTTP API]   GET    /api/stats - Task statistics");
+			console.log("[HTTP API]   GET    /api/analytics - Advanced analytics");
+			console.log("[HTTP API]   tRPC   /trpc (http & ws) - tasks, queue, taskUpdates subscription");
 			resolve(server);
 		});
 
@@ -1696,7 +1697,7 @@ export async function startHttpApi(
 		const trpcWss = new WebSocketServer({ noServer: true });
 		applyWSSHandler({ wss: trpcWss, router: appRouter, createContext });
 
-		server.on("upgrade", (request, socket, head) => {
+		server.on("upgrade", (request: http.IncomingMessage, socket: Socket, head: Buffer) => {
 			const url = new URL(request.url ?? "", `http://${request.headers.host}`);
 			if (url.pathname === "/trpc") {
 				trpcWss.handleUpgrade(request, socket, head, (ws) => {

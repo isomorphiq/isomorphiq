@@ -333,7 +333,7 @@ export const TimeTrackingFactory = {
 	createTimeEntry(input: TimeEntryCreateInput, createdBy: string): Result<TimeEntry> {
 		const validation = TimeTrackingDomainRules.validateTimeEntryCreateInput(input);
 		if (!validation.success) {
-			return validation as Result<TimeEntry>;
+			return { success: false, error: validation.error };
 		}
 
 		const now = new Date();
@@ -361,7 +361,7 @@ export const TimeTrackingFactory = {
 			input.endDate,
 		);
 		if (!validation.success) {
-			return validation as Result<Timesheet>;
+			return { success: false, error: validation.error };
 		}
 
 		const now = new Date();

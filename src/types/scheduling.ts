@@ -1,3 +1,5 @@
+import type { UserRole } from "../types.ts";
+
 export type TaskPriority = "low" | "medium" | "high";
 
 /**

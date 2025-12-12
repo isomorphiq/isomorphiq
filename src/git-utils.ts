@@ -11,7 +11,7 @@ export async function gitCommitIfChanges(message = "chore: tests passing"): Prom
 		}
 
 		await pexec("git add -A");
-		const commit = await pexec(`git commit -m "${message.replace(/"/g, '\\"')}"`);
+		const commit = await pexec(`git commit -m "${message.replace(/"/g, "\\\"")}"`);
 		return commit.stdout || commit.stderr || "Committed";
 	} catch (error: unknown) {
 		const err = error as { stdout?: string; stderr?: string; message?: string };

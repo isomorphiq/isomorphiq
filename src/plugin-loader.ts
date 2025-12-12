@@ -14,7 +14,7 @@ import type {
  * File system based plugin loader
  */
 export class FileSystemPluginLoader implements PluginLoader {
-	private loadedModules = new Map<string, { module: unknown; path: string }>();
+	private loadedModules = new Map<string, { moduleExport: unknown; path: string }>();
 
 	async loadPlugin(filePath: string, config?: PluginConfig): Promise<ProfilePlugin> {
 		try {
@@ -46,14 +46,17 @@ export class FileSystemPluginLoader implements PluginLoader {
 			}
 
 			// Create plugin instance
-			const PluginClass = moduleExport.default || moduleExport;
-			const plugin = new PluginClass();
+			const PluginClass = (moduleExport as { default?: unknown }).default || moduleExport;
+			if (typeof PluginClass !== "function") {
+				throw new Error(`Plugin at ${filePath} does not export a constructable class`);
+			}
+			const plugin = new (PluginClass as new () => ProfilePlugin)();
 
 			// Initialize plugin
 			await plugin.initialize(config);
 
 			// Cache the module for potential unloading
-			this.loadedModules.set(plugin.metadata.name, { module: moduleExport, path: absolutePath });
+			this.loadedModules.set(plugin.metadata.name, { moduleExport, path: absolutePath });
 
 			console.log(
 				`[PLUGIN-LOADER] Loaded plugin: ${plugin.metadata.name} v${plugin.metadata.version}`,
@@ -91,9 +94,8 @@ export class FileSystemPluginLoader implements PluginLoader {
 			throw new Error(`Plugin ${pluginName} not found in loaded modules`);
 		}
 
-		const config = moduleInfo.module.getConfig?.();
 		await this.unloadPlugin(pluginName);
-		return await this.loadPlugin(moduleInfo.path, config);
+		return await this.loadPlugin(moduleInfo.path);
 	}
 
 	async discoverPlugins(directory: string): Promise<string[]> {
@@ -167,7 +169,8 @@ export class FileSystemPluginLoader implements PluginLoader {
 		if (typeof moduleExport === "function") {
 			// Try to create an instance to check if it implements ProfilePlugin
 			try {
-				const instance = new moduleExport();
+				const Ctor = moduleExport as new () => unknown;
+				const instance = new Ctor();
 				return this.isProfilePlugin(instance);
 			} catch {
 				return false;
@@ -177,7 +180,8 @@ export class FileSystemPluginLoader implements PluginLoader {
 		// Check if it's an object with a default export
 		if (typeof (moduleExport as { default?: unknown }).default === "function") {
 			try {
-				const instance = new (moduleExport as { default: new () => unknown }).default();
+				const DefaultCtor = (moduleExport as { default: new () => unknown }).default;
+				const instance = new DefaultCtor();
 				return this.isProfilePlugin(instance);
 			} catch {
 				return false;

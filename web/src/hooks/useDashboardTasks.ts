@@ -5,6 +5,8 @@ import { filteredTasksAtom, lastEventAtom, queueAtom, refreshAtom, tasksAtom } f
 import { authAtom } from "../authAtoms.ts";
 import { type OfflineTask, offlineStorage, useOfflineSync } from "./useOfflineSync.ts";
 
+const LOG_PREFIX = "[dashboardTasks]";
+
 export type AuthState = {
 	user: { id: string; username: string; email: string } | null;
 	token: string | null;
@@ -106,6 +108,7 @@ export function useDashboardTasks() {
 				await updateOfflineTask(taskId, { status: newStatus });
 				const tasks = await getOfflineTasks();
 				setOfflineTasks(tasks);
+				console.debug(LOG_PREFIX, "updated status offline", { taskId, newStatus, isOnline });
 				refresh();
 			} catch (error) {
 				console.error("Failed to update offline task status:", error);
@@ -132,6 +135,7 @@ export function useDashboardTasks() {
 				throw new Error(errorData.error || "Failed to update status");
 			}
 
+			console.debug(LOG_PREFIX, "updated status online", { taskId, newStatus });
 			refresh();
 		} catch (error) {
 			console.error("Failed to update task status:", error);
@@ -155,6 +159,7 @@ export function useDashboardTasks() {
 				await updateOfflineTask(taskId, { priority: newPriority });
 				const tasks = await getOfflineTasks();
 				setOfflineTasks(tasks);
+				console.debug(LOG_PREFIX, "updated priority offline", { taskId, newPriority, isOnline });
 				refresh();
 			} catch (error) {
 				console.error("Failed to update offline task priority:", error);
@@ -181,6 +186,7 @@ export function useDashboardTasks() {
 				throw new Error(errorData.error || "Failed to update priority");
 			}
 
+			console.debug(LOG_PREFIX, "updated priority online", { taskId, newPriority });
 			refresh();
 		} catch (error) {
 			console.error("Failed to update task priority:", error);
@@ -204,6 +210,7 @@ export function useDashboardTasks() {
 				await deleteOfflineTask(taskId);
 				const tasks = await getOfflineTasks();
 				setOfflineTasks(tasks);
+				console.debug(LOG_PREFIX, "deleted offline task", { taskId, isOnline });
 				refresh();
 			} catch (error) {
 				console.error("Failed to delete offline task:", error);
@@ -225,6 +232,7 @@ export function useDashboardTasks() {
 				throw new Error(errorData.error || "Failed to delete task");
 			}
 
+			console.debug(LOG_PREFIX, "deleted task online", { taskId });
 			refresh();
 		} catch (error) {
 			console.error("Failed to delete task:", error);

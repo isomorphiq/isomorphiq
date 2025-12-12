@@ -221,7 +221,10 @@ export class LevelDbTimeTrackingRepository implements ITimeTrackingRepository {
 		try {
 			const allEntriesResult = await this.getAllTimeEntries();
 			if (!allEntriesResult.success) {
-				return allEntriesResult;
+				return {
+					success: false,
+					error: allEntriesResult.error || new Error("Failed to fetch time entries"),
+				};
 			}
 
 			let entries = allEntriesResult.data;

@@ -1,3 +1,4 @@
+import * as acp from "@agentclientprotocol/sdk";
 import type { ClientSideConnection } from "@agentclientprotocol/sdk";
 import { TaskClient } from "./acp-client.ts";
 import { type ProcessResult, ProcessSpawner } from "./process-spawner.ts";
@@ -5,7 +6,7 @@ import { type ProcessResult, ProcessSpawner } from "./process-spawner.ts";
 export interface ACPConnectionResult {
 	connection: ClientSideConnection;
 	sessionId: string;
-	processResult: ProcessResult;
+	processResult: ProcessResult<WritableStream<Uint8Array>, ReadableStream<Uint8Array>>;
 	taskClient: TaskClient;
 }
 
@@ -22,7 +23,6 @@ export async function createConnection(): Promise<ACPConnectionResult> {
 
 		// Set up ACP communication streams
 		console.log("[ACP] 📡 Setting up communication streams...");
-		const acp = await import("@agentclientprotocol/sdk");
 		console.log("[ACP] 📚 ACP SDK loaded");
 		const stream = acp.ndJsonStream(processResult.input, processResult.outputStream);
 		console.log("[ACP] 🌊 NDJSON stream created");
@@ -31,7 +31,10 @@ export async function createConnection(): Promise<ACPConnectionResult> {
 		console.log("[ACP] 👤 Creating task client...");
 		const taskClient = new TaskClient();
 		console.log("[ACP] 🔌 Creating client-side connection...");
-		const connection = new acp.ClientSideConnection(() => taskClient, stream);
+		const connection = new acp.ClientSideConnection(
+			() => taskClient as unknown as acp.Client,
+			stream,
+		);
 		console.log("[ACP] ✅ Client-side connection created");
 
 		// Initialize connection
@@ -129,7 +132,7 @@ export async function sendPrompt(
 	console.log("[ACP] 📊 Prompt result:", JSON.stringify(result, null, 2));
 	// Mark turn complete on the task client if available
 	const client = taskClient as {
-		markTurnComplete?: (reason?: string) => void;
+		markTurnComplete?: (_reason?: string) => void;
 		stopReason?: string;
 	};
 	if (client && typeof client.markTurnComplete === "function") {

@@ -76,7 +76,7 @@ export class ProductManager {
 		this.taskService = new EnhancedTaskService(taskRepository);
 
 		// Initialize supporting services
-		this.templateManager = new TemplateManager();
+		this.templateManager = new TemplateManager(databasePath);
 		this.automationEngine = new AutomationRuleEngine();
 
 		// Setup event handlers
@@ -732,7 +732,7 @@ export class ProductManager {
 	}
 
 	private handleTaskCreated(event: TaskCreatedEvent): void {
-		const data = event.data as { task?: Task };
+		const data = event.data as unknown as { task?: Task };
 		const taskId = data.task?.id ?? "unknown";
 		console.log(`[PRODUCT-MANAGER] Task created event: ${taskId}`);
 
@@ -741,7 +741,7 @@ export class ProductManager {
 	}
 
 	private handleTaskUpdated(event: TaskUpdatedEvent): void {
-		const data = event.data as { task?: Task };
+		const data = event.data as unknown as { task?: Task };
 		const taskId = data.task?.id ?? "unknown";
 		console.log(`[PRODUCT-MANAGER] Task updated event: ${taskId}`);
 
@@ -758,7 +758,7 @@ export class ProductManager {
 	}
 
 	private handleTaskStatusChanged(event: TaskStatusChangedEvent): void {
-		const data = event.data as {
+		const data = event.data as unknown as {
 			taskId?: string;
 			newStatus?: TaskStatus;
 			oldStatus?: TaskStatus;
@@ -774,7 +774,7 @@ export class ProductManager {
 	}
 
 	private handleTaskPriorityChanged(event: TaskPriorityChangedEvent): void {
-		const data = event.data as {
+		const data = event.data as unknown as {
 			taskId?: string;
 			newPriority?: TaskPriority;
 			oldPriority?: TaskPriority;
@@ -790,7 +790,7 @@ export class ProductManager {
 	}
 
 	private handleTaskAssigned(event: TaskAssignedEvent): void {
-		const data = event.data as { task?: Task; assignedTo?: string };
+		const data = event.data as unknown as { task?: Task; assignedTo?: string };
 		const taskId = data.task?.id ?? "unknown";
 		console.log(`[PRODUCT-MANAGER] Task assigned event: ${taskId} -> ${data.assignedTo ?? ""}`);
 
@@ -886,6 +886,7 @@ export class ProductManager {
 			description: task.description,
 			status: task.status,
 			priority: task.priority,
+			type: task.type ?? "task",
 			dependencies: task.dependencies,
 			createdBy: task.createdBy,
 			createdAt: task.createdAt,

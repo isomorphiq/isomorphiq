@@ -12,10 +12,12 @@ export interface Task {
 	watchers?: string[]; // Users who should be notified of changes
 	createdAt: Date;
 	updatedAt: Date;
+	[key: string]: unknown;
 }
 
 export type TaskStatus = "todo" | "in-progress" | "done";
 export type TaskType = "feature" | "story" | "task" | "integration" | "research";
+export type TaskPriority = Task["priority"];
 
 export interface CreateTaskInput {
 	title: string;
@@ -308,7 +310,7 @@ export interface WebSocketMessage {
 
 export interface WebSocketClient {
 	id: string;
-	socket: unknown;
+	socket: WebSocket;
 	lastPing: Date;
 	subscriptions: Set<WebSocketEventType>;
 	userId?: string;
@@ -556,3 +558,4 @@ export interface SearchResult {
 	query: SearchQuery;
 	highlights?: { taskId: string; titleMatches?: number[]; descriptionMatches?: number[] };
 }
+import type { WebSocket } from "ws";

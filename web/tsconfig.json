@@ -12,7 +12,6 @@
         "forceConsistentCasingInFileNames": true,
         "exactOptionalPropertyTypes": false,
         "allowImportingTsExtensions": true,
-        "emitDeclarationOnly": true,
         "allowSyntheticDefaultImports": true
     },
     "include": ["./src/**/*", "./index.html"],

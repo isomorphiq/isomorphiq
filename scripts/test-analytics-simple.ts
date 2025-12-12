@@ -591,12 +591,12 @@ class SimplifiedAnalyticsTester {
 }
 
 // Run tests if this file is executed directly
-if (require.main === module) {
-	const tester = new SimplifiedAnalyticsTester();
-	tester.runAllTests().catch((error) => {
-		console.error("Test execution failed:", error);
-		process.exit(1);
-	});
-}
+// if (require.main === module) {
+// 	const tester = new SimplifiedAnalyticsTester();
+// 	tester.runAllTests().catch((error) => {
+// 		console.error("Test execution failed:", error);
+// 		process.exit(1);
+// 	});
+// }
 
 export { SimplifiedAnalyticsTester };

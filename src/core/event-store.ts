@@ -129,7 +129,7 @@ export class LevelDBEventStore implements EventStore {
 				!key.includes(":type:") &&
 				!key.includes(":timestamp:")
 			) {
-				const event = JSON.parse(value) as DomainEvent;
+				const event = JSON.parse(value as string) as DomainEvent;
 
 				// Filter by aggregate ID if specified
 				if (aggregateId) {
@@ -165,7 +165,7 @@ export class LevelDBEventStore implements EventStore {
 		const typePrefix = `${this.namespace}:type:${eventType}:`;
 		for (const [key, value] of this.db) {
 			if (key.startsWith(typePrefix)) {
-				const event = JSON.parse(value) as DomainEvent;
+				const event = JSON.parse(value as string) as DomainEvent;
 				events.push(event);
 			}
 		}

@@ -242,7 +242,7 @@ const tools: Tool[] = [
 				},
 				titleTemplate: {
 					type: "string",
-					description: 'The title template with variable placeholders (e.g., "Fix: {{bugTitle}}")',
+					description: "The title template with variable placeholders (e.g., \"Fix: {{bugTitle}}\")",
 				},
 				descriptionTemplate: {
 					type: "string",
@@ -293,7 +293,7 @@ const tools: Tool[] = [
 				variables: {
 					type: "object",
 					description:
-						'Object containing variable values (e.g., {"bugTitle": "Login fails", "severity": "high"})',
+						"Object containing variable values (e.g., {\"bugTitle\": \"Login fails\", \"severity\": \"high\"})",
 				},
 				subtasks: {
 					type: "boolean",
@@ -446,11 +446,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 			case "list_tasks": {
 				const tasks = await daemonClient.sendCommand("list_tasks", {});
+				const taskList = Array.isArray(tasks) ? tasks : [];
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Found ${tasks.length} tasks:\n${JSON.stringify(tasks, null, 2)}`,
+							text: `Found ${taskList.length} tasks:\n${JSON.stringify(taskList, null, 2)}`,
 						},
 					],
 				};
@@ -518,7 +519,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 					content: [
 						{
 							type: "text",
-							text: `Daemon restart initiated. It will finish current task and restart gracefully.`,
+							text: "Daemon restart initiated. It will finish current task and restart gracefully.",
 						},
 					],
 				};
@@ -530,7 +531,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 						content: [
 							{
 								type: "text",
-								text: `Daemon is already running.`,
+								text: "Daemon is already running.",
 							},
 						],
 					};
@@ -540,7 +541,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 						content: [
 							{
 								type: "text",
-								text: `Daemon start initiated.`,
+								text: "Daemon start initiated.",
 							},
 						],
 					};
@@ -568,11 +569,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 			case "list_templates": {
 				const templates = await daemonClient.sendCommand("list_templates", {});
+				const templateList = Array.isArray(templates) ? templates : [];
 				return {
 					content: [
 						{
 							type: "text",
-							text: `Found ${templates.length} templates:\n${JSON.stringify(templates, null, 2)}`,
+							text: `Found ${templateList.length} templates:\n${JSON.stringify(templateList, null, 2)}`,
 						},
 					],
 				};
@@ -639,17 +641,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 				};
 			}
 
-			case "list_automation_rules": {
-				const automationRules = await daemonClient.sendCommand("list_automation_rules", {});
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Found ${automationRules.length} automation rules:\n${JSON.stringify(automationRules, null, 2)}`,
-						},
-					],
-				};
-			}
+				case "list_automation_rules": {
+					const automationRules = await daemonClient.sendCommand("list_automation_rules", {});
+					const ruleList = Array.isArray(automationRules) ? automationRules : [];
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Found ${ruleList.length} automation rules:\n${JSON.stringify(ruleList, null, 2)}`,
+							},
+						],
+					};
+				}
 
 			case "update_automation_rule": {
 				const updatedAutomationRule = await daemonClient.sendCommand("update_automation_rule", {

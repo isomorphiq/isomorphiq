@@ -15,15 +15,30 @@ export class TemplateManager {
 	private templateDb!: Level<string, TaskTemplate>;
 	private ruleDb!: Level<string, AutomationRule>;
 	private dbReady = false;
+	private dbPath: string;
+	private initializing = false;
+
+	constructor(dbPath?: string) {
+		this.dbPath = dbPath || path.join(process.cwd(), "db");
+	}
 
 	// Ensure databases are open
 	private async ensureDatabases(): Promise<void> {
-		if (!this.dbReady) {
-			const dbPath = path.join(process.cwd(), "db");
-			this.templateDb = new Level<string, TaskTemplate>(path.join(dbPath, "templates"), {
+		if (this.dbReady) return;
+		if (this.initializing) {
+			// Wait for initialization to complete
+			while (this.initializing) {
+				await new Promise(resolve => setTimeout(resolve, 10));
+			}
+			return;
+		}
+
+		this.initializing = true;
+		try {
+			this.templateDb = new Level<string, TaskTemplate>(path.join(this.dbPath, "templates"), {
 				valueEncoding: "json",
 			});
-			this.ruleDb = new Level<string, AutomationRule>(path.join(dbPath, "automation-rules"), {
+			this.ruleDb = new Level<string, AutomationRule>(path.join(this.dbPath, "automation-rules"), {
 				valueEncoding: "json",
 			});
 
@@ -31,7 +46,11 @@ export class TemplateManager {
 			await this.ruleDb.open();
 			this.dbReady = true;
 			console.log("[TEMPLATE] Template databases opened successfully");
+		} catch (error) {
+			this.initializing = false;
+			throw error;
 		}
+		this.initializing = false;
 	}
 
 	// Create a new template
@@ -68,7 +87,7 @@ export class TemplateManager {
 			console.log(`[TEMPLATE] Created template: ${id}`);
 			return template;
 		} catch (error) {
-			console.error(`[TEMPLATE] Failed to create template:`, error);
+			console.error("[TEMPLATE] Failed to create template:", error);
 			throw error;
 		}
 	}
@@ -78,9 +97,13 @@ export class TemplateManager {
 		await this.ensureDatabases();
 
 		const templates: TaskTemplate[] = [];
-		let iterator: AsyncIterableIterator<[string, TaskTemplate]> | undefined;
+		let iterator:
+			| (AsyncIterableIterator<[string, TaskTemplate]> & { close: () => Promise<void> })
+			| undefined;
 		try {
-			iterator = this.templateDb.iterator();
+			iterator = this.templateDb.iterator() as unknown as AsyncIterableIterator<
+				[string, TaskTemplate]
+			> & { close: () => Promise<void> };
 			for await (const [, value] of iterator) {
 				templates.push(value);
 			}
@@ -439,6 +462,7 @@ export class TemplateManager {
 		await this.createAutomationRule({
 			name: "Auto-assign High Priority Bugs",
 			trigger: {
+				eventType: "task_created",
 				type: "task_created",
 				parameters: {},
 			},
@@ -464,7 +488,7 @@ export class TemplateManager {
 				{
 					type: "send_notification",
 					parameters: {
-						message: 'High priority bug "{{taskTitle}}" has been auto-assigned to senior-developer',
+						message: "High priority bug \"{{taskTitle}}\" has been auto-assigned to senior-developer",
 						recipient: "team-lead",
 					},
 				},
@@ -476,6 +500,7 @@ export class TemplateManager {
 		await this.createAutomationRule({
 			name: "Create Testing Task on Development Complete",
 			trigger: {
+				eventType: "task_status_changed",
 				type: "task_status_changed",
 				parameters: {},
 			},
@@ -509,6 +534,7 @@ export class TemplateManager {
 		await this.createAutomationRule({
 			name: "Escalate Long-running Tasks",
 			trigger: {
+				eventType: "scheduled",
 				type: "scheduled",
 				parameters: { schedule: "daily" },
 			},
@@ -524,7 +550,7 @@ export class TemplateManager {
 					type: "send_notification",
 					parameters: {
 						message:
-							'Task "{{taskTitle}}" has been in progress for more than 3 days and may need attention',
+							"Task \"{{taskTitle}}\" has been in progress for more than 3 days and may need attention",
 						recipient: "project-manager",
 					},
 				},
@@ -536,6 +562,7 @@ export class TemplateManager {
 		await this.createAutomationRule({
 			name: "Set Priority for Feature Tasks",
 			trigger: {
+				eventType: "task_created",
 				type: "task_created",
 				parameters: {},
 			},
@@ -582,9 +609,13 @@ export class TemplateManager {
 		await this.ensureDatabases();
 
 		const rules: AutomationRule[] = [];
-		let iterator: AsyncIterableIterator<[string, AutomationRule]> | undefined;
+		let iterator:
+			| (AsyncIterableIterator<[string, AutomationRule]> & { close: () => Promise<void> })
+			| undefined;
 		try {
-			iterator = this.ruleDb.iterator();
+			iterator = this.ruleDb.iterator() as unknown as AsyncIterableIterator<
+				[string, AutomationRule]
+			> & { close: () => Promise<void> };
 			for await (const [, value] of iterator) {
 				rules.push(value);
 			}

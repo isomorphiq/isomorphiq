@@ -1,6 +1,6 @@
 import type { Task } from "../types.ts";
 import { BaseIntegrationAdapter } from "./base-adapter.ts";
-import type { ExternalTask, IntegrationSettings } from "./types.ts";
+import type { ExternalTask, IntegrationHealth, IntegrationSettings } from "./types.ts";
 
 type GitHubSettings = NonNullable<IntegrationSettings["github"]>;
 
@@ -611,20 +611,13 @@ export class GitHubIntegration extends BaseIntegrationAdapter {
 		// Implementation would depend on the event system integration
 	}
 
-	protected async getMetrics(): Promise<Record<string, unknown>> {
-		try {
-			const response = await this.makeGitHubRequest("GET", "/rate_limit");
-			const rateLimit = await response.json();
-
-			return {
-				rateLimit: {
-					remaining: rateLimit.rate.remaining,
-					limit: rateLimit.rate.limit,
-					resetsAt: new Date(rateLimit.rate.reset * 1000),
-				},
-			};
-		} catch (_error) {
-			return {};
-		}
+	protected async getMetrics(): Promise<IntegrationHealth["metrics"]> {
+		// GitHub adapter currently does not accumulate sync metrics; return zeros.
+		return {
+			syncsCompleted: 0,
+			syncsFailed: 0,
+			averageSyncTime: 0,
+			lastSyncDuration: 0,
+		};
 	}
 }

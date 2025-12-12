@@ -10,13 +10,15 @@ import type {
 	WebSocketEventType,
 } from "./types.ts";
 
+type TaskEventData = Task | Record<string, unknown>;
+
 /**
  * Automation rule engine for processing task events and executing rules
  */
 export class AutomationRuleEngine {
 	private rules: AutomationRule[] = [];
 	private taskEventCallbacks: Array<
-		(eventType: WebSocketEventType, data: Record<string, unknown>) => void
+		(_eventType: WebSocketEventType, _data: TaskEventData) => void
 	> = [];
 
 	constructor() {
@@ -40,9 +42,14 @@ export class AutomationRuleEngine {
 		return [...this.rules];
 	}
 
+	// Replace rules with provided list (used during initialization)
+	loadRules(rules: AutomationRule[]): void {
+		this.rules = [...rules];
+	}
+
 	// Register for task events
 	onTaskEvent(
-		callback: (eventType: WebSocketEventType, data: Record<string, unknown>) => void,
+		callback: (_eventType: WebSocketEventType, _data: Record<string, unknown>) => void,
 	): void {
 		this.taskEventCallbacks.push(callback);
 	}
@@ -50,7 +57,7 @@ export class AutomationRuleEngine {
 	// Process a task event and evaluate rules
 	async processTaskEvent(
 		eventType: WebSocketEventType,
-		data: Record<string, unknown>,
+		data: TaskEventData,
 		allTasks: Task[],
 	): Promise<RuleExecutionResult[]> {
 		console.log(`[AUTOMATION] Processing event: ${eventType}`);
@@ -76,7 +83,7 @@ export class AutomationRuleEngine {
 	private async evaluateRule(
 		rule: AutomationRule,
 		eventType: WebSocketEventType,
-		data: Record<string, unknown>,
+		data: TaskEventData,
 		allTasks: Task[],
 	): Promise<RuleExecutionResult> {
 		console.log(`[AUTOMATION] Evaluating rule: ${rule.name}`);
@@ -123,7 +130,7 @@ export class AutomationRuleEngine {
 	private createExecutionContext(
 		trigger: RuleTrigger,
 		eventType: WebSocketEventType,
-		data: Record<string, unknown>,
+		data: TaskEventData,
 		allTasks: Task[],
 	): RuleExecutionContext {
 		let task: Task;

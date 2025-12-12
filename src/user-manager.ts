@@ -220,11 +220,12 @@ export class UserManager {
 
 			console.log(`[USER-MANAGER] User authenticated: ${user.username}`);
 
-			return {
-				success: true,
-				user: { ...user, passwordHash: "[REDACTED]" },
-				token,
-			};
+				const { passwordHash: _omittedPassword, ...safeUser } = user;
+				return {
+					success: true,
+					user: safeUser,
+					token,
+				};
 		} catch (error) {
 			console.error("[USER-MANAGER] Authentication error:", error);
 			return { success: false, error: "Authentication failed" };
@@ -262,11 +263,15 @@ export class UserManager {
 		await this.ensureDatabasesOpen();
 
 		const users: User[] = [];
-		let iterator: AsyncIterableIterator<{ key: string; value: User }> | null = null;
+		let iterator:
+			| (AsyncIterableIterator<[string, User]> & { close: () => Promise<void> })
+			| null = null;
 
 		try {
-			iterator = this.userDb.iterator();
-			for await (const [_key, value] of iterator) {
+			iterator = this.userDb.iterator() as unknown as AsyncIterableIterator<[string, User]> & {
+				close: () => Promise<void>;
+			};
+			for await (const [, value] of iterator) {
 				users.push(value);
 			}
 		} catch (error) {

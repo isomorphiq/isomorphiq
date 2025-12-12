@@ -7,6 +7,7 @@ import type {
 	IIntegrationManager,
 	IntegrationAdapter,
 	IntegrationConfig,
+	IntegrationConfigInput,
 	IntegrationHealth,
 	IntegrationType,
 	SyncResult,
@@ -28,13 +29,13 @@ export class IntegrationManager implements IIntegrationManager {
 
 	// Integration lifecycle
 	async createIntegration(
-		config: Omit<IntegrationConfig, "id" | "createdAt" | "updatedAt">,
+		config: IntegrationConfigInput,
 	): Promise<Result<IntegrationConfig>> {
 		try {
 			// Validate configuration
 			const validationResult = this.validateIntegrationConfig(config);
 			if (!validationResult.success) {
-				return validationResult;
+				return { success: false, error: validationResult.error };
 			}
 
 			// Create integration
@@ -72,12 +73,12 @@ export class IntegrationManager implements IIntegrationManager {
 		id: string,
 		updates: Partial<IntegrationConfig>,
 	): Promise<Result<IntegrationConfig>> {
-		try {
-			// Get existing integration
-			const existingResult = await this.repository.findById(id);
-			if (!existingResult.success) {
-				return existingResult as Result<IntegrationConfig>;
-			}
+			try {
+				// Get existing integration
+				const existingResult = await this.repository.findById(id);
+				if (!existingResult.success) {
+					return { success: false, error: existingResult.error };
+				}
 
 			const existing = existingResult.data;
 			if (!existing) {
@@ -204,7 +205,7 @@ export class IntegrationManager implements IIntegrationManager {
 		try {
 			const integrationResult = await this.getIntegration(id);
 			if (!integrationResult.success) {
-				return integrationResult as Result<boolean>;
+				return { success: false, error: integrationResult.error };
 			}
 
 			const integration = integrationResult.data;
@@ -247,7 +248,7 @@ export class IntegrationManager implements IIntegrationManager {
 		try {
 			const integrationResult = await this.getIntegration(id);
 			if (!integrationResult.success) {
-				return integrationResult as Result<SyncResult>;
+				return { success: false, error: integrationResult.error };
 			}
 
 			const integration = integrationResult.data;
@@ -338,36 +339,47 @@ export class IntegrationManager implements IIntegrationManager {
 		try {
 			const allIntegrationsResult = await this.getAllIntegrations();
 			if (!allIntegrationsResult.success) {
-				return allIntegrationsResult as Result<SyncResult[]>;
+				return { success: false, error: allIntegrationsResult.error };
 			}
 
 			const enabledIntegrations = allIntegrationsResult.data.filter((i) => i.enabled);
-			const syncPromises = enabledIntegrations.map((integration) =>
-				this.syncIntegration(integration.id).catch((error) => ({
-					success: false,
-					integrationId: integration.id,
-					syncType: "incremental" as const,
-					direction: "bidirectional" as const,
-					processed: 0,
-					created: 0,
-					updated: 0,
-					deleted: 0,
-					errors: [(error as Error).message],
-					duration: 0,
-					syncedAt: new Date(),
-				})),
-			);
+				const syncPromises = enabledIntegrations.map(async (integration) => {
+					try {
+						const res = await this.syncIntegration(integration.id);
+						if (res.success && res.data) {
+							return res.data;
+						}
+						return {
+							success: false,
+							integrationId: integration.id,
+							syncType: "incremental" as const,
+							direction: "bidirectional" as const,
+							processed: 0,
+							created: 0,
+							updated: 0,
+							deleted: 0,
+							errors: [res.error ? String(res.error) : "Unknown sync error"],
+							duration: 0,
+							syncedAt: new Date(),
+						} as SyncResult;
+					} catch (error) {
+						return {
+							success: false,
+							integrationId: integration.id,
+							syncType: "incremental" as const,
+							direction: "bidirectional" as const,
+							processed: 0,
+							created: 0,
+							updated: 0,
+							deleted: 0,
+							errors: [(error as Error).message],
+							duration: 0,
+							syncedAt: new Date(),
+						} as SyncResult;
+					}
+				});
 
-			const results = await Promise.allSettled(syncPromises);
-			const syncResults: SyncResult[] = [];
-
-			for (const result of results) {
-				if (result.status === "fulfilled") {
-					syncResults.push(result.value);
-				} else {
-					console.error("[INTEGRATION-MANAGER] Sync promise rejected:", result.reason);
-				}
-			}
+				const syncResults = await Promise.all(syncPromises);
 
 			return { success: true, data: syncResults };
 		} catch (error) {
@@ -379,13 +391,13 @@ export class IntegrationManager implements IIntegrationManager {
 		}
 	}
 
-	// Health monitoring
-	async checkIntegrationHealth(id: string): Promise<Result<IntegrationHealth>> {
-		try {
-			const integrationResult = await this.getIntegration(id);
-			if (!integrationResult.success) {
-				return integrationResult as Result<IntegrationHealth>;
-			}
+		// Health monitoring
+		async checkIntegrationHealth(id: string): Promise<Result<IntegrationHealth>> {
+			try {
+				const integrationResult = await this.getIntegration(id);
+				if (!integrationResult.success) {
+					return { success: false, error: integrationResult.error };
+				}
 
 			const integration = integrationResult.data;
 			const adapter = this.adapters.get(integration.type);
@@ -408,33 +420,37 @@ export class IntegrationManager implements IIntegrationManager {
 		}
 	}
 
-	async checkAllIntegrationsHealth(): Promise<Result<IntegrationHealth[]>> {
-		try {
-			const allIntegrationsResult = await this.getAllIntegrations();
-			if (!allIntegrationsResult.success) {
-				return allIntegrationsResult as Result<IntegrationHealth[]>;
-			}
+		async checkAllIntegrationsHealth(): Promise<Result<IntegrationHealth[]>> {
+			try {
+				const allIntegrationsResult = await this.getAllIntegrations();
+				if (!allIntegrationsResult.success) {
+					return { success: false, error: allIntegrationsResult.error };
+				}
 
 			const enabledIntegrations = allIntegrationsResult.data.filter((i) => i.enabled);
-			const healthPromises = enabledIntegrations.map((integration) =>
-				this.checkIntegrationHealth(integration.id).catch((error) => ({
-					integrationId: integration.id,
-					status: "error" as const,
-					lastCheck: new Date(),
-					lastError: (error as Error).message,
-				})),
-			);
+				const healthPromises = enabledIntegrations.map(async (integration) => {
+					try {
+						const res = await this.checkIntegrationHealth(integration.id);
+						if (res.success && res.data) {
+							return res.data;
+						}
+						return {
+							integrationId: integration.id,
+							status: "error" as const,
+							lastCheck: new Date(),
+							lastError: res.error ? String(res.error) : "Unknown health error",
+						} as IntegrationHealth;
+					} catch (error) {
+						return {
+							integrationId: integration.id,
+							status: "error" as const,
+							lastCheck: new Date(),
+							lastError: (error as Error).message,
+						} as IntegrationHealth;
+					}
+				});
 
-			const results = await Promise.allSettled(healthPromises);
-			const healthResults: IntegrationHealth[] = [];
-
-			for (const result of results) {
-				if (result.status === "fulfilled") {
-					healthResults.push(result.value);
-				} else {
-					console.error("[INTEGRATION-MANAGER] Health check promise rejected:", result.reason);
-				}
-			}
+				const healthResults = await Promise.all(healthPromises);
 
 			return { success: true, data: healthResults };
 		} catch (error) {
@@ -484,9 +500,7 @@ export class IntegrationManager implements IIntegrationManager {
 	}
 
 	// Private helper methods
-	private validateIntegrationConfig(
-		config: Omit<IntegrationConfig, "id" | "createdAt" | "updatedAt">,
-	): Result<void> {
+	private validateIntegrationConfig(config: IntegrationConfigInput): Result<void> {
 		if (!config.type) {
 			return {
 				success: false,

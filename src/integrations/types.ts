@@ -34,6 +34,9 @@ export interface IntegrationConfig {
 	errorMessage?: string;
 }
 
+export type IntegrationConfigInput = Omit<IntegrationConfig, "id" | "createdAt" | "updatedAt"> &
+	Partial<Pick<IntegrationConfig, "id" | "createdAt" | "updatedAt">>;
+
 /**
  * Integration credentials (encrypted in storage)
  */

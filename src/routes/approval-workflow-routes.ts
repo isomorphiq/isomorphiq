@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { Router } from "express";
-import { authMiddleware } from "../auth-service.ts";
+import { createAuthMiddleware } from "../services/modular-api-server.ts";
+import type { UserManager } from "../user-manager.ts";
 import type {
 	ApprovalStats,
 	ApprovalTemplate,
@@ -12,12 +13,17 @@ import type {
 } from "../core/approval-workflow.ts";
 import type { Result } from "../core/result.ts";
 import type { IApprovalWorkflowService } from "../services/approval-workflow-service.ts";
+import type { AuthenticatedRequest } from "../services/modular-api-server.ts";
 
-export function createApprovalWorkflowRoutes(approvalService: IApprovalWorkflowService): Router {
+export function createApprovalWorkflowRoutes(
+	approvalService: IApprovalWorkflowService,
+	userManager: UserManager,
+): Router {
 	const router = Router();
+	const authMiddleware = createAuthMiddleware(userManager);
 
 	// Workflow routes
-	router.post("/workflows", authMiddleware, async (req: Request, res: Response) => {
+	router.post("/workflows", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const input: CreateApprovalWorkflowInput = req.body;
 			const result = await approvalService.workflow.create(input, req.user?.id);
@@ -32,7 +38,7 @@ export function createApprovalWorkflowRoutes(approvalService: IApprovalWorkflowS
 		}
 	});
 
-	router.get("/workflows", authMiddleware, async (_req: Request, res: Response) => {
+	router.get("/workflows", authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
 		try {
 			const result = await approvalService.workflow.getAll();
 

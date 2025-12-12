@@ -1,13 +1,18 @@
 import type { Result } from "../core/result.ts";
 import { ConflictError, NotFoundError, ValidationError } from "../core/result.ts";
-import type { IntegrationConfig, IntegrationStats, TaskMapping } from "./types.ts";
+import type {
+	IntegrationConfig,
+	IntegrationConfigInput,
+	IntegrationStats,
+	TaskMapping,
+} from "./types.ts";
 
 /**
  * Integration repository interface for data persistence
  */
 export interface IIntegrationRepository {
 	// Integration CRUD
-	create(config: IntegrationConfig): Promise<Result<IntegrationConfig>>;
+	create(config: IntegrationConfigInput): Promise<Result<IntegrationConfig>>;
 	findById(id: string): Promise<Result<IntegrationConfig | null>>;
 	findAll(): Promise<Result<IntegrationConfig[]>>;
 	findByType(type: string): Promise<Result<IntegrationConfig[]>>;
@@ -43,22 +48,22 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	private db: {
 		open: () => Promise<void>;
 		put: (key: string, value: IntegrationConfig | TaskMapping | unknown) => Promise<void>;
-		get: (key: string) => Promise<IntegrationConfig | TaskMapping | undefined>;
+		get: (key: string) => Promise<unknown>;
 		del: (key: string) => Promise<void>;
 		iterator: (
 			opts?: Record<string, unknown>,
-		) => AsyncIterableIterator<[string, IntegrationConfig | TaskMapping]>;
+		) => (AsyncIterableIterator<[string, unknown]> & { close: () => Promise<void> });
 	};
 	private dbReady = false;
 
 	constructor(db: {
 		open: () => Promise<void>;
 		put: (key: string, value: IntegrationConfig | TaskMapping | unknown) => Promise<void>;
-		get: (key: string) => Promise<IntegrationConfig | TaskMapping | undefined>;
+		get: (key: string) => Promise<unknown>;
 		del: (key: string) => Promise<void>;
 		iterator: (
 			opts?: Record<string, unknown>,
-		) => AsyncIterableIterator<[string, IntegrationConfig | TaskMapping]>;
+		) => (AsyncIterableIterator<[string, unknown]> & { close: () => Promise<void> });
 	}) {
 		this.db = db;
 	}
@@ -75,7 +80,7 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	}
 
 	// Integration CRUD operations
-	async create(config: IntegrationConfig): Promise<Result<IntegrationConfig>> {
+	async create(config: IntegrationConfigInput): Promise<Result<IntegrationConfig>> {
 		await this.ensureDbOpen();
 
 		try {
@@ -120,7 +125,9 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 		await this.ensureDbOpen();
 
 		try {
-			const integration = await this.db.get(`integration:${id}`).catch(() => null);
+			const integration = (await this.db.get(`integration:${id}`).catch(() => null)) as
+				| IntegrationConfig
+				| null;
 			return { success: true, data: integration };
 		} catch (error) {
 			console.error("[INTEGRATION-REPO] Failed to find integration by ID:", error);
@@ -142,7 +149,7 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 			});
 
 			for await (const [, value] of iterator) {
-				integrations.push(value);
+				integrations.push(value as IntegrationConfig);
 			}
 
 			await iterator.close();
@@ -159,11 +166,11 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	async findByType(type: string): Promise<Result<IntegrationConfig[]>> {
 		await this.ensureDbOpen();
 
-		try {
-			const allResult = await this.findAll();
-			if (!allResult.success) {
-				return allResult as Result<IntegrationConfig[]>;
-			}
+			try {
+				const allResult = await this.findAll();
+				if (!allResult.success) {
+					return { success: false, error: allResult.error };
+				}
 
 			const filtered = allResult.data.filter((integration) => integration.type === type);
 			return { success: true, data: filtered };
@@ -179,11 +186,11 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	async findByStatus(status: string): Promise<Result<IntegrationConfig[]>> {
 		await this.ensureDbOpen();
 
-		try {
-			const allResult = await this.findAll();
-			if (!allResult.success) {
-				return allResult as Result<IntegrationConfig[]>;
-			}
+			try {
+				const allResult = await this.findAll();
+				if (!allResult.success) {
+					return { success: false, error: allResult.error };
+				}
 
 			const filtered = allResult.data.filter((integration) => integration.status === status);
 			return { success: true, data: filtered };
@@ -202,11 +209,11 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	): Promise<Result<IntegrationConfig>> {
 		await this.ensureDbOpen();
 
-		try {
-			const existingResult = await this.findById(id);
-			if (!existingResult.success) {
-				return existingResult as Result<IntegrationConfig>;
-			}
+			try {
+				const existingResult = await this.findById(id);
+				if (!existingResult.success) {
+					return { success: false, error: existingResult.error };
+				}
 
 			const existing = existingResult.data;
 			if (!existing) {
@@ -239,11 +246,11 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	async delete(id: string): Promise<Result<void>> {
 		await this.ensureDbOpen();
 
-		try {
-			const existingResult = await this.findById(id);
-			if (!existingResult.success) {
-				return existingResult as Result<void>;
-			}
+			try {
+				const existingResult = await this.findById(id);
+				if (!existingResult.success) {
+					return { success: false, error: existingResult.error };
+				}
 
 			const existing = existingResult.data;
 			if (!existing) {
@@ -303,14 +310,14 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	): Promise<Result<TaskMapping | null>> {
 		await this.ensureDbOpen();
 
-		try {
-			const mappingsResult = await this.findTaskMappingsByTask(taskId);
-			if (!mappingsResult.success) {
-				return mappingsResult as Result<TaskMapping | null>;
-			}
+			try {
+				const mappingsResult = await this.findTaskMappingsByTask(taskId);
+				if (!mappingsResult.success) {
+					return { success: false, error: mappingsResult.error };
+				}
 
-			const mapping = mappingsResult.data.find((m) => m.integrationId === integrationId);
-			return { success: true, data: mapping || null };
+				const mapping = mappingsResult.data.find((m) => m.integrationId === integrationId);
+				return { success: true, data: mapping || null };
 		} catch (error) {
 			console.error("[INTEGRATION-REPO] Failed to find task mapping:", error);
 			return {
@@ -331,8 +338,9 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 			});
 
 			for await (const [, value] of iterator) {
-				if (value.taskId === taskId) {
-					mappings.push(value);
+				const mapping = value as TaskMapping;
+				if (mapping.taskId === taskId) {
+					mappings.push(mapping);
 				}
 			}
 
@@ -358,8 +366,9 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 			});
 
 			for await (const [, value] of iterator) {
-				if (value.integrationId === integrationId) {
-					mappings.push(value);
+				const mapping = value as TaskMapping;
+				if (mapping.integrationId === integrationId) {
+					mappings.push(mapping);
 				}
 			}
 
@@ -380,11 +389,11 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	): Promise<Result<TaskMapping | null>> {
 		await this.ensureDbOpen();
 
-		try {
-			const mappingsResult = await this.findTaskMappingsByIntegration(integrationId);
-			if (!mappingsResult.success) {
-				return mappingsResult as Result<TaskMapping | null>;
-			}
+			try {
+				const mappingsResult = await this.findTaskMappingsByIntegration(integrationId);
+				if (!mappingsResult.success) {
+					return { success: false, error: mappingsResult.error };
+				}
 
 			const mapping = mappingsResult.data.find((m) => m.externalId === externalId);
 			return { success: true, data: mapping || null };
@@ -401,7 +410,9 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 		await this.ensureDbOpen();
 
 		try {
-			const existing = await this.db.get(`mapping:${id}`).catch(() => null);
+			const existing = (await this.db.get(`mapping:${id}`).catch(() => null)) as
+				| TaskMapping
+				| null;
 			if (!existing) {
 				return {
 					success: false,
@@ -449,11 +460,11 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	async deleteTaskMappingsByTask(taskId: string): Promise<Result<void>> {
 		await this.ensureDbOpen();
 
-		try {
-			const mappingsResult = await this.findTaskMappingsByTask(taskId);
-			if (!mappingsResult.success) {
-				return mappingsResult as Result<void>;
-			}
+			try {
+				const mappingsResult = await this.findTaskMappingsByTask(taskId);
+				if (!mappingsResult.success) {
+					return { success: false, error: mappingsResult.error };
+				}
 
 			const deletePromises = mappingsResult.data.map((mapping) =>
 				this.deleteTaskMapping(mapping.id),
@@ -476,11 +487,11 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	async deleteTaskMappingsByIntegration(integrationId: string): Promise<Result<void>> {
 		await this.ensureDbOpen();
 
-		try {
-			const mappingsResult = await this.findTaskMappingsByIntegration(integrationId);
-			if (!mappingsResult.success) {
-				return mappingsResult as Result<void>;
-			}
+			try {
+				const mappingsResult = await this.findTaskMappingsByIntegration(integrationId);
+				if (!mappingsResult.success) {
+					return { success: false, error: mappingsResult.error };
+				}
 
 			const deletePromises = mappingsResult.data.map((mapping) =>
 				this.deleteTaskMapping(mapping.id),
@@ -504,11 +515,11 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	async getIntegrationStats(): Promise<Result<IntegrationStats>> {
 		await this.ensureDbOpen();
 
-		try {
-			const allResult = await this.findAll();
-			if (!allResult.success) {
-				return allResult as Result<IntegrationStats>;
-			}
+			try {
+				const allResult = await this.findAll();
+				if (!allResult.success) {
+					return { success: false, error: allResult.error };
+				}
 
 			const integrations = allResult.data;
 			const stats: IntegrationStats = {
@@ -552,15 +563,11 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	): Promise<Result<{ totalMappings: number; lastSyncAt: Date; syncFrequency: number }>> {
 		await this.ensureDbOpen();
 
-		try {
-			const mappingsResult = await this.findTaskMappingsByIntegration(integrationId);
-			if (!mappingsResult.success) {
-				return mappingsResult as Result<{
-					totalMappings: number;
-					lastSyncAt: Date;
-					syncFrequency: number;
-				}>;
-			}
+			try {
+				const mappingsResult = await this.findTaskMappingsByIntegration(integrationId);
+				if (!mappingsResult.success) {
+					return { success: false, error: mappingsResult.error };
+				}
 
 			const usage = {
 				totalMappings: mappingsResult.data.length,
@@ -582,11 +589,11 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	private async findByName(name: string): Promise<Result<IntegrationConfig | null>> {
 		await this.ensureDbOpen();
 
-		try {
-			const allResult = await this.findAll();
-			if (!allResult.success) {
-				return allResult as Result<IntegrationConfig | null>;
-			}
+			try {
+				const allResult = await this.findAll();
+				if (!allResult.success) {
+					return { success: false, error: allResult.error };
+				}
 
 			const integration = allResult.data.find((i) => i.name === name);
 			return { success: true, data: integration || null };

@@ -47,8 +47,8 @@ export class EnhancedErrorBoundary extends Component<Props, State> {
 					style={{
 						padding: "40px",
 						borderRadius: "12px",
-						background: "#1f2937",
-						border: "1px solid #ef4444",
+						background: "var(--color-surface-primary)",
+						border: "1px solid var(--color-accent-error)",
 						margin: "20px",
 						textAlign: "center",
 					}}
@@ -56,7 +56,7 @@ export class EnhancedErrorBoundary extends Component<Props, State> {
 					<div style={{ fontSize: "48px", marginBottom: "16px" }}>⚠️</div>
 					<h2
 						style={{
-							color: "#ef4444",
+							color: "var(--color-accent-error)",
 							marginBottom: "16px",
 							fontSize: "24px",
 						}}
@@ -66,7 +66,8 @@ export class EnhancedErrorBoundary extends Component<Props, State> {
 
 					<p
 						style={{
-							color: "#fca5a5",
+							color: "var(--color-accent-error)",
+							opacity: 0.8,
 							marginBottom: "24px",
 							lineHeight: "1.5",
 						}}
@@ -80,14 +81,14 @@ export class EnhancedErrorBoundary extends Component<Props, State> {
 								textAlign: "left",
 								marginBottom: "24px",
 								padding: "16px",
-								background: "#111827",
+								background: "var(--color-surface-tertiary)",
 								borderRadius: "8px",
-								border: "1px solid #374151",
+								border: "1px solid var(--color-border-primary)",
 							}}
 						>
 							<summary
 								style={{
-									color: "#f9fafb",
+									color: "var(--color-text-primary)",
 									cursor: "pointer",
 									marginBottom: "8px",
 								}}
@@ -96,7 +97,7 @@ export class EnhancedErrorBoundary extends Component<Props, State> {
 							</summary>
 							<pre
 								style={{
-									color: "#cbd5e1",
+									color: "var(--color-text-secondary)",
 									fontSize: "12px",
 									overflow: "auto",
 									whiteSpace: "pre-wrap",
@@ -117,8 +118,8 @@ export class EnhancedErrorBoundary extends Component<Props, State> {
 							style={{
 								padding: "12px 24px",
 								borderRadius: "8px",
-								border: "1px solid #3b82f6",
-								background: "#3b82f6",
+								border: "1px solid var(--color-accent-primary)",
+								background: "var(--color-accent-primary)",
 								color: "white",
 								fontSize: "14px",
 								fontWeight: "500",
@@ -134,9 +135,9 @@ export class EnhancedErrorBoundary extends Component<Props, State> {
 							style={{
 								padding: "12px 24px",
 								borderRadius: "8px",
-								border: "1px solid #374151",
-								background: "#374151",
-								color: "#f9fafb",
+								border: "1px solid var(--color-border-primary)",
+								background: "var(--color-surface-primary)",
+								color: "var(--color-text-primary)",
 								fontSize: "14px",
 								cursor: "pointer",
 							}}
@@ -185,8 +186,8 @@ export function LoadingSpinner({
 				style={{
 					width: spinnerSize.width,
 					height: spinnerSize.height,
-					border: `${spinnerSize.border} solid #374151`,
-					borderTop: `${spinnerSize.border} solid #3b82f6`,
+					border: `${spinnerSize.border} solid var(--color-border-primary)`,
+					borderTop: `${spinnerSize.border} solid var(--color-accent-primary)`,
 					borderRadius: "50%",
 					animation: "spin 1s linear infinite",
 				}}
@@ -194,7 +195,7 @@ export function LoadingSpinner({
 			{message && (
 				<div
 					style={{
-						color: "#9ca3af",
+						color: "var(--color-text-muted)",
 						fontSize: "14px",
 						fontWeight: "500",
 					}}
@@ -247,7 +248,7 @@ export function LoadingSkeleton({
 		const baseStyle = {
 			width: typeof width === "number" ? `${width}px` : width,
 			height: typeof height === "number" ? `${height}px` : height,
-			background: "linear-gradient(90deg, #374151 25%, #4b5563 50%, #374151 75%)",
+			background: "linear-gradient(90deg, var(--color-border-primary) 25%, var(--color-border-secondary) 50%, var(--color-border-primary) 75%)",
 			backgroundSize: "200% 100%",
 			animation: "shimmer 1.5s infinite",
 			borderRadius: variant === "circular" ? "50%" : variant === "text" ? "4px" : "8px",
@@ -295,7 +296,7 @@ export function EmptyState({ icon = "📭", title, description, action }: EmptyS
 				justifyContent: "center",
 				padding: "60px 20px",
 				textAlign: "center",
-				color: "#9ca3af",
+				color: "var(--color-text-muted)",
 			}}
 		>
 			<div style={{ fontSize: "48px", marginBottom: "16px", opacity: 0.7 }}>{icon}</div>
@@ -303,7 +304,7 @@ export function EmptyState({ icon = "📭", title, description, action }: EmptyS
 			<h3
 				style={{
 					margin: "0 0 8px 0",
-					color: "#f9fafb",
+					color: "var(--color-text-primary)",
 					fontSize: "18px",
 					fontWeight: "500",
 				}}
@@ -330,8 +331,8 @@ export function EmptyState({ icon = "📭", title, description, action }: EmptyS
 					style={{
 						padding: "12px 24px",
 						borderRadius: "8px",
-						border: "1px solid #3b82f6",
-						background: "#3b82f6",
+						border: "1px solid var(--color-accent-primary)",
+						background: "var(--color-accent-primary)",
 						color: "white",
 						fontSize: "14px",
 						fontWeight: "500",
@@ -358,8 +359,8 @@ export function Retry({ error, onRetry, retryCount = 0 }: RetryProps) {
 			style={{
 				padding: "20px",
 				borderRadius: "8px",
-				background: "#1f2937",
-				border: "1px solid #ef4444",
+				background: "var(--color-surface-primary)",
+				border: "1px solid var(--color-accent-error)",
 				textAlign: "center",
 			}}
 		>
@@ -368,7 +369,7 @@ export function Retry({ error, onRetry, retryCount = 0 }: RetryProps) {
 			<h4
 				style={{
 					margin: "0 0 8px 0",
-					color: "#ef4444",
+					color: "var(--color-accent-error)",
 					fontSize: "16px",
 				}}
 			>
@@ -379,7 +380,8 @@ export function Retry({ error, onRetry, retryCount = 0 }: RetryProps) {
 				<p
 					style={{
 						margin: "0 0 16px 0",
-						color: "#fca5a5",
+						color: "var(--color-accent-error)",
+						opacity: 0.8,
 						fontSize: "14px",
 					}}
 				>
@@ -393,8 +395,8 @@ export function Retry({ error, onRetry, retryCount = 0 }: RetryProps) {
 				style={{
 					padding: "8px 16px",
 					borderRadius: "6px",
-					border: "1px solid #3b82f6",
-					background: "#3b82f6",
+					border: "1px solid var(--color-accent-primary)",
+					background: "var(--color-accent-primary)",
 					color: "white",
 					fontSize: "14px",
 					cursor: "pointer",

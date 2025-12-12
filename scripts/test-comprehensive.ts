@@ -5,9 +5,9 @@
  * Runs all test suites and provides a consolidated report
  */
 
-import { SimplifiedAnalyticsTester } from "./test-analytics-simple";
-import { SimplifiedDashboardTester } from "./test-dashboard-simple";
-import { SimplifiedReportTester } from "./test-reports-simple";
+import { SimplifiedAnalyticsTester } from "./test-analytics-simple.js";
+import { SimplifiedDashboardTester } from "./test-dashboard-simple.js";
+import { SimplifiedReportTester } from "./test-reports-simple.js";
 
 interface TestSuiteResult {
 	name: string;
@@ -185,12 +185,10 @@ class ComprehensiveTestRunner {
 }
 
 // Run tests if this file is executed directly
-if (require.main === module) {
-	const runner = new ComprehensiveTestRunner();
-	runner.runAllTests().catch((error) => {
-		console.error("Test execution failed:", error);
-		process.exit(1);
-	});
-}
+const runner = new ComprehensiveTestRunner();
+runner.runAllTests().catch((error) => {
+	console.error("Test execution failed:", error);
+	process.exit(1);
+});
 
 export { ComprehensiveTestRunner };

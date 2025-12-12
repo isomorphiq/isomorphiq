@@ -222,11 +222,10 @@ export class EnhancedProfileManager extends ProfileManager {
 		const pluginProfiles = this.getPluginProfiles();
 		const availablePluginProfiles = pluginProfiles.filter((profile) => {
 			const state = profile.plugin.state;
-			return (
-				state === "active" &&
-				profile.plugin.getConfig().enabled &&
-				this.isProfileAvailable(profile.name)
-			);
+			const config =
+				this.pluginManager.getPluginConfig(profile.plugin.metadata.name) ??
+				profile.plugin.defaultConfig;
+			return state === "active" && config.enabled && this.isProfileAvailable(profile.name);
 		});
 
 		if (availablePluginProfiles.length > 0) {
@@ -298,7 +297,9 @@ export class EnhancedProfileManager extends ProfileManager {
 				name: plugin.metadata.name,
 				version: plugin.metadata.version,
 				state: plugin.state,
-				enabled: plugin.getConfig().enabled,
+				enabled:
+					this.pluginManager.getPluginConfig(plugin.metadata.name)?.enabled ??
+					plugin.defaultConfig.enabled,
 				health: healthMap.get(plugin.metadata.name),
 				hasProfile: this.pluginProfiles.has(plugin.metadata.name),
 			})),

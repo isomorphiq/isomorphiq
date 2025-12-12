@@ -1,6 +1,6 @@
 import type { Task } from "../types.ts";
 import { BaseIntegrationAdapter } from "./base-adapter.ts";
-import type { ExternalTask, IntegrationSettings } from "./types.ts";
+import type { ExternalTask, IntegrationHealth, IntegrationSettings } from "./types.ts";
 
 type CalendarSettings = NonNullable<IntegrationSettings["calendar"]>;
 
@@ -375,33 +375,14 @@ export class CalendarIntegration extends BaseIntegrationAdapter {
 		}
 	}
 
-	protected async getMetrics(): Promise<Record<string, unknown>> {
-		try {
-			const calendarSettings = this.getCalendarSettings();
-			const response = await this.makeCalendarRequest(
-				"GET",
-				`/calendars/${calendarSettings.calendarId}`,
-			);
-
-			if (!response.ok) {
-				return {};
-			}
-
-			const calendar = await response.json();
-
-			return {
-				calendar: {
-					id: calendar.id,
-					summary: calendar.summary,
-					timezone: calendar.timeZone,
-					accessRole: calendar.accessRole,
-				},
-			};
-		} catch (error) {
-			return {
-				error: (error as Error).message,
-			};
-		}
+	protected async getMetrics(): Promise<IntegrationHealth["metrics"]> {
+		// For now we expose basic sync counters; calendar adapter does not yet track them
+		return {
+			syncsCompleted: 0,
+			syncsFailed: 0,
+			averageSyncTime: 0,
+			lastSyncDuration: 0,
+		};
 	}
 
 	private getCalendarSettings(): CalendarSettings {

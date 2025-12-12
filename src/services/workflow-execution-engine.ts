@@ -688,7 +688,7 @@ export class ScriptNodeExecutor implements WorkflowNodeExecutor {
 			// This would execute the script in a sandboxed environment
 			// For now, we'll simulate script execution
 			const result = {
-				output: `Script executed successfully`,
+				output: "Script executed successfully",
 				exitCode: 0,
 				executionTime: 100,
 			};

@@ -169,7 +169,7 @@ async function runTests() {
 // Check if server is running, then run tests
 async function checkServerAndRunTests() {
 	try {
-		const healthResponse = await makeRequest("GET", "/health");
+		const healthResponse = await makeRequest("GET", "/api/health");
 		console.log("Debug - Health response:", healthResponse);
 		if (healthResponse.status === 200) {
 			await runTests();

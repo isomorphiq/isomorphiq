@@ -1,6 +1,6 @@
 import type { Task } from "../types.ts";
 import { BaseIntegrationAdapter } from "./base-adapter.ts";
-import type { ExternalTask, IntegrationSettings } from "./types.ts";
+import type { ExternalTask, IntegrationHealth, IntegrationSettings } from "./types.ts";
 
 type SlackSettings = NonNullable<IntegrationSettings["slack"]>;
 type SlackWebhookEvent = {
@@ -340,7 +340,7 @@ export class SlackIntegration extends BaseIntegrationAdapter {
 		}
 
 		const command = text.substring(prefix.length).trim().toLowerCase();
-		const channel = event.channel;
+		const channel = typeof event.channel === "string" ? event.channel : "";
 
 		console.log(`[SLACK] Processing command: ${command}`);
 
@@ -408,21 +408,13 @@ Example: \`@bot Create a new feature for user authentication\`
 		return this.config.settings.slack;
 	}
 
-	protected async getMetrics(): Promise<Record<string, unknown>> {
-		try {
-			const response = await this.makeSlackRequest("GET", "/auth.test");
-			const data = await response.json();
-
-			return {
-				connected: data.ok,
-				user: data.user,
-				team: data.team,
-			};
-		} catch (error) {
-			return {
-				connected: false,
-				error: (error as Error).message,
-			};
-		}
+	protected async getMetrics(): Promise<IntegrationHealth["metrics"]> {
+		// Slack adapter currently does not capture sync metrics; return baseline values.
+		return {
+			syncsCompleted: 0,
+			syncsFailed: 0,
+			averageSyncTime: 0,
+			lastSyncDuration: 0,
+		};
 	}
 }

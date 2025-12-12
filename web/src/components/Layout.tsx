@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { authAtom } from "../authAtoms.ts";
+import { ThemeToggle } from "./ThemeToggle.tsx";
 
 type LayoutProps = {
 	children: ReactNode;
@@ -15,7 +16,7 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 	const location = useLocation();
 	const [showUserMenu, setShowUserMenu] = useState(false);
 	// Registration always open for now; adjust when status endpoint is wired
-	const _registrationDisabled = false;
+	const registrationDisabled = false;
 
 	const navItems = [
 		{ to: "/", label: "Dashboard", icon: "📊" },
@@ -32,9 +33,9 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 			style={{
 				padding: "24px",
 				fontFamily: "Inter, system-ui, sans-serif",
-				background: "#0f172a",
+				background: "var(--color-bg-primary)",
 				minHeight: "100vh",
-				color: "#e2e8f0",
+				color: "var(--color-text-primary)",
 			}}
 		>
 			<header style={headerShell}>
@@ -42,7 +43,7 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 					<Link
 						to="/"
 						style={{
-							color: "#e2e8f0",
+							color: "var(--color-text-primary)",
 							fontWeight: 800,
 							textDecoration: "none",
 							fontFamily: "Bruno Ace, Inter, system-ui",
@@ -64,15 +65,15 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 											to={item.to}
 											style={{
 												textDecoration: "none",
-												color: active ? "#0f172a" : "#e2e8f0",
-												background: active ? "#38bdf8" : "transparent",
+												color: active ? "var(--color-bg-primary)" : "var(--color-text-primary)",
+												background: active ? "var(--color-accent-primary)" : "transparent",
 												padding: "8px 12px",
 												borderRadius: "8px",
 												fontWeight: 700,
 												display: "flex",
 												alignItems: "center",
 												gap: "6px",
-												border: active ? "1px solid #0ea5e9" : "1px solid transparent",
+												border: active ? "1px solid var(--color-accent-primary)" : "1px solid transparent",
 												transition: "all 0.2s ease",
 											}}
 										>
@@ -85,7 +86,9 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 					)}
 				</div>
 
-				{auth.isAuthenticated && auth.user ? (
+				<div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+					<ThemeToggle size="small" />
+					{auth.isAuthenticated && auth.user ? (
 					<div style={{ position: "relative" }}>
 						<button type="button" onClick={() => setShowUserMenu((s) => !s)} style={userButton}>
 							<span>{auth.user.username || auth.user.email}</span>
@@ -94,7 +97,7 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 						{showUserMenu && (
 							<div style={menuPanel}>
 								<div
-									style={{ padding: "10px", borderBottom: "1px solid #1f2937", color: "#cbd5e1" }}
+									style={{ padding: "10px", borderBottom: "1px solid var(--color-border-primary)", color: "var(--color-text-secondary)" }}
 								>
 									<div style={{ fontWeight: 700 }}>{auth.user.username}</div>
 									<div style={{ fontSize: "12px" }}>{auth.user.email}</div>
@@ -118,7 +121,7 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 										textAlign: "left",
 										border: "none",
 										background: "transparent",
-										color: "#f87171",
+										color: "var(--color-accent-error)",
 									}}
 								>
 									🚪 Logout
@@ -136,6 +139,7 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 						</Link>
 					</div>
 				)}
+				</div>
 			</header>
 
 			{children}
@@ -144,8 +148,8 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 					style={{
 						marginTop: "32px",
 						paddingTop: "12px",
-						borderTop: "1px solid #1f2937",
-						color: "#94a3b8",
+						borderTop: "1px solid var(--color-border-primary)",
+						color: "var(--color-text-muted)",
 						display: "flex",
 						justifyContent: "space-between",
 						alignItems: "center",
@@ -154,7 +158,7 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 				>
 					<span>Opencode Task Manager · v1.0.0</span>
 					<span>
-						Status: <span style={{ color: "#22c55e" }}>online</span>
+						Status: <span style={{ color: "var(--color-accent-success)" }}>online</span>
 					</span>
 				</footer>
 			)}
@@ -176,19 +180,19 @@ const navShell: CSSProperties = {
 	display: "flex",
 	gap: "10px",
 	alignItems: "center",
-	background: "#0b1220",
-	border: "1px solid #1f2937",
+	background: "var(--color-surface-secondary)",
+	border: "1px solid var(--color-border-primary)",
 	borderRadius: "12px",
 	padding: "10px 12px",
-	boxShadow: "0 10px 24px rgba(0,0,0,0.25)",
+	boxShadow: "0 10px 24px var(--color-shadow-lg)",
 };
 
 const userButton: CSSProperties = {
 	padding: "8px 12px",
-	background: "#1f2937",
-	border: "1px solid #374151",
+	background: "var(--color-surface-primary)",
+	border: "1px solid var(--color-border-primary)",
 	borderRadius: "8px",
-	color: "#f3f4f6",
+	color: "var(--color-text-primary)",
 	fontSize: "14px",
 	cursor: "pointer",
 	display: "flex",
@@ -200,10 +204,10 @@ const menuPanel: CSSProperties = {
 	position: "absolute",
 	top: "calc(100% + 6px)",
 	right: 0,
-	background: "#0b1220",
-	border: "1px solid #1f2937",
+	background: "var(--color-surface-secondary)",
+	border: "1px solid var(--color-border-primary)",
 	borderRadius: "10px",
-	boxShadow: "0 10px 20px rgba(0,0,0,0.35)",
+	boxShadow: "0 10px 20px var(--color-shadow-xl)",
 	minWidth: "200px",
 	zIndex: 20,
 };
@@ -211,30 +215,30 @@ const menuPanel: CSSProperties = {
 const menuLinkStyle: CSSProperties = {
 	display: "block",
 	padding: "10px 12px",
-	color: "#e2e8f0",
+	color: "var(--color-text-primary)",
 	textDecoration: "none",
 	fontWeight: 600,
-	borderBottom: "1px solid #1f2937",
+	borderBottom: "1px solid var(--color-border-primary)",
 };
 
 const loginBtn: CSSProperties = {
-	background: "#2563eb",
+	background: "var(--color-accent-primary)",
 	color: "white",
 	padding: "8px 14px",
 	borderRadius: "8px",
 	textDecoration: "none",
 	fontWeight: 700,
-	boxShadow: "0 6px 16px rgba(37,99,235,0.25)",
+	boxShadow: "0 6px 16px var(--color-shadow-md)",
 };
 
 const registerBtn: CSSProperties = {
 	background: "transparent",
-	color: "#e2e8f0",
+	color: "var(--color-text-primary)",
 	padding: "8px 14px",
 	borderRadius: "8px",
 	textDecoration: "none",
 	fontWeight: 700,
-	border: "1px solid #334155",
+	border: "1px solid var(--color-border-primary)",
 };
 
 export function Header({
@@ -251,6 +255,8 @@ export function Header({
 	showAuthControls?: boolean;
 }) {
 	const [showUserMenu, setShowUserMenu] = useState(false);
+	// Registration always open for now; adjust when status endpoint is wired
+	const registrationDisabled = false;
 
 	return (
 		<header
@@ -263,7 +269,7 @@ export function Header({
 		>
 			<div>
 				<h1 style={{ margin: 0, fontSize: "28px", letterSpacing: "-0.5px" }}>{title}</h1>
-				{subtitle && <p style={{ margin: "6px 0 0", color: "#94a3b8" }}>{subtitle}</p>}
+				{subtitle && <p style={{ margin: "6px 0 0", color: "var(--color-text-muted)" }}>{subtitle}</p>}
 			</div>
 
 			{showAuthControls && user && onLogout ? (
@@ -273,10 +279,10 @@ export function Header({
 						onClick={() => setShowUserMenu(!showUserMenu)}
 						style={{
 							padding: "8px 12px",
-							background: "#1f2937",
-							border: "1px solid #374151",
+							background: "var(--color-surface-primary)",
+							border: "1px solid var(--color-border-primary)",
 							borderRadius: "6px",
-							color: "#f3f4f6",
+							color: "var(--color-text-primary)",
 							fontSize: "14px",
 							cursor: "pointer",
 							display: "flex",
@@ -295,10 +301,10 @@ export function Header({
 								top: "100%",
 								right: 0,
 								marginTop: "4px",
-								background: "#1f2937",
-								border: "1px solid #374151",
+								background: "var(--color-surface-primary)",
+								border: "1px solid var(--color-border-primary)",
 								borderRadius: "6px",
-								boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+								boxShadow: "0 4px 12px var(--color-shadow-lg)",
 								zIndex: 1000,
 								minWidth: "160px",
 							}}
@@ -308,8 +314,8 @@ export function Header({
 									style={{
 										padding: "8px 12px",
 										fontSize: "12px",
-										color: "#9ca3af",
-										borderBottom: "1px solid #374151",
+										color: "var(--color-text-muted)",
+										borderBottom: "1px solid var(--color-border-primary)",
 										marginBottom: "4px",
 									}}
 								>
@@ -320,13 +326,13 @@ export function Header({
 									style={{
 										display: "block",
 										padding: "8px 12px",
-										color: "#f3f4f6",
+										color: "var(--color-text-primary)",
 										textDecoration: "none",
 										fontSize: "14px",
 									}}
 									onClick={() => setShowUserMenu(false)}
 									onMouseEnter={(e) => {
-										e.currentTarget.style.background = "#374151";
+										e.currentTarget.style.background = "var(--color-state-hover-bg)";
 									}}
 									onMouseLeave={(e) => {
 										e.currentTarget.style.background = "transparent";
@@ -339,13 +345,13 @@ export function Header({
 									style={{
 										display: "block",
 										padding: "8px 12px",
-										color: "#f3f4f6",
+										color: "var(--color-text-primary)",
 										textDecoration: "none",
 										fontSize: "14px",
 									}}
 									onClick={() => setShowUserMenu(false)}
 									onMouseEnter={(e) => {
-										e.currentTarget.style.background = "#374151";
+										e.currentTarget.style.background = "var(--color-state-hover-bg)";
 									}}
 									onMouseLeave={(e) => {
 										e.currentTarget.style.background = "transparent";
@@ -364,7 +370,7 @@ export function Header({
 										padding: "8px 12px",
 										background: "transparent",
 										border: "none",
-										color: "#ef4444",
+										color: "var(--color-accent-error)",
 										textAlign: "left",
 										fontSize: "14px",
 										cursor: "pointer",
@@ -381,13 +387,13 @@ export function Header({
 					<Link
 						to="/login"
 						style={{
-							background: "#2563eb",
+							background: "var(--color-accent-primary)",
 							color: "white",
 							padding: "8px 14px",
 							borderRadius: "8px",
 							textDecoration: "none",
 							fontWeight: 600,
-							boxShadow: "0 6px 16px rgba(37,99,235,0.25)",
+							boxShadow: "0 6px 16px var(--color-shadow-md)",
 						}}
 					>
 						Login
@@ -397,12 +403,12 @@ export function Header({
 							to="/register"
 							style={{
 								background: "transparent",
-								color: "#e2e8f0",
+								color: "var(--color-text-primary)",
 								padding: "8px 14px",
 								borderRadius: "8px",
 								textDecoration: "none",
 								fontWeight: 600,
-								border: "1px solid #334155",
+								border: "1px solid var(--color-border-primary)",
 							}}
 						>
 							Register
@@ -410,12 +416,12 @@ export function Header({
 					) : (
 						<span
 							style={{
-								color: "#94a3b8",
+								color: "var(--color-text-muted)",
 								fontSize: "13px",
 								padding: "6px 10px",
 								borderRadius: "8px",
-								border: "1px dashed #334155",
-								background: "#111827",
+								border: "1px dashed var(--color-border-primary)",
+								background: "var(--color-surface-tertiary)",
 							}}
 						>
 							Signups closed

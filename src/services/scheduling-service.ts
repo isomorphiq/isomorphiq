@@ -709,7 +709,7 @@ export class SchedulingEngine implements ISchedulingEngine {
 					type: "overload",
 					taskId,
 					userId,
-					description: `User would be overloaded with this assignment`,
+					description: "User would be overloaded with this assignment",
 					severity: "high",
 					detectedAt: new Date(),
 				});

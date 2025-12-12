@@ -5,6 +5,7 @@ import { startHttpApi } from "./http-api-server.ts";
 import { ProductManager } from "./index.ts";
 import { getUserManager } from "./user-manager.ts";
 import { WebSocketManager } from "./websocket-server.ts";
+import type { Result } from "./core/result.ts";
 
 // Task Manager Daemon - runs the continuous task processing loop and handles MCP requests
 async function main() {
@@ -52,7 +53,10 @@ async function main() {
 					const message = JSON.parse(data.toString().trim());
 					console.log("[DAEMON] Received command:", message.command);
 
-					let result: { success: boolean; data?: unknown; error?: string } = { success: false };
+					let result: Result<unknown> = {
+						success: false,
+						error: new Error("Unhandled command"),
+					};
 					switch (message.command) {
 						case "create_task":
 							try {
@@ -72,7 +76,7 @@ async function main() {
 							} catch (error) {
 								result = {
 									success: false,
-									error: error instanceof Error ? error.message : String(error),
+									error: error instanceof Error ? error : new Error(String(error)),
 								};
 							}
 							break;
@@ -84,7 +88,7 @@ async function main() {
 							} catch (error) {
 								result = {
 									success: false,
-									error: error instanceof Error ? error.message : String(error),
+									error: error instanceof Error ? error : new Error(String(error)),
 								};
 							}
 							break;
@@ -95,12 +99,12 @@ async function main() {
 								if (task) {
 									result = { success: true, data: task };
 								} else {
-									result = { success: false, error: "Task not found" };
+									result = { success: false, error: new Error("Task not found") };
 								}
 							} catch (error) {
 								result = {
 									success: false,
-									error: error instanceof Error ? error.message : String(error),
+									error: error instanceof Error ? error : new Error(String(error)),
 								};
 							}
 							break;
@@ -122,7 +126,7 @@ async function main() {
 							} catch (error) {
 								result = {
 									success: false,
-									error: error instanceof Error ? error.message : String(error),
+									error: error instanceof Error ? error : new Error(String(error)),
 								};
 							}
 							break;
@@ -144,7 +148,7 @@ async function main() {
 							} catch (error) {
 								result = {
 									success: false,
-									error: error instanceof Error ? error.message : String(error),
+									error: error instanceof Error ? error : new Error(String(error)),
 								};
 							}
 							break;
@@ -152,7 +156,7 @@ async function main() {
 						case "delete_task":
 							await pm.deleteTask(message.data.id);
 							wsManager.broadcastTaskDeleted(message.data.id);
-							result = { success: true };
+							result = { success: true, data: true };
 							break;
 						case "restart":
 							console.log("[DAEMON] Restart command received, spawning new daemon and exiting...");
@@ -167,15 +171,15 @@ async function main() {
 							setTimeout(() => process.exit(0), 1000);
 							result = {
 								success: true,
-								message: "Restarting...",
+								data: { message: "Restarting..." },
 							};
 							break;
 						case "ws_status":
-							result = wsManager.getStatus();
+							result = { success: true, data: wsManager.getStatus() };
 							break;
 						case "create_template": {
 							const templateManager = pm.getTemplateManager();
-							result = await templateManager.createTemplate(
+							const template = await templateManager.createTemplate(
 								message.data.name,
 								message.data.description,
 								message.data.category,
@@ -185,129 +189,175 @@ async function main() {
 								message.data.variables || [],
 								message.data.subtasks || [],
 							);
+							result = { success: true, data: template };
 							break;
 						}
 						case "list_templates": {
 							const tm = pm.getTemplateManager();
-							result = await tm.getAllTemplates();
+							const templates = await tm.getAllTemplates();
+							result = { success: true, data: templates };
 							break;
 						}
 						case "get_template": {
 							const templateMgr = pm.getTemplateManager();
-							result = await templateMgr.getTemplate(message.data.id);
+							const template = await templateMgr.getTemplate(message.data.id);
+							result = template
+								? { success: true, data: template }
+								: { success: false, error: new Error("Template not found") };
 							break;
 						}
 						case "create_task_from_template": {
 							const taskResult = await pm.createTaskFromTemplate(message.data);
-							result = taskResult;
+							result = { success: true, data: taskResult };
 							break;
 						}
-						case "initialize_templates":
-							await pm.initializeTemplates();
-							result = {
-								success: true,
-								message: "Templates initialized successfully",
-							};
-							break;
+                        case "initialize_templates":
+                            await pm.initializeTemplates();
+                            result = {
+                                success: true,
+                                data: { message: "Templates initialized successfully" },
+                            };
+                            break;
 						case "create_automation_rule": {
 							const automationTemplateMgr = pm.getTemplateManager();
-							result = await automationTemplateMgr.createAutomationRule(message.data);
+							const rule = await automationTemplateMgr.createAutomationRule(message.data);
+							result = { success: true, data: rule };
 							break;
 						}
 						case "list_automation_rules": {
 							const automationTmplMgr = pm.getTemplateManager();
-							result = await automationTmplMgr.getAllAutomationRules();
+							const rules = await automationTmplMgr.getAllAutomationRules();
+							result = { success: true, data: rules };
 							break;
 						}
 						case "update_automation_rule": {
 							const automationTmplManager = pm.getTemplateManager();
-							result = await automationTmplManager.updateAutomationRule(
+							const updated = await automationTmplManager.updateAutomationRule(
 								message.data.id,
 								message.data.updates,
 							);
+							result = { success: true, data: updated };
 							break;
 						}
 						case "delete_automation_rule": {
 							const automationTManager = pm.getTemplateManager();
 							await automationTManager.deleteAutomationRule(message.data.id);
-							result = { success: true };
+							result = { success: true, data: true };
 							break;
 						}
 						case "reload_automation_rules":
 							await pm.loadAutomationRules();
 							result = {
 								success: true,
-								message: "Automation rules reloaded",
+								data: { message: "Automation rules reloaded" },
 							};
 							break;
 						// User management commands
-						case "create_user":
-							result = await userManager.createUser(message.data);
-							break;
-						case "authenticate_user":
-							result = await userManager.authenticateUser(message.data);
-							break;
-						case "get_user":
-							result = await userManager.getUserById(message.data.id);
-							break;
-						case "list_users":
-							result = await userManager.getAllUsers();
-							break;
-						case "update_user":
-							result = await userManager.updateUser(message.data);
-							break;
-						case "delete_user":
-							await userManager.deleteUser(message.data.id);
-							result = { success: true };
-							break;
-						case "validate_session":
-							result = await userManager.validateSession(message.data.token);
-							break;
-						case "logout_user":
-							result = await userManager.logoutUser(message.data.token);
-							break;
-						case "refresh_token":
-							result = await userManager.refreshToken(message.data.refreshToken);
-							break;
+                        case "create_user":
+                            try {
+                                const createdUser = await userManager.createUser(message.data);
+                                result = { success: true, data: createdUser };
+                            } catch (error) {
+                                result = {
+                                    success: false,
+                                    error: error instanceof Error ? error : new Error(String(error)),
+                                };
+                            }
+                            break;
+                        case "authenticate_user": {
+                            const auth = await userManager.authenticateUser(message.data);
+                            result = auth.success
+                                ? { success: true, data: auth }
+                                : {
+                                      success: false,
+                                      error: new Error(auth.error || "Authentication failed"),
+                                  };
+                            break;
+                        }
+                        case "get_user": {
+                            const user = await userManager.getUserById(message.data.id);
+                            result = user
+                                ? { success: true, data: user }
+                                : { success: false, error: new Error("User not found") };
+                            break;
+                        }
+                        case "list_users":
+                            result = { success: true, data: await userManager.getAllUsers() };
+                            break;
+                        case "update_user": {
+                            const updated = await userManager.updateUser(message.data);
+                            result = { success: true, data: updated };
+                            break;
+                        }
+                        case "delete_user":
+                            await userManager.deleteUser(message.data.id);
+                            result = { success: true, data: true };
+                            break;
+                        case "validate_session": {
+                            const sessionUser = await userManager.validateSession(message.data.token);
+                            result = sessionUser
+                                ? { success: true, data: sessionUser }
+                                : { success: false, error: new Error("Invalid session") };
+                            break;
+                        }
+                        case "logout_user": {
+                            const loggedOut = await userManager.logoutUser(message.data.token);
+                            result = loggedOut
+                                ? { success: true, data: true }
+                                : { success: false, error: new Error("Logout failed") };
+                            break;
+                        }
+                        case "refresh_token": {
+                            const refresh = await userManager.refreshToken(message.data.refreshToken);
+                            result = refresh.success
+                                ? { success: true, data: refresh }
+                                : {
+                                      success: false,
+                                      error: new Error(refresh.error || "Refresh token failed"),
+                                  };
+                            break;
+                        }
 						case "cleanup_sessions":
 							await userManager.cleanupExpiredSessions();
 							result = {
 								success: true,
-								message: "Session cleanup completed",
+								data: { message: "Session cleanup completed" },
 							};
 							break;
 						// Profile management commands
-						case "get_profile_states":
-							result = pm.getAllProfileStates();
-							break;
-						case "get_profile_state":
-							result = pm.getProfileState(message.data.name);
-							break;
-						case "get_profile_metrics":
-							result = pm.getProfileMetrics(message.data.name);
-							break;
-						case "get_all_profile_metrics":
-							result = Object.fromEntries(pm.getAllProfileMetrics());
-							break;
-						case "get_profiles_with_states":
-							result = pm.getProfilesWithStates();
-							break;
-						case "get_profile_task_queue":
-							result = pm.getProfileTaskQueue(message.data.name);
-							break;
-						case "update_profile_status":
-							result = {
-								success: pm.updateProfileStatus(message.data.name, message.data.isActive),
-							};
-							break;
-						case "get_best_profile_for_task":
-							result = pm.getBestProfileForTask(message.data.task);
-							break;
-						case "assign_task_to_profile":
-							result = {
-								success: pm.assignTaskToProfile(message.data.profileName, message.data.task),
-							};
-							break;
+                        case "get_profile_states":
+                            result = { success: true, data: pm.getAllProfileStates() };
+                            break;
+                        case "get_profile_state":
+                            result = { success: true, data: pm.getProfileState(message.data.name) };
+                            break;
+                        case "get_profile_metrics":
+                            result = { success: true, data: pm.getProfileMetrics(message.data.name) };
+                            break;
+                        case "get_all_profile_metrics":
+                            result = { success: true, data: Object.fromEntries(pm.getAllProfileMetrics()) };
+                            break;
+                        case "get_profiles_with_states":
+                            result = { success: true, data: pm.getProfilesWithStates() };
+                            break;
+                        case "get_profile_task_queue":
+                            result = { success: true, data: pm.getProfileTaskQueue(message.data.name) };
+                            break;
+                        case "update_profile_status":
+                            result = {
+                                success: true,
+                                data: pm.updateProfileStatus(message.data.name, message.data.isActive),
+                            };
+                            break;
+                        case "get_best_profile_for_task":
+                            result = { success: true, data: pm.getBestProfileForTask(message.data.task) };
+                            break;
+                        case "assign_task_to_profile":
+                            result = {
+                                success: true,
+                                data: pm.assignTaskToProfile(message.data.profileName, message.data.task),
+                            };
+                            break;
 						case "unlock_accounts":
 							console.log("[DAEMON] Unlocking all user accounts");
 							try {
@@ -326,34 +376,35 @@ async function main() {
 
 										delete updatedUser.lockedUntil;
 
-										const updateResult = await userManager.updateUser(updatedUser);
-										if (updateResult.success) {
-											unlockedCount++;
-										}
+										await userManager.updateUser(updatedUser);
+										unlockedCount++;
 									}
 								}
 
 								result = {
 									success: true,
-									unlockedCount,
-									totalUsers: users.length,
-									message: `Unlocked ${unlockedCount} user accounts`,
+									data: {
+										unlockedCount,
+										totalUsers: users.length,
+										message: `Unlocked ${unlockedCount} user accounts`,
+									},
 								};
 							} catch (error) {
 								result = {
 									success: false,
-									error: (error as Error).message,
+									error: error instanceof Error ? error : new Error(String(error)),
 								};
 							}
 							break;
 						default:
-							throw new Error(`Unknown command: ${message.command}`);
+							result = { success: false, error: new Error(`Unknown command: ${message.command}`) };
 					}
 
 					socket.write(`${JSON.stringify(result)}\n`);
 				} catch (error) {
 					console.error("[DAEMON] Error processing command:", error);
-					socket.write(`${JSON.stringify({ error: (error as Error).message })}\n`);
+					const err = error instanceof Error ? error : new Error(String(error));
+					socket.write(`${JSON.stringify({ success: false, error: err.message })}\n`);
 				}
 			});
 
@@ -367,10 +418,11 @@ async function main() {
 		});
 
 		server.on("error", (err: unknown) => {
-			if (err.code === "EADDRINUSE") {
+			const error = err as NodeJS.ErrnoException;
+			if (error && error.code === "EADDRINUSE") {
 				console.error(`[DAEMON] TCP port ${tcpPort} in use, skipping TCP server`);
 			} else {
-				console.error("[DAEMON] TCP server error:", err);
+				console.error("[DAEMON] TCP server error:", error);
 			}
 		});
 

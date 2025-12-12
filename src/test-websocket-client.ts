@@ -79,7 +79,7 @@ class TaskWebSocketClient {
 				{
 					const taskEvent = event as TaskUpdatedEvent;
 					console.log(`[WS-CLIENT] 📝 Task updated: ${taskEvent.data.task.title}`);
-					console.log(`  Changes:`, taskEvent.data.changes);
+					console.log("  Changes:", taskEvent.data.changes);
 				}
 				break;
 

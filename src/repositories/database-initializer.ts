@@ -1,6 +1,6 @@
 import { AuthService } from "./auth-service.ts";
-import { DatabaseSchemaManager } from "./repositories/auth-schema-manager.ts";
-import { AuthenticationRepository } from "./repositories/authentication-repository.ts";
+import { DatabaseSchemaManager } from "./auth-schema-manager.ts";
+import { AuthenticationRepository } from "./authentication-repository.ts";
 import type { CreateUserInput, User } from "./types.ts";
 
 export class DatabaseInitializer {
@@ -123,11 +123,7 @@ export class DatabaseInitializer {
 		const users: User[] = [];
 
 		try {
-			const userDb = (
-				this.authRepository as {
-					userDb?: { iterator: () => AsyncIterableIterator<[unknown, User]> };
-				}
-			).userDb;
+			const userDb = (this.authRepository as any).userDb;
 			const iterator = userDb.iterator();
 
 			for await (const [, value] of iterator) {

@@ -2,7 +2,7 @@ export interface ACPProfile {
 	name: string;
 	role: string;
 	systemPrompt: string;
-	getTaskPrompt: (context: Record<string, unknown>) => string;
+	getTaskPrompt: (_context: Record<string, unknown>) => string;
 	capabilities?: string[];
 	maxConcurrentTasks?: number;
 	priority?: number;
@@ -267,7 +267,7 @@ export class ProfileManager {
 		this.initializeProfileStates();
 	}
 
-	private registerProfile(profile: ACPProfile): void {
+	protected registerProfile(profile: ACPProfile): void {
 		this.profiles.set(profile.name, profile);
 		this.taskQueues.set(profile.name, []);
 		this.processingHistory.set(profile.name, []);
@@ -325,6 +325,12 @@ export class ProfileManager {
 			const updatedState = { ...currentState, ...updates, lastActivity: new Date() };
 			this.profileStates.set(name, updatedState);
 		}
+	}
+
+	isProfileAvailable(name: string): boolean {
+		const state = this.profileStates.get(name);
+		if (!state) return true;
+		return state.isActive && !state.isProcessing;
 	}
 
 	// Task queue management

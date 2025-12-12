@@ -235,7 +235,7 @@ export class EventIntegratedWebSocketManager extends EnhancedWebSocketManager {
 	// Subscribe to event bus events
 	subscribeToEventBus(eventBus: EventBus): void {
 		// Subscribe to all task events
-		const taskEventTypes = [
+		const taskEventTypes: DomainEvent["type"][] = [
 			"task_created",
 			"task_updated",
 			"task_deleted",

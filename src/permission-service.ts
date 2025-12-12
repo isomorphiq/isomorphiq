@@ -252,14 +252,24 @@ export class PermissionService {
 					}
 					break;
 
-				case "team_member":
-					if (
-						value &&
-						!this.isTeamMember(context.userId, context.taskAssignedTo, context.teamMembers)
-					) {
-						return false;
-					}
-					break;
+					case "team_member":
+						{
+							const userId = typeof context.userId === "string" ? context.userId : "";
+							const taskAssignee =
+								typeof context.taskAssignedTo === "string" ? context.taskAssignedTo : "";
+							const teamMembers = Array.isArray(context.teamMembers)
+								? (context.teamMembers as string[])
+								: [];
+						if (
+							value &&
+								(!userId ||
+									!taskAssignee ||
+									!this.isTeamMember(userId, taskAssignee, teamMembers))
+						) {
+							return false;
+						}
+						}
+						break;
 
 				default:
 					console.warn(`[PERMISSION-SERVICE] Unknown condition: ${key}`);

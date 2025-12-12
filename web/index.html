@@ -8,7 +8,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Isomorphia | Command the Flow</title>
     <meta name="description" content="Isomorphia is a live command surface for human + AI crews—truthful queues, token-driven workflow, ACP-powered delivery." />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#0f172a" id="theme-color" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Isomorphia" />
@@ -56,7 +56,7 @@
       }
     </script>
     
-    <!-- Mobile optimizations -->
+    <!-- Mobile optimizations and theme support -->
     <style>
       /* Prevent pull-to-refresh and overscroll behaviors */
       html, body {
@@ -101,7 +101,41 @@
           font-size: 16px !important;
         }
       }
+      
+      /* Theme transitions */
+      * {
+        transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+      }
     </style>
+    
+    <!-- Theme initialization script -->
+    <script>
+      // Initialize theme before React loads to prevent flash
+      (function() {
+        const storedTheme = localStorage.getItem('theme');
+        const theme = storedTheme || 'system';
+        
+        let effectiveTheme = theme;
+        if (theme === 'system') {
+          effectiveTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        
+        const root = document.documentElement;
+        if (effectiveTheme === 'dark') {
+          root.classList.add('dark');
+          root.classList.remove('light');
+        } else {
+          root.classList.add('light');
+          root.classList.remove('dark');
+        }
+        
+        // Update theme-color meta tag
+        const themeColorMeta = document.getElementById('theme-color');
+        if (themeColorMeta) {
+          themeColorMeta.content = effectiveTheme === 'dark' ? '#0f172a' : '#ffffff';
+        }
+      })();
+    </script>
   </head>
   <body style="margin: 0px;">
     <div id="root"></div>
@@ -125,7 +159,7 @@
         <div style="
           width: 40px;
           height: 40px;
-          border: 3px solid #1f2937;
+          border: 3px solid #374151;
           border-top: 3px solid #3b82f6;
           border-radius: 50%;
           animation: spin 1s linear infinite;

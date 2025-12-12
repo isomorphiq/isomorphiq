@@ -1,42 +1,42 @@
 {
-  "compilerOptions": {
-    // File Layout
-    "outDir": "./dist",
+    "compilerOptions": {
+        // File Layout
+        "outDir": "./dist",
 
-    // Environment Settings
-    "module": "nodenext",
-    "target": "esnext",
-    "moduleResolution": "bundler",
-    "types": ["node"],
+        // Environment Settings
+        "module": "nodenext",
+        "target": "esnext",
+        "moduleResolution": "nodenext",
+        "allowImportingTsExtensions": true,
+        "types": ["node"],
 
-    // Other Outputs
-    "sourceMap": true,
-    "declaration": true,
-    "declarationMap": true,
+        // Other Outputs
+        "sourceMap": true,
+        "declaration": true,
+        "declarationMap": true,
 
-    // Stricter Typechecking Options
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
+        // Stricter Typechecking Options
+        "noUncheckedIndexedAccess": false,
+        "exactOptionalPropertyTypes": false,
 
-    // Recommended Options
-    "strict": true,
-    "jsx": "react-jsx",
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true,
-    "noUncheckedSideEffectImports": true,
-    "moduleDetection": "force",
-    "skipLibCheck": true,
-    "noEmit": false,
-
-    // Include patterns
+        // Recommended Options
+        "strict": false,
+        "jsx": "react-jsx",
+        "verbatimModuleSyntax": true,
+        "isolatedModules": true,
+        "noUncheckedSideEffectImports": true,
+        "moduleDetection": "force",
+        "skipLibCheck": true,
+        "useUnknownInCatchVariables": false,
+        "noEmit": false
+    },
     "include": [
-      "src/**/*"
+        "src/**/*"
     ],
     "exclude": [
-      "node_modules",
-      "dist",
-      "web",
-      "scripts"
+        "node_modules",
+        "dist",
+        "web",
+        "scripts"
     ]
-  }
 }

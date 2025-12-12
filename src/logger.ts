@@ -142,7 +142,7 @@ export class Logger {
 				name: error.name,
 				message: error.message,
 				stack: error.stack,
-				...(code !== undefined && { code }),
+				...(code !== undefined && { code: String(code) }),
 			};
 		} else if (error && typeof error === "object") {
 			errorData = error as LogEntry["error"];

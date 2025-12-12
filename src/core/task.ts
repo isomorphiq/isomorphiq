@@ -1,4 +1,4 @@
-import type { CreateTaskInput, TaskStatus, UpdateTaskInput } from "../types.ts";
+import type { CreateTaskInput, TaskStatus, TaskType, UpdateTaskInput } from "../types.ts";
 
 // Extended UpdateTaskInput with additional fields
 export interface ExtendedUpdateTaskInput extends UpdateTaskInput {
@@ -28,11 +28,13 @@ export interface TaskEntity extends BaseEntity {
 	description: string;
 	status: TaskStatus;
 	priority: TaskPriority;
+	type: TaskType;
 	dependencies: string[];
 	createdBy: string;
 	assignedTo?: string;
 	collaborators?: string[];
 	watchers?: string[];
+	[key: string]: unknown;
 }
 
 /**
@@ -118,7 +120,7 @@ export const TaskDomainRules = {
 		return { success: true, data: undefined };
 	},
 
-	validateCreateInput(input: CreateTaskInputWithPriority): Result<void> {
+	validateCreateInput(input: CreateTaskInputWithPriority & { type?: TaskType }): Result<void> {
 		const titleResult = TaskDomainRules.validateTitle(input.title);
 		if (!titleResult.success) return titleResult;
 
@@ -288,7 +290,7 @@ export const TaskFactory = {
 	create(input: CreateTaskInputWithPriority, createdBy: string): Result<TaskEntity> {
 		const validation = TaskDomainRules.validateCreateInput(input);
 		if (!validation.success) {
-			return validation as Result<TaskEntity>;
+			return { success: false, error: validation.error };
 		}
 
 		const now = new Date();
@@ -298,6 +300,7 @@ export const TaskFactory = {
 			description: input.description.trim(),
 			status: "todo",
 			priority: input.priority || "medium",
+			type: (input as { type?: TaskType }).type || "task",
 			dependencies: input.dependencies || [],
 			createdBy,
 			...(input.assignedTo && { assignedTo: input.assignedTo }),
@@ -313,7 +316,7 @@ export const TaskFactory = {
 	update(task: TaskEntity, input: UpdateTaskInput): Result<TaskEntity> {
 		const validation = TaskDomainRules.validateUpdateInput(input);
 		if (!validation.success) {
-			return validation as Result<TaskEntity>;
+			return { success: false, error: validation.error };
 		}
 
 		const updatedTask: TaskEntity = {

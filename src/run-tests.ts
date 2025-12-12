@@ -1,7 +1,26 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 
-const pexec = promisify(exec);
+const _pexec = promisify(exec);
+
+function execWithCode(
+	command: string,
+	options?: { timeout?: number },
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+	return new Promise((resolve, reject) => {
+		exec(command, options, (error, stdout, stderr) => {
+			if (error) {
+				reject(error);
+			} else {
+				resolve({
+					stdout: (stdout || "").toString(),
+					stderr: (stderr || "").toString(),
+					exitCode: 0,
+				});
+			}
+		});
+	});
+}
 
 export interface TestRunResult {
 	passed: boolean;
@@ -16,7 +35,7 @@ export async function runLintAndTests(): Promise<TestRunResult> {
 	let testPassed = false;
 
 	try {
-		const lint = await pexec("npm run lint", { timeout: 120_000 });
+		const lint = await execWithCode("npm run lint", { timeout: 120_000 });
 		output += `--- LINT STDOUT ---\n${lint.stdout}\n--- LINT STDERR ---\n${lint.stderr}\n`;
 		lintPassed = lint.exitCode === 0;
 	} catch (error) {
@@ -26,7 +45,7 @@ export async function runLintAndTests(): Promise<TestRunResult> {
 	}
 
 	try {
-		const test = await pexec("npm test", { timeout: 180_000 });
+		const test = await execWithCode("npm test", { timeout: 180_000 });
 		output += `--- TEST STDOUT ---\n${test.stdout}\n--- TEST STDERR ---\n${test.stderr}\n`;
 		testPassed = test.exitCode === 0;
 	} catch (error) {

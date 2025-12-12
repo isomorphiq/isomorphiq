@@ -231,6 +231,13 @@ export const EventFactory = {
 		data: { task, createdBy },
 	}),
 
+	createTaskUpdated: (task: Record<string, unknown>, changes: Record<string, unknown>, updatedBy: string): TaskUpdatedEvent => ({
+		id: `task_updated_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+		type: "task_updated",
+		timestamp: new Date(),
+		data: { task, changes, updatedBy },
+	}),
+
 	createTaskDeleted: (taskId: string, deletedBy: string): TaskDeletedEvent => ({
 		id: `task_deleted_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
 		type: "task_deleted",
@@ -330,5 +337,6 @@ import type {
 	TaskDependencyRemovedEvent,
 	TaskPriorityChangedEvent,
 	TaskStatusChangedEvent,
+	TaskUpdatedEvent,
 	TaskWatchersUpdatedEvent,
 } from "./events.ts";

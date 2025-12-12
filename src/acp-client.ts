@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import type { PermissionRequest, PermissionResponse, SessionUpdateParams } from "./types.ts";
 
 export interface AcpClientInterface {
@@ -16,25 +17,25 @@ export class TaskClient implements AcpClientInterface {
 		const update = (params.update ?? params.updates ?? {}) as Record<string, unknown>;
 		const updateType = update.sessionUpdate as string | undefined;
 		console.log(`[ACP] 🔄 Session update: ${updateType ?? "unknown"}`);
-		console.log(`[ACP] 📝 Full update:`, JSON.stringify(update, null, 2));
+		console.log("[ACP] 📝 Full update:", JSON.stringify(update, null, 2));
 
 		switch (updateType) {
 			case "tool_call":
 				console.log(`[ACP] 🔧 Tool call START: ${update.title}`);
-				console.log(`[ACP] 📋 Tool call details:`, JSON.stringify(update, null, 2));
+				console.log("[ACP] 📋 Tool call details:", JSON.stringify(update, null, 2));
 				console.log(`[ACP] ⚡ Tool status: ${update.status}`);
 				if (update.arguments) {
-					console.log(`[ACP] 📤 Tool arguments:`, JSON.stringify(update.arguments, null, 2));
+					console.log("[ACP] 📤 Tool arguments:", JSON.stringify(update.arguments, null, 2));
 				}
 				break;
 			case "tool_call_update":
 				console.log(`[ACP] 🔄 Tool UPDATE: ${update.toolCallId}`);
 				console.log(`[ACP] 📊 Tool status: ${update.status}`);
 				if (update.result) {
-					console.log(`[ACP] 📥 Tool result:`, JSON.stringify(update.result, null, 2));
+					console.log("[ACP] 📥 Tool result:", JSON.stringify(update.result, null, 2));
 				}
 				if (update.error) {
-					console.log(`[ACP] ❌ Tool error:`, JSON.stringify(update.error, null, 2));
+					console.log("[ACP] ❌ Tool error:", JSON.stringify(update.error, null, 2));
 				}
 				break;
 			case "agent_message_chunk": {
@@ -47,18 +48,18 @@ export class TaskClient implements AcpClientInterface {
 				break;
 			}
 			case "turn_complete":
-				console.log(`[ACP] ✅ Turn completed`);
-				console.log(`[ACP] 📊 Turn stats:`, JSON.stringify(update, null, 2));
+				console.log("[ACP] ✅ Turn completed");
+				console.log("[ACP] 📊 Turn stats:", JSON.stringify(update, null, 2));
 				this.markTurnComplete("turn_complete");
 				break;
 			case "end_turn":
-				console.log(`[ACP] ✅ End turn received`);
-				console.log(`[ACP] 📊 End turn stats:`, JSON.stringify(update, null, 2));
+				console.log("[ACP] ✅ End turn received");
+				console.log("[ACP] 📊 End turn stats:", JSON.stringify(update, null, 2));
 				this.markTurnComplete("end_turn");
 				break;
 			case "session_complete":
-				console.log(`[ACP] 🏁 Session completed`);
-				console.log(`[ACP] 📋 Session summary:`, JSON.stringify(update, null, 2));
+				console.log("[ACP] 🏁 Session completed");
+				console.log("[ACP] 📋 Session summary:", JSON.stringify(update, null, 2));
 				this.markTurnComplete("session_complete");
 				break;
 			default:
@@ -71,19 +72,17 @@ export class TaskClient implements AcpClientInterface {
 			string,
 			unknown
 		>;
-		const _options = (params.context as Record<string, unknown>)?.options as Array<
-			Record<string, unknown>
-		>;
+
 		console.log(`[ACP] 🔐 Permission requested for: ${toolCall?.title as string}`);
-		console.log(`[ACP] 📋 Permission details:`, JSON.stringify(params, null, 2));
-		console.log(`[ACP] ✅ Auto-approving tool call`);
+		console.log("[ACP] 📋 Permission details:", JSON.stringify(params, null, 2));
+		console.log("[ACP] ✅ Auto-approving tool call");
 
 		// Auto-approve all tool calls for task manager
 		const response = {
 			outcome: "approved" as const,
 			reason: "Task manager auto-approves all tool calls",
 		};
-		console.log(`[ACP] 📤 Permission response:`, JSON.stringify(response, null, 2));
+		console.log("[ACP] 📤 Permission response:", JSON.stringify(response, null, 2));
 		return response;
 	}
 

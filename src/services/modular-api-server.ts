@@ -17,6 +17,9 @@ export type RouteHandler = (
 // Middleware interface
 export type Middleware = (req: Request, res: Response, next: NextFunction) => void | Promise<void>;
 
+// Export AuthenticatedRequest type for use in routes
+export type { AuthenticatedRequest };
+
 // Route configuration
 export interface RouteConfig {
 	method: "get" | "post" | "put" | "delete" | "patch";
@@ -618,7 +621,7 @@ export class ModularApiServer {
 		return new Promise((resolve, reject) => {
 			const server = this.app.listen(port, () => {
 				console.log(`[HTTP API] Modular API server listening on port ${port}`);
-				console.log(`[HTTP API] Registered modules:`);
+				console.log("[HTTP API] Registered modules:");
 				this.modules.forEach((module) => {
 					console.log(`  - ${module.constructor.name}: ${module.getPathPrefix()}`);
 				});

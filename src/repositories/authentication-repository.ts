@@ -49,8 +49,8 @@ export class AuthenticationRepository {
 		return `${prefix}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
 	}
 
-	private async createIndex<T>(
-		db: Level<string, T>,
+	private async createIndex(
+		db: Level<string, unknown>,
 		indexKey: string,
 		value: string,
 		targetKey: string,
@@ -58,8 +58,8 @@ export class AuthenticationRepository {
 		await db.put(`${indexKey}${value}`, targetKey);
 	}
 
-	private async removeIndex<T>(
-		db: Level<string, T>,
+	private async removeIndex(
+		db: Level<string, unknown>,
 		indexKey: string,
 		value: string,
 	): Promise<void> {
@@ -70,13 +70,13 @@ export class AuthenticationRepository {
 		}
 	}
 
-	private async findByIndex<T>(
-		db: Level<string, T>,
+	private async findByIndex(
+		db: Level<string, unknown>,
 		indexKey: string,
 		value: string,
 	): Promise<string | null> {
 		try {
-			return await db.get(`${indexKey}${value}`);
+			return (await db.get(`${indexKey}${value}`)) as string;
 		} catch (_error) {
 			return null;
 		}

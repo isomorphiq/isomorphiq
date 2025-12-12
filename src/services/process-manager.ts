@@ -310,7 +310,7 @@ export class ProcessManager extends EventEmitter {
 				);
 				status.status = "error";
 				status.lastError = `Exceeded max restarts (${this.config.maxRestarts})`;
-				this.emit("processError", name, new Error(`Exceeded max restarts`));
+				this.emit("processError", name, new Error("Exceeded max restarts"));
 			}
 		}
 	}

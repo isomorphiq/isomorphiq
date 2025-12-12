@@ -216,7 +216,10 @@ export class LevelDbTaskRepository implements ITaskRepository {
 		try {
 			const allTasksResult = await this.findAll();
 			if (!allTasksResult.success) {
-				return allTasksResult;
+				return {
+					success: false,
+					error: allTasksResult.error || new Error("Failed to fetch tasks"),
+				};
 			}
 
 			let tasks = allTasksResult.data;
@@ -287,11 +290,11 @@ export class LevelDbTaskRepository implements ITaskRepository {
 	}
 
 	async filter(filters: TaskFilters): Promise<Result<TaskEntity[]>> {
-		return this.search({ filters }).then((result) =>
-			result.success
-				? { success: true, data: result.data.tasks }
-				: (result as Result<TaskEntity[]>),
-		);
+		const result = await this.search({ filters });
+		if (!result.success) {
+			return { success: false, error: result.error };
+		}
+		return { success: true, data: result.data.tasks };
 	}
 
 	async findDependents(taskId: string): Promise<Result<TaskEntity[]>> {
