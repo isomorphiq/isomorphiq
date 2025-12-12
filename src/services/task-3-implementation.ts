@@ -178,7 +178,7 @@ export const Task3Utils = {
     const visited = new Set<string>();
     const recursionStack = new Set<string>();
     
-    const hasCycle = (taskId: string, dependencies: string[]): boolean => {
+    const hasCycle = (taskId: string): boolean => {
       if (recursionStack.has(taskId)) {
         errors.push(`Circular dependency detected involving task: ${taskId}`);
         return true;
@@ -192,7 +192,7 @@ export const Task3Utils = {
       const task = tasks.find(t => t.id === taskId);
       if (task && task.dependencies) {
         for (const dep of task.dependencies) {
-          if (hasCycle(dep, [])) return true;
+          if (hasCycle(dep)) return true;
         }
       }
       
@@ -203,7 +203,7 @@ export const Task3Utils = {
     // Check all tasks for circular dependencies
     for (const task of tasks) {
       if (task.dependencies && task.dependencies.length > 0) {
-        if (hasCycle(task.id, task.dependencies)) {
+        if (hasCycle(task.id)) {
           return { valid: false, errors };
         }
       }

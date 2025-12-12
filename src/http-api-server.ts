@@ -73,11 +73,11 @@ const canUserWrite = async (user?: User | null): Promise<boolean> => {
 };
 
 const enforceAdminWriteAccess = async (
-	req: AuthenticatedRequest,
+	req: AuthContextRequest,
 	res: express.Response,
 	next: express.NextFunction,
 ) => {
-	const user = req.user;
+	const user = req.user || req.authUser;
 	const allowed = await canUserWrite(user);
 	if (!allowed) {
 		return res.status(403).json({ error: "Write access is restricted to the admin user nyan" });
@@ -86,6 +86,7 @@ const enforceAdminWriteAccess = async (
 };
 
 type AuthenticatedRequest = express.Request & { user?: User };
+type AuthContextRequest = AuthenticatedRequest & { authUser?: User; isAuthenticated?: boolean };
 
 // Import advanced search types
 import type { 
@@ -228,7 +229,7 @@ export type AppRouter = typeof appRouter;
 
 // Authentication middleware
 const authenticateToken = async (
-	req: AuthenticatedRequest,
+	req: AuthContextRequest,
 	res: express.Response,
 	next: express.NextFunction,
 ) => {
@@ -248,6 +249,8 @@ const authenticateToken = async (
 		}
 
 		req.user = user;
+		req.authUser = user;
+		req.isAuthenticated = true;
 		next();
 	} catch (error) {
 		console.error("[HTTP API] Authentication error:", error);
@@ -257,8 +260,8 @@ const authenticateToken = async (
 
 // Authorization middleware
 const requirePermission = (resource: string, action: string) => {
-	return async (req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) => {
-		const user = req.user;
+	return async (req: AuthContextRequest, res: express.Response, next: express.NextFunction) => {
+		const user = req.user || req.authUser;
 
 		if (!user) {
 			return res.status(401).json({ error: "Authentication required" });
@@ -295,6 +298,26 @@ export function buildHttpApiApp(pm: ProductManager) {
 	// Middleware
 	app.use(cors());
 	app.use(express.json());
+	// Soft auth context to mark authenticated requests for downstream middleware/logging
+	app.use(async (req: AuthContextRequest, _res, next) => {
+		req.isAuthenticated = false;
+		const authHeader = req.headers.authorization;
+		const token = authHeader?.split(" ")[1];
+		if (!token) {
+			return next();
+		}
+		try {
+			const userManager = getUserManager();
+			const user = await userManager.validateSession(token);
+			if (user) {
+				req.authUser = user;
+				req.isAuthenticated = true;
+			}
+		} catch (error) {
+			console.warn("[HTTP API] Soft auth context failed:", error);
+		}
+		return next();
+	});
 
 	// REST API Endpoints
 
