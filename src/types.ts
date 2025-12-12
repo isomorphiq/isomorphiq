@@ -257,7 +257,11 @@ export type WebSocketEventType =
 	| "task_assigned"
 	| "task_collaborators_updated"
 	| "task_watchers_updated"
-	| "tasks_list";
+	| "tasks_list"
+	| "task_archived"
+	| "task_restored"
+	| "retention_policy_executed"
+	| "pong";
 
 export interface WebSocketEvent {
 	type: WebSocketEventType;

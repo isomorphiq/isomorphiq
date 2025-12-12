@@ -3,59 +3,88 @@ import { test } from "node:test";
 import express from "express";
 import { registerProfileRoutes } from "./profile-routes.ts";
 import type { ProductManager } from "../../index.ts";
+import type { ACPProfile, ProfileMetrics, ProfileState } from "../../acp-profiles.ts";
+import type { Task } from "../../types.ts";
 
 class StubProfileManager implements Pick<
-    ProductManager,
-    | "getProfilesWithStates"
-    | "getAllProfileStates"
+	ProductManager,
+	| "getProfilesWithStates"
+	| "getAllProfileStates"
     | "getProfileState"
     | "getProfileMetrics"
     | "getAllProfileMetrics"
-    | "getProfileTaskQueue"
-    | "updateProfileStatus"
-    | "assignTaskToProfile"
-    | "getBestProfileForTask"
+	| "getProfileTaskQueue"
+	| "updateProfileStatus"
+	| "assignTaskToProfile"
+	| "getBestProfileForTask"
 > {
-    getProfilesWithStates() {
-        return [{ name: "alpha", state: "ready" }];
-    }
+	private profile: ACPProfile = {
+		name: "alpha",
+		role: "Test profile",
+		systemPrompt: "Test",
+		getTaskPrompt: () => "test",
+	};
 
-    getAllProfileStates() {
-        return { alpha: "ready" };
-    }
+	private state: ProfileState = {
+		name: "alpha",
+		isActive: true,
+		currentTasks: 0,
+		completedTasks: 0,
+		failedTasks: 0,
+		averageProcessingTime: 0,
+		lastActivity: new Date(),
+		queueSize: 0,
+		isProcessing: false,
+	};
 
-    getProfileState(name: string) {
-        return name === "alpha" ? { name, state: "ready" } : null;
-    }
+	private metrics: ProfileMetrics = {
+		throughput: 10,
+		successRate: 1,
+		averageTaskDuration: 10,
+		queueWaitTime: 0,
+		errorRate: 0,
+	};
 
-    getProfileMetrics(name: string) {
-        return name === "alpha" ? { throughput: 10 } : null;
-    }
+	getProfilesWithStates() {
+		return [{ profile: this.profile, state: this.state, metrics: this.metrics }];
+	}
 
-    getAllProfileMetrics() {
-        return new Map([["alpha", { throughput: 10 }]]);
-    }
+	getAllProfileStates() {
+		return [this.state];
+	}
 
-    getProfileTaskQueue(name: string) {
-        return name === "alpha" ? [{ id: "t1" }] : [];
-    }
+	getProfileState(name: string) {
+		return name === "alpha" ? this.state : undefined;
+	}
 
-    updateProfileStatus(name: string, isActive: boolean) {
-        return name === "alpha" && isActive;
-    }
+	getProfileMetrics(name: string) {
+		return name === "alpha" ? this.metrics : undefined;
+	}
 
-    assignTaskToProfile(name: string, _task: unknown) {
-        return name === "alpha";
-    }
+	getAllProfileMetrics() {
+		return new Map([["alpha", this.metrics]]);
+	}
 
-    getBestProfileForTask(_task: unknown) {
-        return { name: "alpha" };
-    }
+	getProfileTaskQueue(name: string) {
+		return name === "alpha" ? [{ id: "t1" }] : [];
+	}
+
+	updateProfileStatus(name: string, isActive: boolean) {
+		return name === "alpha" && isActive;
+	}
+
+	assignTaskToProfile(name: string, _task: Task) {
+		return name === "alpha";
+	}
+
+	getBestProfileForTask(_task: Task) {
+		return this.profile;
+	}
 }
 
 const createServer = () => {
-    const app = express();
-    app.use(express.json());
+	const app = express();
+	app.use(express.json());
     registerProfileRoutes(app, new StubProfileManager() as unknown as ProductManager);
     return app.listen(0);
 };

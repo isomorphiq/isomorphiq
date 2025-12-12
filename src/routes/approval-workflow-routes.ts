@@ -52,7 +52,7 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.get("/workflows/:id", authMiddleware, async (req: Request, res: Response) => {
+	router.get("/workflows/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const result = await approvalService.workflow.get(req.params.id);
 
@@ -66,7 +66,7 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.put("/workflows/:id", authMiddleware, async (req: Request, res: Response) => {
+	router.put("/workflows/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const input: UpdateApprovalWorkflowInput = { ...req.body, id: req.params.id };
 			const result = await approvalService.workflow.update(req.params.id, input, req.user?.id);
@@ -81,7 +81,7 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.delete("/workflows/:id", authMiddleware, async (req: Request, res: Response) => {
+	router.delete("/workflows/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const result = await approvalService.workflow.delete(req.params.id, req.user?.id);
 
@@ -95,9 +95,12 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.get("/workflows/active", authMiddleware, async (_req: Request, res: Response) => {
-		try {
-			const result = await approvalService.workflow.getActive();
+	router.get(
+		"/workflows/active",
+		authMiddleware,
+		async (_req: AuthenticatedRequest, res: Response) => {
+			try {
+				const result = await approvalService.workflow.getActive();
 
 			if (result.success) {
 				res.json(result.data);
@@ -110,7 +113,7 @@ export function createApprovalWorkflowRoutes(
 	});
 
 	// Approval routes
-	router.post("/approvals/start", authMiddleware, async (req: Request, res: Response) => {
+	router.post("/approvals/start", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const input: StartTaskApprovalInput = { ...req.body, requestedBy: req.user?.id };
 			const result = await approvalService.approval.start(input);
@@ -125,7 +128,7 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.get("/approvals", authMiddleware, async (req: Request, res: Response) => {
+	router.get("/approvals", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const { status, taskId, approverId } = req.query;
 
@@ -150,7 +153,7 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.get("/approvals/:id", authMiddleware, async (req: Request, res: Response) => {
+	router.get("/approvals/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const result = await approvalService.approval.get(req.params.id);
 
@@ -164,12 +167,15 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.post("/approvals/:id/process", authMiddleware, async (req: Request, res: Response) => {
-		try {
-			const input: ProcessApprovalInput = {
-				...req.body,
-				approvalId: req.params.id,
-				approverId: req.user?.id,
+	router.post(
+		"/approvals/:id/process",
+		authMiddleware,
+		async (req: AuthenticatedRequest, res: Response) => {
+			try {
+				const input: ProcessApprovalInput = {
+					...req.body,
+					approvalId: req.params.id,
+					approverId: req.user?.id,
 			};
 			const result = await approvalService.approval.process(input);
 
@@ -183,10 +189,13 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.post("/approvals/:id/cancel", authMiddleware, async (req: Request, res: Response) => {
-		try {
-			const { reason } = req.body;
-			const result = await approvalService.approval.cancel(req.params.id, req.user?.id, reason);
+	router.post(
+		"/approvals/:id/cancel",
+		authMiddleware,
+		async (req: AuthenticatedRequest, res: Response) => {
+			try {
+				const { reason } = req.body;
+				const result = await approvalService.approval.cancel(req.params.id, req.user?.id, reason);
 
 			if (result.success) {
 				res.json(result.data);
@@ -198,11 +207,14 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.post("/approvals/:id/escalate", authMiddleware, async (req: Request, res: Response) => {
-		try {
-			const { stageId, reason } = req.body;
-			const result = await approvalService.approval.escalate(
-				req.params.id,
+	router.post(
+		"/approvals/:id/escalate",
+		authMiddleware,
+		async (req: AuthenticatedRequest, res: Response) => {
+			try {
+				const { stageId, reason } = req.body;
+				const result = await approvalService.approval.escalate(
+					req.params.id,
 				stageId,
 				req.user?.id,
 				reason,
@@ -218,10 +230,13 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.post("/approvals/:id/delegate", authMiddleware, async (req: Request, res: Response) => {
-		try {
-			const { stageId, toUserId } = req.body;
-			const result = await approvalService.approval.delegate(
+	router.post(
+		"/approvals/:id/delegate",
+		authMiddleware,
+		async (req: AuthenticatedRequest, res: Response) => {
+			try {
+				const { stageId, toUserId } = req.body;
+				const result = await approvalService.approval.delegate(
 				req.params.id,
 				stageId,
 				req.user?.id,

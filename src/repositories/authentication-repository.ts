@@ -645,6 +645,27 @@ export class AuthenticationRepository {
 		}
 	}
 
+	async countActiveSessions(): Promise<number> {
+		await this.ensureDatabasesOpen();
+
+		const iterator = this.sessionDb.iterator();
+		let count = 0;
+
+		try {
+			for await (const [, session] of iterator) {
+				if (session.isActive) {
+					count++;
+				}
+			}
+		} finally {
+			if (typeof iterator.close === "function") {
+				await iterator.close();
+			}
+		}
+
+		return count;
+	}
+
 	async close(): Promise<void> {
 		if (this.dbReady) {
 			await this.userDb.close();

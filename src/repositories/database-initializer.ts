@@ -1,7 +1,6 @@
-import { AuthService } from "./auth-service.ts";
 import { DatabaseSchemaManager } from "./auth-schema-manager.ts";
 import { AuthenticationRepository } from "./authentication-repository.ts";
-import type { CreateUserInput, User } from "./types.ts";
+import type { CreateUserInput, User } from "../types.ts";
 
 export class DatabaseInitializer {
 	private schemaManager: DatabaseSchemaManager;
@@ -10,7 +9,6 @@ export class DatabaseInitializer {
 	constructor(dbPath?: string) {
 		this.schemaManager = new DatabaseSchemaManager(dbPath);
 		this.authRepository = new AuthenticationRepository(dbPath);
-		this.authService = new AuthService();
 	}
 
 	async initialize(): Promise<{ success: boolean; message: string; error?: string }> {
@@ -165,27 +163,7 @@ export class DatabaseInitializer {
 			const userCount = users.length;
 
 			// Get session count (simplified)
-			let sessionCount = 0;
-			try {
-				const sessionDb = (
-					this.authRepository as {
-						sessionDb?: {
-							iterator: () => AsyncIterableIterator<[unknown, { isActive?: boolean }]>;
-						};
-					}
-				).sessionDb;
-				const iterator = sessionDb.iterator();
-
-				for await (const [, value] of iterator) {
-					if (value.isActive) {
-						sessionCount++;
-					}
-				}
-
-				await iterator.close();
-			} catch (error) {
-				console.error("[DB-INIT] Error getting session count:", error);
-			}
+			const sessionCount = await this.authRepository.countActiveSessions();
 
 			// Validate schema
 			const validationResult = await this.schemaManager.validateSchema();

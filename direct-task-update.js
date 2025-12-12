@@ -11,10 +11,25 @@ async function directTaskUpdate() {
     try {
         await pm.initialize();
         
+        // Get command line args for task ID
+        const taskId = process.argv[2];
+        const assignTo = process.argv[3] || 'development';
+        const newStatus = process.argv[4] || 'in-progress';
+        
+      // Get command line args for task ID
+        const taskId = process.argv[2];
+        const assignTo = process.argv[3] || 'development';
+        const newStatus = process.argv[4] || 'in-progress';
+        
+    // Get command line args for task ID
+        const targetTaskId = process.argv[2];
+        const assignTo = process.argv[3] || 'development';
+        const newStatus = process.argv[4] || 'in-progress';
+        
         // Get the specific task we need to update
         const allTasks = await pm.getAllTasks();
         const targetTask = allTasks.find(task => 
-            task.id === 'task-1765515832725-97bmmoxk2'
+            task.id === (targetTaskId || 'task-1765515832725-97bmmoxk2')
         );
         
         if (!targetTask) {
@@ -24,16 +39,12 @@ async function directTaskUpdate() {
         
         console.log(`[DIRECT] Found task: ${targetTask.title} (current status: ${targetTask.status})`);
         
-        // Update to in_progress first
-        console.log('[DIRECT] Updating status to in_progress...');
-        await pm.updateTask(targetTask.id, { status: 'in-progress' });
-        
-        // Wait a moment
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        // Update to completed
-        console.log('[DIRECT] Updating status to completed...');
-        await pm.updateTask(targetTask.id, { status: 'done' }); // Note: using 'done' instead of 'completed'
+        // Update to requested status with assignment
+        console.log(`[DIRECT] Updating status to ${newStatus} and assigning to ${assignTo}...`);
+        await pm.updateTask(targetTask.id, { 
+            status: newStatus,
+            assignedTo: assignTo 
+        });
         
         // Verify the update
         const updatedTasks = await pm.getAllTasks();

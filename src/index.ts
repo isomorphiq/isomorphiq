@@ -494,6 +494,11 @@ export class ProductManager {
 		return task;
 	}
 
+	// Update task assignment (alias for assignTask)
+	async updateTaskAssignment(id: string, assignedTo: string, assignedBy?: string): Promise<Task> {
+		return await this.assignTask(id, assignedTo, assignedBy);
+	}
+
 	// Update task collaborators
 	async updateTaskCollaborators(
 		id: string,
