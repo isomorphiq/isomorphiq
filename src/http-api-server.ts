@@ -25,9 +25,13 @@ import { createSchedulingRoutes } from "./routes/scheduling-routes.ts";
 import { createSecurityRoutes } from "./routes/security-routes.ts";
 import { setupWorkflowRoutes } from "./routes/workflow-routes.ts";
 import type {
-	Task,
-	TaskStatus,
+	CreateSavedSearchInput,
+	SavedSearch,
+	SearchQuery,
+	SearchResult,
+	SearchSort,
 	UpdateUserInput,
+	UpdateSavedSearchInput,
 	User,
 	WebSocketEvent,
 } from "./types.ts";
@@ -120,6 +124,8 @@ export function buildHttpApiApp(pm: ProductManager) {
 	// Authentication endpoints
 	registerAuthRoutes(app);
 	registerAdminRoutes(app);
+	registerTaskRoutes(app, pm);
+	registerSearchRoutes(app, pm);
 
 	// User management endpoints (admin only)
 
