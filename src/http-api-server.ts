@@ -12,6 +12,7 @@ import { registerAuthRoutes } from "./http/routes/auth-routes.ts";
 import { registerAdminRoutes } from "./http/routes/admin-routes.ts";
 import { registerTaskRoutes } from "./http/routes/task-routes.ts";
 import { registerSearchRoutes } from "./http/routes/search-routes.ts";
+import { registerProfileRoutes } from "./http/routes/profile-routes.ts";
 import {
 	authenticateToken,
 	requirePermission,
@@ -122,6 +123,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 	registerAdminRoutes(app);
 	registerTaskRoutes(app, pm);
 	registerSearchRoutes(app, pm);
+	registerProfileRoutes(app, pm);
 
 	// User management endpoints (admin only)
 
@@ -334,117 +336,6 @@ export function buildHttpApiApp(pm: ProductManager) {
 			}
 		},
 	);
-
-	// Profile management endpoints
-	app.get("/api/profiles/with-states", async (_req, res, next) => {
-		try {
-			const profiles = pm.getProfilesWithStates();
-			res.json(profiles);
-		} catch (error) {
-			next(error);
-		}
-	});
-
-	app.get("/api/profiles/states", async (_req, res, next) => {
-		try {
-			const states = pm.getAllProfileStates();
-			res.json(states);
-		} catch (error) {
-			next(error);
-		}
-	});
-
-	app.get("/api/profiles/:name/state", async (req, res, next) => {
-		try {
-			const state = pm.getProfileState(req.params.name);
-			if (!state) {
-				return res.status(404).json({ error: "Profile not found" });
-			}
-			res.json(state);
-		} catch (error) {
-			next(error);
-		}
-	});
-
-	app.get("/api/profiles/:name/metrics", async (req, res, next) => {
-		try {
-			const metrics = pm.getProfileMetrics(req.params.name);
-			if (!metrics) {
-				return res.status(404).json({ error: "Profile not found" });
-			}
-			res.json(metrics);
-		} catch (error) {
-			next(error);
-		}
-	});
-
-	app.get("/api/profiles/metrics", async (_req, res, next) => {
-		try {
-			const metrics = Object.fromEntries(pm.getAllProfileMetrics());
-			res.json(metrics);
-		} catch (error) {
-			next(error);
-		}
-	});
-
-	app.get("/api/profiles/:name/queue", async (req, res, next) => {
-		try {
-			const queue = pm.getProfileTaskQueue(req.params.name);
-			res.json(queue);
-		} catch (error) {
-			next(error);
-		}
-	});
-
-	app.put("/api/profiles/:name/status", async (req, res, next) => {
-		try {
-			const { isActive } = req.body;
-			if (typeof isActive !== "boolean") {
-				return res.status(400).json({ error: "isActive must be a boolean" });
-			}
-
-			const success = pm.updateProfileStatus(req.params.name, isActive);
-			if (!success) {
-				return res.status(404).json({ error: "Profile not found" });
-			}
-
-			res.json({ success: true });
-		} catch (error) {
-			next(error);
-		}
-	});
-
-	app.post("/api/profiles/:name/assign-task", async (req, res, next) => {
-		try {
-			const { task } = req.body;
-			if (!task || !task.title || !task.description) {
-				return res.status(400).json({ error: "Task must have title and description" });
-			}
-
-			const success = pm.assignTaskToProfile(req.params.name, task);
-			if (!success) {
-				return res.status(404).json({ error: "Profile not found" });
-			}
-
-			res.json({ success: true });
-		} catch (error) {
-			next(error);
-		}
-	});
-
-	app.post("/api/profiles/best-for-task", async (req, res, next) => {
-		try {
-			const { task } = req.body;
-			if (!task || !task.title) {
-				return res.status(400).json({ error: "Task must have title" });
-			}
-
-			const bestProfile = pm.getBestProfileForTask(task);
-			res.json({ bestProfile });
-		} catch (error) {
-			next(error);
-		}
-	});
 
 	// GET /api/health - Health check endpoint
 	app.get("/api/health", (_req, res) => {
