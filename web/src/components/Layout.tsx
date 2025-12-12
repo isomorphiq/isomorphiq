@@ -356,7 +356,7 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 						fontSize: "12px",
 					}}
 				>
-					<span>Opencode Task Manager · v1.0.0</span>
+					<span>Isomorphiq Task Manager · v1.0.0</span>
 					<span>
 						Status: <span style={{ color: "var(--color-accent-success)" }}>online</span>
 					</span>
