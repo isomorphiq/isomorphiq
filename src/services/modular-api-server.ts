@@ -30,7 +30,7 @@ export interface RouteConfig {
 
 // API module interface
 export interface ApiModule {
-	registerRoutes(app: express.Application): void;
+	registerRoutes(app: express.Router): void;
 	getPathPrefix(): string;
 }
 
@@ -121,7 +121,7 @@ export function errorHandler(
 export function createRateLimitMiddleware(options: { windowMs: number; max: number }): Middleware {
 	const requests = new Map<string, { count: number; resetTime: number }>();
 
-	return (req: Request, res: Response, next: NextFunction) => {
+	return (req: Request, res: Response, next: NextFunction): void => {
 		const key = req.ip || "unknown";
 		const now = Date.now();
 		const windowMs = options.windowMs;
@@ -136,10 +136,11 @@ export function createRateLimitMiddleware(options: { windowMs: number; max: numb
 		requestData.count++;
 
 		if (requestData.count > options.max) {
-			return res.status(429).json({
+			res.status(429).json({
 				error: "Too many requests",
 				retryAfter: Math.ceil((requestData.resetTime - now) / 1000),
 			});
+			return;
 		}
 
 		next();
@@ -169,7 +170,7 @@ export class HealthModule implements ApiModule {
 		return "/health";
 	}
 
-	registerRoutes(app: express.Application): void {
+	registerRoutes(app: express.Router): void {
 		app.get("/health", (_req, res) => {
 			res.json({
 				status: "healthy",
@@ -210,7 +211,7 @@ export class AuthModule implements ApiModule {
 		return "/api/auth";
 	}
 
-	registerRoutes(app: express.Application): void {
+	registerRoutes(app: express.Router): void {
 		const authMiddleware = createAuthMiddleware(this.userManager);
 
 		// POST /api/auth/login - User login
@@ -316,7 +317,7 @@ export class TasksModule implements ApiModule {
 		return "/api/tasks";
 	}
 
-	registerRoutes(app: express.Application): void {
+	registerRoutes(app: express.Router): void {
 		const authMiddleware = createAuthMiddleware(this.userManager);
 		const createTaskAuth = createAuthorizationMiddleware(this.userManager, "tasks", "create");
 		const readTaskAuth = createAuthorizationMiddleware(this.userManager, "tasks", "read");

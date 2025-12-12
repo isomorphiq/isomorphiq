@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import http from 'http';
+import { connect } from "net";
 
 class TaskAssigner {
   constructor() {

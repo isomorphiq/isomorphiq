@@ -287,7 +287,7 @@ export class TimeTrackingService implements ITimeTrackingService {
 
 		const validation = TimeTrackingDomainRules.validateTimeEntryUpdateInput(input);
 		if (!validation.success) {
-			return validation as Result<TimeEntry>;
+			return { success: false, error: validation.error };
 		}
 
 		const updatedEntry: TimeEntry = {
@@ -311,10 +311,11 @@ export class TimeTrackingService implements ITimeTrackingService {
 
 	async deleteTimeEntry(id: string, deletedBy: string): Promise<Result<void>> {
 		const existingResult = await this.getTimeEntry(id);
-		if (!existingResult.success || !existingResult.data) {
-			return existingResult.success
-				? { success: false, error: new NotFoundError("Time entry", id) }
-				: (existingResult as Result<void>);
+		if (!existingResult.success) {
+			return { success: false, error: existingResult.error };
+		}
+		if (!existingResult.data) {
+			return { success: false, error: new NotFoundError("Time entry", id) };
 		}
 
 		const timeEntry = existingResult.data;
@@ -393,7 +394,10 @@ export class TimeTrackingService implements ITimeTrackingService {
 			input.endDate,
 		);
 		if (!entriesResult.success) {
-			return entriesResult as Result<Timesheet>;
+			return { success: false, error: entriesResult.error };
+		}
+		if (!entriesResult.data) {
+			return { success: false, error: new Error("No time entries found for period") };
 		}
 
 		// Filter entries for the user
@@ -531,10 +535,11 @@ export class TimeTrackingService implements ITimeTrackingService {
 
 	async deleteTimesheet(id: string, deletedBy: string): Promise<Result<void>> {
 		const existingResult = await this.getTimesheet(id);
-		if (!existingResult.success || !existingResult.data) {
-			return existingResult.success
-				? { success: false, error: new NotFoundError("Timesheet", id) }
-				: (existingResult as Result<void>);
+		if (!existingResult.success) {
+			return { success: false, error: existingResult.error };
+		}
+		if (!existingResult.data) {
+			return { success: false, error: new NotFoundError("Timesheet", id) };
 		}
 
 		const timesheet = existingResult.data;
@@ -597,8 +602,8 @@ export class TimeTrackingService implements ITimeTrackingService {
 		endDate?: Date,
 	): Promise<Result<TimeAnalytics>> {
 		const allEntriesResult = await this.getTimeEntriesByUser(userId);
-		if (!allEntriesResult.success) {
-			return allEntriesResult as Result<TimeAnalytics>;
+		if (!allEntriesResult.success || !allEntriesResult.data) {
+			return { success: false, error: allEntriesResult.error };
 		}
 
 		let entries = allEntriesResult.data;

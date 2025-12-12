@@ -785,7 +785,7 @@ export class SchedulingEngine implements ISchedulingEngine {
  * Scheduling Service implementation
  */
 export class SchedulingService extends SchedulingEngine implements ISchedulingService {
-	protected config: SchedulingConfig;
+	protected override config: SchedulingConfig;
 
 	constructor(taskService: TaskService, config: Partial<SchedulingConfig> = {}) {
 		super(taskService, config);

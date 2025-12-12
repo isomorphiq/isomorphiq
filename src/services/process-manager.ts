@@ -6,6 +6,7 @@ import { startHttpApi } from "../http-api-server.ts";
 import { ProductManager } from "../index.ts";
 import { getUserManager } from "../user-manager.ts";
 import { WebSocketManager } from "../websocket-server.ts";
+import type { Task } from "../types.ts";
 
 export interface ProcessConfig {
 	name: string;
@@ -441,7 +442,7 @@ export class ProcessManager extends EventEmitter {
 				// Legacy task management commands
 				case "create_task":
 					if (!this.productManager) throw new Error("ProductManager not initialized");
-					result = await this.productManager.createTask(
+					const createdTask = await this.productManager.createTask(
 						command.data.title,
 						command.data.description,
 						command.data.priority || "medium",
@@ -451,15 +452,16 @@ export class ProcessManager extends EventEmitter {
 						command.data.collaborators,
 						command.data.watchers,
 					);
+					result = createdTask;
 					if (this.webSocketManager) {
-						this.webSocketManager.broadcastTaskCreated(result);
+						this.webSocketManager.broadcastTaskCreated(createdTask);
 					}
 					break;
 				case "list_tasks":
 					if (!this.productManager) throw new Error("ProductManager not initialized");
 					result = await this.productManager.getAllTasks();
 					if (this.webSocketManager) {
-						this.webSocketManager.broadcastTasksList(result);
+						this.webSocketManager.broadcastTasksList(result as Task[]);
 					}
 					break;
 				case "get_task": {
@@ -474,13 +476,17 @@ export class ProcessManager extends EventEmitter {
 						.getAllTasks()
 						.then((t) => t.find((task) => task.id === command.data.id));
 					const oldStatus = oldTask?.status || "todo";
-					result = await this.productManager.updateTaskStatus(command.data.id, command.data.status);
+					const updatedStatusTask = await this.productManager.updateTaskStatus(
+						command.data.id,
+						command.data.status,
+					);
+					result = updatedStatusTask;
 					if (this.webSocketManager) {
 						this.webSocketManager.broadcastTaskStatusChanged(
 							command.data.id,
 							oldStatus,
 							command.data.status,
-							result,
+							updatedStatusTask,
 						);
 					}
 					break;
@@ -491,16 +497,17 @@ export class ProcessManager extends EventEmitter {
 						.getAllTasks()
 						.then((t) => t.find((task) => task.id === command.data.id));
 					const oldPriority = oldTaskPriority?.priority || "medium";
-					result = await this.productManager.updateTaskPriority(
+					const updatedPriorityTask = await this.productManager.updateTaskPriority(
 						command.data.id,
 						command.data.priority,
 					);
+					result = updatedPriorityTask;
 					if (this.webSocketManager) {
 						this.webSocketManager.broadcastTaskPriorityChanged(
 							command.data.id,
 							oldPriority,
 							command.data.priority,
-							result,
+							updatedPriorityTask,
 						);
 					}
 					break;

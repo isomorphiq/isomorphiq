@@ -225,7 +225,10 @@ export class WebSocketEventBridge {
 // Enhanced WebSocket manager with event integration
 export class EventIntegratedWebSocketManager extends EnhancedWebSocketManager {
 	private eventBridge: WebSocketEventBridge;
-	private eventSubscriptions: string[] = [];
+	private eventSubscriptions: Array<{
+		type: DomainEvent["type"];
+		handler: (event: DomainEvent) => void;
+	}> = [];
 
 	constructor(config?: EnhancedWebSocketConfig) {
 		super(config);
@@ -249,10 +252,11 @@ export class EventIntegratedWebSocketManager extends EnhancedWebSocketManager {
 		];
 
 		for (const eventType of taskEventTypes) {
-			eventBus.on(eventType, (event: DomainEvent) => {
+			const handler = (event: DomainEvent) => {
 				this.eventBridge.handleDomainEvent(event);
-			});
-			this.eventSubscriptions.push(eventType);
+			};
+			eventBus.on(eventType, handler);
+			this.eventSubscriptions.push({ type: eventType, handler });
 		}
 
 		// Subscribe to system events for monitoring
@@ -269,8 +273,8 @@ export class EventIntegratedWebSocketManager extends EnhancedWebSocketManager {
 
 	// Unsubscribe from event bus events
 	unsubscribeFromEventBus(eventBus: EventBus): void {
-		for (const eventType of this.eventSubscriptions) {
-			eventBus.off(eventType, this.eventBridge.handleDomainEvent);
+		for (const subscription of this.eventSubscriptions) {
+			eventBus.off(subscription.type, subscription.handler);
 		}
 		this.eventSubscriptions = [];
 		console.log("[WS] Unsubscribed from all event types");

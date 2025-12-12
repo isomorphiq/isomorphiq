@@ -209,15 +209,16 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 			}
 
 			const existing = existingResult.data;
+			const { stages: inputStages, rules: inputRules, ...rest } = input;
 
 			const updated: ApprovalWorkflow = {
 				...existing,
-				...input,
+				...rest,
 				updatedAt: new Date(),
 			};
 
-			if (input.stages) {
-				updated.stages = input.stages.map((stage: WorkflowStage, index: number) => ({
+			if (inputStages) {
+				updated.stages = inputStages.map((stage: WorkflowStage, index: number) => ({
 					...stage,
 					id:
 						stage.id ||
@@ -225,8 +226,8 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 				}));
 			}
 
-			if (input.rules) {
-				updated.rules = input.rules.map((rule: WorkflowRule, index: number) => ({
+			if (inputRules) {
+				updated.rules = inputRules.map((rule: WorkflowRule, index: number) => ({
 					...rule,
 					id:
 						rule.id || `rule-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 11)}`,

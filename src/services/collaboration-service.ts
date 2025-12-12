@@ -87,10 +87,6 @@ const transformOperations = (
 	op1: TextOperation,
 	op2: TextOperation,
 ): [TextOperation, TextOperation] => {
-	if (op1.field !== op2.field) {
-		return [op1, op2];
-	}
-
 	if (op1.type === "insert" && op2.type === "insert") {
 		if ((op1.position || 0) <= (op2.position || 0)) {
 			return [op1, { ...op2, position: (op2.position || 0) + (op1.text?.length || 0) }];
@@ -299,8 +295,8 @@ export class CollaborationService implements ICollaborationService {
 		}
 
 		const transformedOpsResult = await this.transformOperation(operation, operation.revision);
-		if (!transformedOpsResult.success) {
-			return transformedOpsResult as Result<TaskEditOperation>;
+		if (!transformedOpsResult.success || !transformedOpsResult.data) {
+			return { success: false, error: transformedOpsResult.error };
 		}
 		const finalOperation = transformedOpsResult.data[transformedOpsResult.data.length - 1];
 

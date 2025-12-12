@@ -236,6 +236,7 @@ export class EnhancedWebSocketManager {
     private listeners: Set<(event: WebSocketEvent) => void> = new Set();
     private heartbeatInterval: NodeJS.Timeout | null = null;
     private cleanupInterval: NodeJS.Timeout | null = null;
+    private httpServer: HttpServer | null = null;
 
     constructor(config: EnhancedWebSocketConfig = {}) {
         this.config = {

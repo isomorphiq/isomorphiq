@@ -41,11 +41,11 @@ export class SimpleModularApiServer {
 	}
 
 	// Authentication middleware
-	private async authenticate(
+	private authenticate = async (
 		req: AuthenticatedRequest,
 		res: Response,
 		next: () => void,
-	): Promise<void> {
+	): Promise<void> => {
 		const authHeader = req.headers.authorization;
 		const token = authHeader?.split(" ")[1];
 
@@ -67,10 +67,10 @@ export class SimpleModularApiServer {
 			console.error("[HTTP API] Authentication error:", error);
 			res.status(500).json({ error: "Authentication failed" });
 		}
-	}
+	};
 
 	// Authorization middleware
-	private async authorize(resource: string, action: string) {
+	private authorize = (resource: string, action: string) => {
 		return async (req: AuthenticatedRequest, res: Response, next: () => void): Promise<void> => {
 			const user = req.user;
 			if (!user) {
@@ -90,7 +90,7 @@ export class SimpleModularApiServer {
 				res.status(500).json({ error: "Authorization failed" });
 			}
 		};
-	}
+	};
 
 	// Register all routes
 	private registerRoutes(): void {

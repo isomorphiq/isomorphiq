@@ -81,7 +81,7 @@ export class TaskService implements ITaskService {
 		// Validate input using domain rules
 		const validationResult = TaskDomainRules.validateCreateInput(input);
 		if (!validationResult.success) {
-			return validationResult as Result<TaskEntity>;
+			return { success: false, error: validationResult.error };
 		}
 
 		// Create task entity using factory
@@ -127,11 +127,14 @@ export class TaskService implements ITaskService {
 		}
 
 		const existingTask = existingResult.data;
+		if (!existingTask) {
+			return { success: false, error: new NotFoundError("Task", id) };
+		}
 
 		// Validate update input
 		const validationResult = TaskDomainRules.validateUpdateInput(input);
 		if (!validationResult.success) {
-			return validationResult as Result<TaskEntity>;
+			return { success: false, error: validationResult.error };
 		}
 
 		// Update task using factory
@@ -148,7 +151,7 @@ export class TaskService implements ITaskService {
 		// Check if task exists
 		const existingResult = await this.getTask(id);
 		if (!existingResult.success) {
-			return existingResult as Result<void>;
+			return { success: false, error: existingResult.error };
 		}
 
 		// Check if user has permission to delete
@@ -264,6 +267,9 @@ export class TaskService implements ITaskService {
 		}
 
 		const task = taskResult.data;
+		if (!task) {
+			return { success: false, error: new NotFoundError("Task", taskId) };
+		}
 		const collaborators = [...(task.collaborators || []), userId];
 
 		const updateResult = await this.updateTask(taskId, { id: taskId, collaborators }, updatedBy);
@@ -364,8 +370,8 @@ export class TaskService implements ITaskService {
 
 		// Check for circular dependencies
 		const allTasksResult = await this.getAllTasks();
-		if (!allTasksResult.success) {
-			return allTasksResult as Result<TaskEntity>;
+		if (!allTasksResult.success || !allTasksResult.data) {
+			return { success: false, error: allTasksResult.error };
 		}
 
 		const newDependencies = [...task.dependencies, dependsOn];
