@@ -279,6 +279,7 @@ export class SecurityService {
 		try {
 			return await this.securityDb.get(id);
 		} catch (_error) {
+			void _error;
 			return null;
 		}
 	}
@@ -289,7 +290,7 @@ export class SecurityService {
 		const policies: SecurityPolicy[] = [];
 		try {
 			const iterator = this.securityDb.iterator();
-			for await (const [_key, value] of iterator) {
+			for await (const [, value] of iterator) {
 				if (value.id && value.name) {
 					policies.push(value);
 				}

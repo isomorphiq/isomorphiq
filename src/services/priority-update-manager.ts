@@ -346,12 +346,12 @@ export class PriorityConsistencyValidator {
         const originalDeps = JSON.stringify(originalTask.dependencies.sort());
         const updatedDeps = JSON.stringify(updatedTask.dependencies.sort());
         if (originalDeps !== updatedDeps) {
-            errors.push(`Task dependencies changed during priority update`);
+            errors.push("Task dependencies changed during priority update");
         }
         
         // Check if updatedAt timestamp was updated
         if (new Date(updatedTask.updatedAt) <= new Date(originalTask.updatedAt)) {
-            errors.push(`Task updatedAt timestamp not properly updated`);
+            errors.push("Task updatedAt timestamp not properly updated");
         }
         
         return {

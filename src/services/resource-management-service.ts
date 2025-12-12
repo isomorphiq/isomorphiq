@@ -373,11 +373,10 @@ export class ResourceManagementService {
 
 		// TODO: Implement user skills tracking
 		// For now, assume basic skill distribution
-		for (const _user of users.filter((u) => u.isActive)) {
-			availableSkills.JavaScript = (availableSkills.JavaScript || 0) + 1;
-			availableSkills.TypeScript = (availableSkills.TypeScript || 0) + 1;
-			availableSkills.React = (availableSkills.React || 0) + 1;
-		}
+		const activeCount = users.filter((u) => u.isActive).length;
+		availableSkills.JavaScript = (availableSkills.JavaScript || 0) + activeCount;
+		availableSkills.TypeScript = (availableSkills.TypeScript || 0) + activeCount;
+		availableSkills.React = (availableSkills.React || 0) + activeCount;
 
 		// Calculate gaps
 		const gaps = Object.keys(skillRequirements).map((skill) => ({
@@ -395,7 +394,6 @@ export class ResourceManagementService {
 		period: "week" | "month" | "quarter" = "month",
 	): Promise<CapacityForecast[]> {
 		const forecasts: CapacityForecast[] = [];
-		const _days = period === "week" ? 7 : period === "month" ? 30 : 90;
 
 		for (const user of users) {
 			const currentWorkload = await this.getCurrentWorkloads();
@@ -447,10 +445,10 @@ export class ResourceManagementService {
 			recommendations.push("Consider assigning more tasks to increase utilization");
 		}
 
-		if (workload.skillUtilization) {
-			const underutilizedSkills = Object.entries(workload.skillUtilization)
-				.filter(([_, utilization]) => utilization < 50)
-				.map(([skill]) => skill);
+			if (workload.skillUtilization) {
+				const underutilizedSkills = Object.entries(workload.skillUtilization)
+					.filter(([, utilization]) => utilization < 50)
+					.map(([skill]) => skill);
 
 			if (underutilizedSkills.length > 0) {
 				recommendations.push(`Consider tasks utilizing: ${underutilizedSkills.join(", ")}`);
@@ -464,6 +462,7 @@ export class ResourceManagementService {
 		_requirements: TaskRequirements,
 		constraints?: ResourceAllocationRequest["constraints"],
 	): Promise<User[]> {
+		void _requirements;
 		const userManager = getUserManager();
 		const allUsers = await userManager.getAllUsers();
 		const activeUsers = allUsers.filter((user) => user.isActive);
@@ -515,6 +514,9 @@ export class ResourceManagementService {
 		_requirements: TaskRequirements,
 		_strategy: string,
 	): Promise<number> {
+		void _user;
+		void _requirements;
+		void _strategy;
 		const confidence = 50; // Base confidence
 
 		// TODO: Implement skill matching score
@@ -529,6 +531,8 @@ export class ResourceManagementService {
 		_user: User,
 		_requirements: TaskRequirements,
 	): Promise<string[]> {
+		void _user;
+		void _requirements;
 		const reasons: string[] = [];
 
 		// TODO: Generate specific reasons based on matching criteria
@@ -542,6 +546,9 @@ export class ResourceManagementService {
 		_userId?: string,
 		_requirements?: TaskRequirements,
 	): Promise<ScheduleConflict[]> {
+		void _taskId;
+		void _userId;
+		void _requirements;
 		// TODO: Implement conflict detection
 		return [];
 	}
@@ -554,6 +561,8 @@ export class ResourceManagementService {
 		burnoutRiskChange: "low" | "medium" | "high";
 		skillDevelopment: string[];
 	}> {
+		void _userId;
+		void _requirements;
 		// TODO: Implement impact analysis
 		return {
 			utilizationChange: 5, // Estimate
@@ -595,6 +604,8 @@ export class ResourceManagementService {
 	}
 
 	private hasRequiredSkills(_userId: string, _requiredSkills: Skill[]): boolean {
+		void _userId;
+		void _requiredSkills;
 		// TODO: Implement skill checking
 		return true;
 	}
@@ -603,6 +614,7 @@ export class ResourceManagementService {
 		candidates: Workload[],
 		_requirements: TaskRequirements,
 	): Promise<Workload | null> {
+		void _requirements;
 		// Find candidate with lowest utilization that has required skills
 		const validCandidates = candidates.filter((w) => !w.overloaded);
 		return validCandidates.length > 0 ? validCandidates[0] : null;

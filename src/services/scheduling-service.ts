@@ -67,10 +67,6 @@ export class SchedulingEngine implements ISchedulingEngine {
 			const tasksToAssign = await this.getTasksToAssign(request.taskIds);
 			result.metrics.tasksProcessed = tasksToAssign.length;
 
-			// Get all users for assignment
-			const userManager = getUserManager();
-			const _users = await userManager.getAllUsers();
-
 			// Process each task
 			for (const task of tasksToAssign) {
 				try {
@@ -475,6 +471,8 @@ export class SchedulingEngine implements ISchedulingEngine {
 	}
 
 	async getResourceMetrics(_startDate?: Date, _endDate?: Date): Promise<ResourceAllocationMetrics> {
+		void _startDate;
+		void _endDate;
 		const metrics: ResourceAllocationMetrics = {
 			teamId: "default-team",
 			date: new Date(),
@@ -648,7 +646,8 @@ export class SchedulingEngine implements ISchedulingEngine {
 		date: Date,
 		userTasks: TaskEntity[],
 	): Promise<TeamAvailabilityCalendar> {
-		const dayTasks = userTasks.filter((_task) => {
+		const dayTasks = userTasks.filter((task) => {
+			void task;
 			// This would need actual task scheduling data
 			return false; // Placeholder
 		});
@@ -674,6 +673,7 @@ export class SchedulingEngine implements ISchedulingEngine {
 	}
 
 	private isUserAvailable(user: User, _date: Date): boolean {
+		void _date;
 		// Placeholder implementation
 		// Would check user's availability settings, vacation, etc.
 		return user.isActive;
@@ -720,6 +720,7 @@ export class SchedulingEngine implements ISchedulingEngine {
 	}
 
 	private async resolveOverloadConflict(_conflict: ScheduleConflict): Promise<ConflictResolution> {
+		void _conflict;
 		return {
 			strategy: "reassign",
 			proposedSolution: "Reassign some tasks to other team members",
@@ -730,6 +731,7 @@ export class SchedulingEngine implements ISchedulingEngine {
 	private async resolveDoubleBookingConflict(
 		_conflict: ScheduleConflict,
 	): Promise<ConflictResolution> {
+		void _conflict;
 		return {
 			strategy: "reschedule",
 			proposedSolution: "Reschedule one of the conflicting tasks",
@@ -740,6 +742,7 @@ export class SchedulingEngine implements ISchedulingEngine {
 	private async resolveSkillMismatchConflict(
 		_conflict: ScheduleConflict,
 	): Promise<ConflictResolution> {
+		void _conflict;
 		return {
 			strategy: "reassign",
 			proposedSolution: "Assign to a user with matching skills",
@@ -748,6 +751,7 @@ export class SchedulingEngine implements ISchedulingEngine {
 	}
 
 	private async resolveDeadlineConflict(_conflict: ScheduleConflict): Promise<ConflictResolution> {
+		void _conflict;
 		return {
 			strategy: "extend_deadline",
 			proposedSolution: "Extend task deadline",
@@ -893,6 +897,7 @@ export class SchedulingService extends SchedulingEngine implements ISchedulingSe
 			value: number;
 		}>;
 	}> {
+		void _period;
 		const analytics = {
 			efficiency: 85, // Placeholder
 			utilization: 75, // Placeholder

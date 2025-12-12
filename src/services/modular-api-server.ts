@@ -96,6 +96,7 @@ export function createAuthorizationMiddleware(
 }
 
 // Validation middleware factory
+// eslint-disable-next-line no-unused-vars
 export function createValidationMiddleware(validator: (body: unknown) => void): Middleware {
 	return (req: Request, res: Response, next: NextFunction) => {
 		try {

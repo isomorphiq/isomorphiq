@@ -4,7 +4,6 @@ import type { Server as HttpServer } from "node:http";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
 import { startHttpApi } from "../http-api-server.ts";
 import { ProductManager } from "../index.ts";
-import { getUserManager } from "../user-manager.ts";
 import { WebSocketManager } from "../websocket-server.ts";
 import type { Task } from "../types.ts";
 
@@ -70,7 +69,6 @@ export class ProcessManager extends EventEmitter {
 
 		// Initialize core services
 		this.productManager = new ProductManager();
-		const _userManager = getUserManager();
 		this.webSocketManager = new WebSocketManager({ path: "/ws" });
 		this.productManager.setWebSocketManager(this.webSocketManager);
 
@@ -440,7 +438,7 @@ export class ProcessManager extends EventEmitter {
 					result = Array.from(this.configs.keys());
 					break;
 				// Legacy task management commands
-				case "create_task":
+				case "create_task": {
 					if (!this.productManager) throw new Error("ProductManager not initialized");
 					const createdTask = await this.productManager.createTask(
 						command.data.title,
@@ -457,6 +455,7 @@ export class ProcessManager extends EventEmitter {
 						this.webSocketManager.broadcastTaskCreated(createdTask);
 					}
 					break;
+				}
 				case "list_tasks":
 					if (!this.productManager) throw new Error("ProductManager not initialized");
 					result = await this.productManager.getAllTasks();
