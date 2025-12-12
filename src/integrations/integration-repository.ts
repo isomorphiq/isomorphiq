@@ -10,6 +10,7 @@ import type {
 /**
  * Integration repository interface for data persistence
  */
+/* eslint-disable no-unused-vars */
 export interface IIntegrationRepository {
 	// Integration CRUD
 	create(config: IntegrationConfigInput): Promise<Result<IntegrationConfig>>;
@@ -40,11 +41,13 @@ export interface IIntegrationRepository {
 		integrationId: string,
 	): Promise<Result<{ totalMappings: number; lastSyncAt: Date; syncFrequency: number }>>;
 }
+/* eslint-enable no-unused-vars */
 
 /**
  * LevelDB implementation of integration repository
  */
 export class LevelDbIntegrationRepository implements IIntegrationRepository {
+	/* eslint-disable no-unused-vars */
 	private db: {
 		open: () => Promise<void>;
 		put: (key: string, value: IntegrationConfig | TaskMapping | unknown) => Promise<void>;
@@ -54,8 +57,10 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 			opts?: Record<string, unknown>,
 		) => (AsyncIterableIterator<[string, unknown]> & { close: () => Promise<void> });
 	};
+	/* eslint-enable no-unused-vars */
 	private dbReady = false;
 
+	/* eslint-disable no-unused-vars */
 	constructor(db: {
 		open: () => Promise<void>;
 		put: (key: string, value: IntegrationConfig | TaskMapping | unknown) => Promise<void>;
@@ -67,6 +72,7 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	}) {
 		this.db = db;
 	}
+	/* eslint-enable no-unused-vars */
 
 	private async ensureDbOpen(): Promise<void> {
 		if (this.dbReady) return;

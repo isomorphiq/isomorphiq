@@ -22,6 +22,7 @@ export class IntegrationService {
 	private integrationManager: IntegrationManager;
 
 	constructor(db: unknown) {
+		/* eslint-disable no-unused-vars */
 		const baseDb = db as {
 			open: () => Promise<void>;
 			put: (key: string, value: unknown) => Promise<void>;
@@ -29,6 +30,7 @@ export class IntegrationService {
 			del: (key: string) => Promise<void>;
 			iterator: (opts?: Record<string, unknown>) => AsyncIterableIterator<[string, unknown]>;
 		};
+		/* eslint-enable no-unused-vars */
 
 		// Adapt iterator to expose close() for typing consistency
 		const repository = new LevelDbIntegrationRepository({
