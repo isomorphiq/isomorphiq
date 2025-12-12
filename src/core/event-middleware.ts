@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars, @typescript-eslint/no-unused-vars */
 import type { DomainEvent, EventMiddleware } from "./events.ts";
 
 // Logging middleware
@@ -117,6 +118,7 @@ export class EventFilterMiddleware {
 
 // Event transformation middleware
 export class EventTransformMiddleware {
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	private transformers: Map<string, (event: DomainEvent) => DomainEvent> = new Map();
 
 	addTransformer(eventType: string, transformer: (event: DomainEvent) => DomainEvent): void {
@@ -193,6 +195,7 @@ export class RateLimitMiddleware {
 
 // Event enrichment middleware
 export class EventEnrichmentMiddleware {
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	private enrichers: Map<string, (event: DomainEvent) => Partial<DomainEvent>> = new Map();
 
 	addEnricher(eventType: string, enricher: (event: DomainEvent) => Partial<DomainEvent>): void {

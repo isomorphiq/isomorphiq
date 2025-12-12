@@ -1,5 +1,5 @@
+/* eslint-disable no-unused-vars, @typescript-eslint/no-unused-vars */
 export interface ACPProfile {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     getTaskPrompt: (context: Record<string, unknown>) => string;
     name: string;
     role: string;

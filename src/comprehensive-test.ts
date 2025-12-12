@@ -1,5 +1,5 @@
 import { ProductManager } from "./index.ts";
-import type { Task, TaskType } from "./types.ts";
+import type { TaskType } from "./types.ts";
 
 // Test assertions
 function assert(condition: boolean, message: string): void {
@@ -11,33 +11,6 @@ function assert(condition: boolean, message: string): void {
 function assertEqual<T>(actual: T, expected: T, message?: string): void {
 	if (actual !== expected) {
 		throw new Error(`Assertion failed: ${message || `Expected ${expected}, got ${actual}`}`);
-	}
-}
-
-function _assertThrows(fn: () => Promise<unknown> | unknown, expectedMessage?: string): void {
-	try {
-		const result = fn();
-		if (result instanceof Promise) {
-			result
-				.then(() => {
-					throw new Error("Expected function to throw, but it resolved successfully");
-				})
-				.catch((error) => {
-					if (expectedMessage && !error.message.includes(expectedMessage)) {
-						throw new Error(
-							`Expected error message to contain "${expectedMessage}", got "${error.message}"`,
-						);
-					}
-				});
-		} else {
-			throw new Error("Expected function to throw, but it returned successfully");
-		}
-	} catch (error) {
-		if (expectedMessage && !(error as Error).message.includes(expectedMessage)) {
-			throw new Error(
-				`Expected error message to contain "${expectedMessage}", got "${(error as Error).message}"`,
-			);
-		}
 	}
 }
 
