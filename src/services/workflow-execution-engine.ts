@@ -486,6 +486,7 @@ export class ActionNodeExecutor implements WorkflowNodeExecutor {
 		node: WorkflowNode,
 		_context: WorkflowExecutionContext,
 	): Promise<Record<string, unknown>> {
+		void _context;
 		const data = toRecord(node.data);
 		const actionType = toStringOr(data.actionType, "unknown_action");
 		const parameters = toRecord(data.parameters);
@@ -543,6 +544,7 @@ export class NotificationNodeExecutor implements WorkflowNodeExecutor {
 		node: WorkflowNode,
 		_context: WorkflowExecutionContext,
 	): Promise<Record<string, unknown>> {
+		void _context;
 		const data = toRecord(node.data);
 		const recipients = toArray<string>(data.recipients);
 		const message = toStringOr(data.message, "No message provided");
@@ -611,6 +613,7 @@ export class TaskUpdateNodeExecutor implements WorkflowNodeExecutor {
 		node: WorkflowNode,
 		_context: WorkflowExecutionContext,
 	): Promise<Record<string, unknown>> {
+		void _context;
 		const data = toRecord(node.data);
 		const taskId = toStringOr(data.taskId, "");
 		const updates = toRecord(data.updates);
@@ -636,11 +639,14 @@ export class WebhookNodeExecutor implements WorkflowNodeExecutor {
 		node: WorkflowNode,
 		_context: WorkflowExecutionContext,
 	): Promise<Record<string, unknown>> {
+		void _context;
 		const data = toRecord(node.data);
 		const url = toStringOr(data.url, "");
 		const method = toStringOr(data.method, "POST");
 		const _headers = toRecord(data.headers);
 		const _body = data.body;
+		void _headers;
+		void _body;
 
 		console.log(`[WORKFLOW] Webhook node ${node.id} calling ${method} ${url}`);
 
