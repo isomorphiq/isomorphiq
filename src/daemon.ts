@@ -9,7 +9,7 @@ import type { Result } from "./core/result.ts";
 
 // Task Manager Daemon - runs the continuous task processing loop and handles MCP requests
 async function main() {
-	console.log("[DAEMON] Starting Opencode Task Manager Daemon");
+	console.log("[DAEMON] Starting Isomorphiq Task Manager Daemon");
 
 	const pm = new ProductManager();
 	const userManager = getUserManager();

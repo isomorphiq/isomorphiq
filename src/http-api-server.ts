@@ -452,7 +452,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 		res.json({
 			status: "healthy",
 			timestamp: new Date().toISOString(),
-			service: "Opencode Task Manager REST API",
+			service: "Isomorphiq Task Manager REST API",
 		});
 	});
 
