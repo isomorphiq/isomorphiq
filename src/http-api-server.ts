@@ -651,6 +651,8 @@ export async function startHttpApi(
 			console.log("[HTTP API]   DELETE /api/tasks/:id - Delete task");
 			console.log("[HTTP API]   GET    /api/tasks/status/:status - Get tasks by status");
 			console.log("[HTTP API]   GET    /api/tasks/priority/:priority - Get tasks by priority");
+			console.log("[HTTP API]   GET    /api/admin/settings - Get admin settings (admin only)");
+			console.log("[HTTP API]   PUT    /api/admin/settings - Update admin settings (admin only)");
 			console.log("[HTTP API]   POST   /api/search/advanced - Advanced task search with filtering");
 			console.log("[HTTP API]   GET    /api/search/suggestions - Get search suggestions");
 			console.log("[HTTP API]   GET    /api/saved-searches - Get saved searches");

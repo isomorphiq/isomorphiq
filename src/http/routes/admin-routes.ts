@@ -1,11 +1,13 @@
-import type express from "express";
+import express from "express";
 import type { AdminSettings, User } from "../../types.ts";
 import { isAdminUser, loadAdminSettings, saveAdminSettings } from "../../admin-settings.ts";
 import { authenticateToken, type AuthContextRequest } from "../middleware.ts";
 
 export function registerAdminRoutes(app: express.Application) {
-    app.get(
-        "/api/admin/settings",
+    const router = express.Router();
+
+    router.get(
+        "/settings",
         authenticateToken,
         async (req: AuthContextRequest, res, next) => {
             try {
@@ -22,8 +24,8 @@ export function registerAdminRoutes(app: express.Application) {
         },
     );
 
-    app.put(
-        "/api/admin/settings",
+    router.put(
+        "/settings",
         authenticateToken,
         async (req: AuthContextRequest, res, next) => {
             try {
@@ -49,4 +51,6 @@ export function registerAdminRoutes(app: express.Application) {
             }
         },
     );
+
+    app.use("/api/admin", router);
 }

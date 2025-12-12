@@ -21,6 +21,7 @@ import { buildWorkflowWithEffects } from "./workflow.ts";
 import { advanceToken, createToken } from "./workflow-engine.ts";
 import type { WebSocketManager } from "./websocket-server.ts";
 import { optimizedPriorityService } from "./services/priority-update-manager.ts";
+import { ArchiveService } from "./services/archive-service.ts";
 
 // Initialize LevelDB
 const dbPath = path.join(process.cwd(), "db");
@@ -38,6 +39,7 @@ export class ProductManager {
 	private dbReady = false;
 	private wsManager: WebSocketManager | null = null;
 	private priorityService = optimizedPriorityService;
+	private archiveService: ArchiveService;
 
 	private async ensureDbOpen(): Promise<void> {
 		if (this.dbReady) return;
@@ -56,6 +58,7 @@ export class ProductManager {
 		this.profileManager = new ProfileManager();
 		this.templateManager = new TemplateManager();
 		this.automationEngine = new AutomationRuleEngine();
+		this.archiveService = new ArchiveService();
 		this.setupAutomationEngine();
 		// Database will be opened on first use
 	}
@@ -1690,5 +1693,172 @@ export class ProductManager {
 
 		await savedSearchesDb.del(id);
 		console.log(`[SAVED_SEARCHES_DB] Deleted saved search: ${id}`);
+	}
+
+	// Archive management methods
+	
+	// Initialize archive service
+	async initializeArchiveService(): Promise<void> {
+		try {
+			await this.archiveService.initialize();
+			console.log("[PRODUCT-MANAGER] Archive service initialized");
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to initialize archive service:", error);
+			throw error;
+		}
+	}
+
+	// Archive a task
+	async archiveTask(taskId: string, reason: string, archivedBy: string, options?: {
+		retentionPolicyId?: string;
+		tags?: string[];
+	}): Promise<import("./services/archive-service.ts").ArchivedTask> {
+		try {
+			const archivedTask = await this.archiveService.archiveTask(taskId, reason, archivedBy, options);
+			
+			// Broadcast task archived event
+			if (this.wsManager) {
+				this.wsManager.broadcast({
+					type: "task_archived",
+					data: {
+						taskId,
+						reason,
+						archivedBy,
+						archivedAt: archivedTask.archivedAt
+					}
+				});
+			}
+			
+			return archivedTask;
+		} catch (error) {
+			console.error(`[PRODUCT-MANAGER] Failed to archive task ${taskId}:`, error);
+			throw error;
+		}
+	}
+
+	// Restore an archived task
+	async restoreTask(archivedTaskId: string, restoredBy: string): Promise<Task> {
+		try {
+			const restoredTask = await this.archiveService.restoreTask(archivedTaskId, restoredBy);
+			
+			// Broadcast task restored event
+			if (this.wsManager) {
+				this.wsManager.broadcast({
+					type: "task_restored",
+					data: {
+						taskId: restoredTask.id,
+						restoredBy,
+						restoredAt: new Date().toISOString()
+					}
+				});
+			}
+			
+			return restoredTask;
+		} catch (error) {
+			console.error(`[PRODUCT-MANAGER] Failed to restore task ${archivedTaskId}:`, error);
+			throw error;
+		}
+	}
+
+	// Create retention policy
+	async createRetentionPolicy(policy: Omit<import("./services/archive-service.ts").RetentionPolicy, "id" | "createdAt" | "updatedAt">): Promise<import("./services/archive-service.ts").RetentionPolicy> {
+		try {
+			return await this.archiveService.createRetentionPolicy(policy);
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to create retention policy:", error);
+			throw error;
+		}
+	}
+
+	// Get retention policies
+	async getRetentionPolicies(): Promise<import("./services/archive-service.ts").RetentionPolicy[]> {
+		try {
+			return await this.archiveService.getRetentionPolicyList();
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to get retention policies:", error);
+			throw error;
+		}
+	}
+
+	// Execute retention policy
+	async executeRetentionPolicy(policyId: string, executedBy: string): Promise<{
+		archived: import("./services/archive-service.ts").ArchivedTask[];
+		deleted: string[];
+		flagged: string[];
+	}> {
+		try {
+			const result = await this.archiveService.executeRetentionPolicy(policyId, executedBy);
+			
+			// Broadcast policy execution event
+			if (this.wsManager) {
+				this.wsManager.broadcast({
+					type: "retention_policy_executed",
+					data: {
+						policyId,
+						executedBy,
+						result: {
+							archivedCount: result.archived.length,
+							deletedCount: result.deleted.length,
+							flaggedCount: result.flagged.length
+						}
+					}
+				});
+			}
+			
+			return result;
+		} catch (error) {
+			console.error(`[PRODUCT-MANAGER] Failed to execute retention policy ${policyId}:`, error);
+			throw error;
+		}
+	}
+
+	// Search archived tasks
+	async searchArchivedTasks(query: {
+		text?: string;
+		archivedBy?: string;
+		dateFrom?: Date;
+		dateTo?: Date;
+		retentionPolicyId?: string;
+		originalStatus?: import("./types.ts").TaskStatus;
+	}): Promise<import("./services/archive-service.ts").ArchivedTask[]> {
+		try {
+			return await this.archiveService.searchArchivedTasks(query);
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to search archived tasks:", error);
+			throw error;
+		}
+	}
+
+	// Get archive statistics
+	async getArchiveStats(): Promise<import("./services/archive-service.ts").ArchiveStats> {
+		try {
+			return await this.archiveService.getArchiveStats();
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to get archive stats:", error);
+			throw error;
+		}
+	}
+
+	// Cleanup old archived tasks
+	async cleanupOldArchivedTasks(olderThanDays: number): Promise<string[]> {
+		try {
+			const deletedIds = await this.archiveService.cleanupOldArchivedTasks(olderThanDays);
+			
+			console.log(`[PRODUCT-MANAGER] Cleaned up ${deletedIds.length} old archived tasks`);
+			return deletedIds;
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to cleanup old archived tasks:", error);
+			throw error;
+		}
+	}
+
+	// Export archived tasks
+	async exportArchivedTasks(format: "json" | "csv" = "json"): Promise<string | Buffer> {
+		try {
+			return await this.archiveService.exportArchivedTasks(format);
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to export archived tasks:", error);
+			throw error;
+		}
 	}
 }
