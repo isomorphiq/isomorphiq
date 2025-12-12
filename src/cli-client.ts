@@ -18,9 +18,9 @@ function sendCommand(command: string, data: Record<string, unknown> = {}) {
 				try {
 					const result = JSON.parse(response.trim());
 					resolve(result);
-				} catch (_err) {
-					reject(new Error("Invalid response from server"));
-				}
+					} catch {
+						reject(new Error("Invalid response from server"));
+					}
 			}
 		});
 

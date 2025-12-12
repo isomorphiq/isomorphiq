@@ -1,24 +1,6 @@
 import { ProductManager } from "./index.ts";
 import type { Task, TaskType } from "./types.ts";
 
-// Test utilities
-function _createTestTask(overrides: Partial<Task> = {}): Task {
-	const now = new Date();
-	return {
-		id: `test-task-${Date.now()}-${Math.random()}`,
-		title: "Test Task",
-		description: "A test task for unit testing",
-		status: "todo",
-		priority: "medium",
-		type: "task",
-		dependencies: [],
-		createdBy: "test-user",
-		createdAt: now,
-		updatedAt: now,
-		...overrides,
-	};
-}
-
 // Test assertions
 function assert(condition: boolean, message: string): void {
 	if (!condition) {

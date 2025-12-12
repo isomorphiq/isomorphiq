@@ -103,7 +103,7 @@ export class AutomationRuleEngine {
 			// Execute actions
 			const actionResults = [];
 			for (const action of rule.actions) {
-				const result = await this.executeAction(action, context, allTasks);
+				const result = await this.executeAction(action, context);
 				actionResults.push(result);
 			}
 
