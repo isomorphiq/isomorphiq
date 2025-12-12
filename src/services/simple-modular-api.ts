@@ -99,7 +99,7 @@ export class SimpleModularApiServer {
 			res.json({
 				status: "healthy",
 				timestamp: new Date().toISOString(),
-				service: "Opencode Task Manager REST API",
+				service: "Isomorphiq Task Manager REST API",
 				uptime: process.uptime(),
 				memory: process.memoryUsage(),
 			});
