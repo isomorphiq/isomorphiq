@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import type { Result } from "../core/result.ts";
 import type { Task } from "../types.ts";
 

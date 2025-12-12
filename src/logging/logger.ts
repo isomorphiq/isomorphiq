@@ -26,6 +26,7 @@ export interface LogEntry {
 /**
  * Logger interface
  */
+/* eslint-disable no-unused-vars */
 export interface ILogger {
 	error(message: string, context?: string, metadata?: Record<string, unknown>): void;
 	warn(message: string, context?: string, metadata?: Record<string, unknown>): void;
@@ -33,6 +34,7 @@ export interface ILogger {
 	debug(message: string, context?: string, metadata?: Record<string, unknown>): void;
 	log(level: LogLevel, message: string, context?: string, metadata?: Record<string, unknown>): void;
 }
+/* eslint-enable no-unused-vars */
 
 /**
  * File logger implementation
@@ -42,14 +44,13 @@ export class FileLogger implements ILogger {
 	private maxFileSize: number;
 	private maxFiles: number;
 	private currentFileSize: number = 0;
+	private defaultContext: string;
 
-	constructor(
-		private config: AppConfig["logging"],
-		private context: string = "App",
-	) {
+	constructor(private config: AppConfig["logging"], context: string = "App") {
 		this.logFile = config.file || "app.log";
 		this.maxFileSize = config.maxFileSize || 10 * 1024 * 1024; // 10MB
 		this.maxFiles = config.maxFiles || 5;
+		this.defaultContext = context;
 	}
 
 	private shouldRotate(): boolean {
@@ -60,7 +61,6 @@ export class FileLogger implements ILogger {
 		if (!this.config.file) return;
 
 		const fs = require("node:fs");
-		const _path = require("node:path");
 
 		// Move current log file to backup
 		for (let i = this.maxFiles - 1; i > 0; i--) {
@@ -175,7 +175,7 @@ export class FileLogger implements ILogger {
 			timestamp: new Date().toISOString(),
 			level,
 			message,
-			context: context || this.context,
+			context: context || this.defaultContext,
 			...(metadata && { metadata }),
 		};
 
@@ -277,7 +277,7 @@ export class NullLogger implements ILogger {
 /**
  * Logger factory
  */
-const _LoggerFactory = (() => {
+export const LoggerFactory = (() => {
 	const loggers: Map<string, ILogger> = new Map();
 	let config: AppConfig["logging"];
 

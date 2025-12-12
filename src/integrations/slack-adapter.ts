@@ -222,7 +222,6 @@ export class SlackIntegration extends BaseIntegrationAdapter {
 			? userMapping[task.assignedTo] || task.assignedTo
 			: "Unassigned";
 
-		const _color = this.getStatusColor(task.status);
 		const actionText =
 			action === "created" ? "Created" : action === "completed" ? "Completed" : "Updated";
 
@@ -281,7 +280,7 @@ export class SlackIntegration extends BaseIntegrationAdapter {
 	}
 
 	// Webhook handlers
-	private async handleUrlVerification(_event: Record<string, unknown> | undefined): Promise<void> {
+	private async handleUrlVerification(): Promise<void> {
 		console.log("[SLACK] Handling URL verification");
 		// This would return the challenge in a real webhook implementation
 		// For now, we just log it

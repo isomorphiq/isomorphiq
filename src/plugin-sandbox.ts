@@ -32,7 +32,6 @@ export class PluginSandbox extends EventEmitter {
 		...args: unknown[]
 	): Promise<T> {
 		const startTime = Date.now();
-		const _memoryUsage = process.memoryUsage();
 
 		try {
 			// Check if method exists and is callable
@@ -46,7 +45,8 @@ export class PluginSandbox extends EventEmitter {
 
 			try {
 				// Execute the method
-				const result = await (method as (...innerArgs: unknown[]) => unknown).apply(
+				// eslint-disable-next-line no-unused-vars
+				const result = await (method as (...argsList: unknown[]) => unknown).apply(
 					this.plugin,
 					args,
 				);

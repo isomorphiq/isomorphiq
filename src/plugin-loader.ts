@@ -29,16 +29,17 @@ export class FileSystemPluginLoader implements PluginLoader {
 			delete requireFunc.cache[absolutePath];
 
 			// Load module
-			let moduleExport: unknown;
+				let moduleExport: unknown;
 
-			try {
-				moduleExport = requireFunc(absolutePath);
-			} catch (_error) {
-				// Try dynamic import if require fails
-				const moduleUrl = `file://${absolutePath}`;
-				const module = await import(moduleUrl);
-				moduleExport = module.default || module;
-			}
+				try {
+					moduleExport = requireFunc(absolutePath);
+				} catch (_error) {
+					void _error;
+					// Try dynamic import if require fails
+					const moduleUrl = `file://${absolutePath}`;
+					const module = await import(moduleUrl);
+					moduleExport = module.default || module;
+				}
 
 			// Validate plugin
 			if (!this.isValidPluginExport(moduleExport)) {
@@ -149,20 +150,22 @@ export class FileSystemPluginLoader implements PluginLoader {
 			const requireFunc = createRequire(__filename);
 			let moduleExport: unknown;
 
-			try {
-				moduleExport = requireFunc(absolutePath);
-			} catch (_error) {
-				// Try dynamic import
-				const moduleUrl = pathToFileURL(absolutePath).href;
-				const module = await import(moduleUrl);
-				moduleExport = module.default || module;
-			}
+				try {
+					moduleExport = requireFunc(absolutePath);
+				} catch (_error) {
+					void _error;
+					// Try dynamic import
+					const moduleUrl = pathToFileURL(absolutePath).href;
+					const module = await import(moduleUrl);
+					moduleExport = module.default || module;
+				}
 
-			return this.isValidPluginExport(moduleExport);
-		} catch (_error) {
-			return false;
+				return this.isValidPluginExport(moduleExport);
+			} catch (_error) {
+				void _error;
+				return false;
+			}
 		}
-	}
 
 	private isValidPluginExport(moduleExport: unknown): boolean {
 		// Check if it's a class or constructor function

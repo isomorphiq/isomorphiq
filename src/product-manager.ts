@@ -28,6 +28,7 @@ import type {
 	WebSocketEventType,
 } from "./types.ts";
 
+/* eslint-disable no-unused-vars */
 interface TaskWebSocketManager {
 	broadcastTaskCreated(task: Task): void;
 	broadcastTaskUpdated(task: Task, updates: Partial<Task>): void;
@@ -46,6 +47,7 @@ interface TaskWebSocketManager {
 	): void;
 	broadcastTaskAssigned(task: Task, assignedTo: string, assignedBy: string): void;
 }
+/* eslint-enable no-unused-vars */
 
 /**
  * ProductManager - Core task management and orchestration service
@@ -144,15 +146,16 @@ export class ProductManager {
 	): Promise<Task> {
 		await this.ensureInitialized();
 
-		const input: CreateTaskInputWithPriority = {
-			title,
-			description,
-			priority,
-			dependencies,
-			...(assignedTo && { assignedTo }),
-			...(collaborators && { collaborators }),
-			...(watchers && { watchers }),
-		};
+			const input: CreateTaskInputWithPriority = {
+				title,
+				description,
+				priority,
+				dependencies,
+				type: _type,
+				...(assignedTo && { assignedTo }),
+				...(collaborators && { collaborators }),
+				...(watchers && { watchers }),
+			};
 
 		const result = await this.taskService.createTask(input, createdBy || "system");
 		if (!result.success) {
@@ -419,16 +422,26 @@ export class ProductManager {
 			"assigned",
 			"collaborating",
 		],
-	): Promise<Task[]> {
-		await this.ensureInitialized();
+		): Promise<Task[]> {
+			await this.ensureInitialized();
 
-		const result = await this.taskService.getTasksByUser(userId);
-		if (!result.success) {
-			return [];
+			const result = await this.taskService.getTasksByUser(userId);
+			if (!result.success) {
+				return [];
+			}
+
+			const includeSet = new Set(_include);
+
+			const filtered = result.data.filter((task) => {
+				if (includeSet.has("created") && task.createdBy === userId) return true;
+				if (includeSet.has("assigned") && task.assignedTo === userId) return true;
+				if (includeSet.has("collaborating") && task.collaborators?.includes(userId)) return true;
+				if (includeSet.has("watching") && task.watchers?.includes(userId)) return true;
+				return false;
+			});
+
+			return filtered.map((task) => this.convertTaskEntityToTask(task));
 		}
-
-		return result.data.map((task) => this.convertTaskEntityToTask(task));
-	}
 
 	/**
 	 * Search tasks with filters and sorting
@@ -705,6 +718,7 @@ export class ProductManager {
 	 * Simulate task execution (replace with actual execution logic)
 	 */
 	private async simulateTaskExecution(_task: Task): Promise<void> {
+		console.log(`[PRODUCT] Simulating execution for task ${_task.id}`);
 		// Simulate work being done
 		const processingTime = Math.random() * 5000 + 2000; // 2-7 seconds
 		await new Promise((resolve) => setTimeout(resolve, processingTime));

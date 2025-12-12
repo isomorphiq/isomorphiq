@@ -10,12 +10,14 @@ export interface DatabaseSchema {
 	migrations: Migration[];
 }
 
+/* eslint-disable no-unused-vars */
 export interface Migration {
 	version: number;
 	description: string;
 	up: (db: Level<string, unknown>) => Promise<void>;
 	down: (db: Level<string, unknown>) => Promise<void>;
 }
+/* eslint-enable no-unused-vars */
 
 export interface SchemaMetadata {
 	currentVersion: number;
@@ -97,75 +99,18 @@ export class DatabaseSchemaManager {
 	}
 
 	private async createUserIndexes(): Promise<void> {
-		// Create unique index on username
-		const _usernameIndexKey = "index:username:";
-
-		// Create unique index on email
-		const _emailIndexKey = "index:email:";
-
-		// Create index on role
-		const _roleIndexKey = "index:role:";
-
-		// Create index on isActive status
-		const _activeIndexKey = "index:active:";
-
-		// Create index on isEmailVerified status
-		const _verifiedIndexKey = "index:verified:";
-
 		console.log("[SCHEMA] User indexes created");
 	}
 
 	private async createSessionIndexes(): Promise<void> {
-		// Create index on userId for session lookup
-		const _userIdIndexKey = "index:userId:";
-
-		// Create index on token for quick session validation
-		const _tokenIndexKey = "index:token:";
-
-		// Create index on isActive status
-		const _activeIndexKey = "index:active:";
-
-		// Create index on expiresAt for cleanup
-		const _expiresAtIndexKey = "index:expiresAt:";
-
 		console.log("[SCHEMA] Session indexes created");
 	}
 
 	private async createPasswordResetIndexes(): Promise<void> {
-		// Create index on userId for password reset lookup
-		const _userIdIndexKey = "index:userId:";
-
-		// Create index on email for lookup
-		const _emailIndexKey = "index:email:";
-
-		// Create index on token for validation
-		const _tokenIndexKey = "index:token:";
-
-		// Create index on expiresAt for cleanup
-		const _expiresAtIndexKey = "index:expiresAt:";
-
-		// Create index on isUsed status
-		const _usedIndexKey = "index:used:";
-
 		console.log("[SCHEMA] Password reset indexes created");
 	}
 
 	private async createEmailVerificationIndexes(): Promise<void> {
-		// Create index on userId for verification lookup
-		const _userIdIndexKey = "index:userId:";
-
-		// Create index on email for lookup
-		const _emailIndexKey = "index:email:";
-
-		// Create index on token for validation
-		const _tokenIndexKey = "index:token:";
-
-		// Create index on expiresAt for cleanup
-		const _expiresAtIndexKey = "index:expiresAt:";
-
-		// Create index on isUsed status
-		const _usedIndexKey = "index:used:";
-
 		console.log("[SCHEMA] Email verification indexes created");
 	}
 
@@ -176,6 +121,7 @@ export class DatabaseSchemaManager {
 			const metadata = await this.schemaDb.get("schema:authentication");
 			return metadata.currentVersion;
 		} catch (_error) {
+			void _error;
 			// Schema not found, return 0
 			return 0;
 		}
@@ -218,6 +164,7 @@ export class DatabaseSchemaManager {
 					metadata = existingMetadata;
 				}
 			} catch (_error) {
+				void _error;
 				// Use default metadata
 			}
 
@@ -279,14 +226,15 @@ export class DatabaseSchemaManager {
 				migratedAt: new Date(),
 				migrations: [],
 			};
-			try {
-				const existingMetadata = await this.schemaDb.get("schema:authentication");
-				if (existingMetadata) {
-					metadata = existingMetadata;
+				try {
+					const existingMetadata = await this.schemaDb.get("schema:authentication");
+					if (existingMetadata) {
+						metadata = existingMetadata;
+					}
+				} catch (_error) {
+					void _error;
+					// Use default metadata
 				}
-			} catch (_error) {
-				// Use default metadata
-			}
 
 			// Get migrations to rollback
 			const migrationsToRollback = (schema.migrations || [])
@@ -325,6 +273,7 @@ export class DatabaseSchemaManager {
 		try {
 			return await this.schemaDb.get("schema:authentication");
 		} catch (_error) {
+			void _error;
 			return null;
 		}
 	}

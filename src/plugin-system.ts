@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import type { ACPProfile } from "./acp-profiles.ts";
 
 /**

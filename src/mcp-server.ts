@@ -24,14 +24,15 @@ class DaemonClient {
 			let response = "";
 			client.on("data", (data) => {
 				response += data.toString();
-				try {
-					const result = JSON.parse(response.trim());
-					client.end();
-					resolve(result);
-				} catch (_e) {
-					// Wait for more data
-				}
-			});
+					try {
+						const result = JSON.parse(response.trim());
+						client.end();
+						resolve(result);
+					} catch (_e) {
+						void _e;
+						// Wait for more data
+					}
+				});
 
 			client.on("error", (err) => {
 				console.error("[MCP] Daemon connection error:", err.message);
