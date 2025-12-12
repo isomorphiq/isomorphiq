@@ -1,8 +1,9 @@
 export interface ACPProfile {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    getTaskPrompt: (context: Record<string, unknown>) => string;
     name: string;
     role: string;
     systemPrompt: string;
-	getTaskPrompt: (context: Record<string, unknown>) => string; // eslint-disable-line @typescript-eslint/no-unused-vars
     capabilities?: string[];
     maxConcurrentTasks?: number;
     priority?: number;
