@@ -481,7 +481,6 @@ export class ProductManager {
 		}
 
 		const task = await db.get(id);
-		const _oldAssignedTo = task.assignedTo;
 		task.assignedTo = assignedTo;
 		task.updatedAt = new Date();
 		await db.put(id, task);
@@ -512,7 +511,6 @@ export class ProductManager {
 		}
 
 		const task = await db.get(id);
-		const _oldCollaborators = task.collaborators || [];
 		task.collaborators = collaborators;
 		task.updatedAt = new Date();
 		await db.put(id, task);
@@ -534,7 +532,6 @@ export class ProductManager {
 		}
 
 		const task = await db.get(id);
-		const _oldWatchers = task.watchers || [];
 		task.watchers = watchers;
 		task.updatedAt = new Date();
 		await db.put(id, task);
@@ -825,13 +822,13 @@ export class ProductManager {
 					"refinement",
 					"No actionable task; request refinement or split work.",
 				),
-			},
-			"tests-completed": {
-				"tests-passing": (_payload) =>
-					Effect.gen(function* () {
-						const commitMsg = `Automated: tests passing (${new Date().toISOString()})`;
-						try {
-							const result = yield* Effect.promise(() => gitCommitIfChanges(commitMsg));
+				},
+				"tests-completed": {
+					"tests-passing": () =>
+						Effect.gen(function* () {
+							const commitMsg = `Automated: tests passing (${new Date().toISOString()})`;
+							try {
+								const result = yield* Effect.promise(() => gitCommitIfChanges(commitMsg));
 							console.log("[GIT] Commit result:", result);
 						} catch (err) {
 							console.error("[GIT] Commit failed:", err);
@@ -1489,14 +1486,16 @@ export class ProductManager {
 				case "updatedAt":
 					comparison = new Date(a.task.updatedAt).getTime() - new Date(b.task.updatedAt).getTime();
 					break;
-				case "priority":
+				case "priority": {
 					const priorityOrder = { high: 3, medium: 2, low: 1 };
 					comparison = priorityOrder[a.task.priority] - priorityOrder[b.task.priority];
 					break;
-				case "status":
+				}
+				case "status": {
 					const statusOrder = { "todo": 1, "in-progress": 2, "done": 3 };
 					comparison = statusOrder[a.task.status] - statusOrder[b.task.status];
 					break;
+				}
 			}
 
 			return comparison * multiplier;
@@ -1653,7 +1652,8 @@ export class ProductManager {
 			await savedSearchesDb.put(id, savedSearch);
 
 			return savedSearch;
-		} catch (error) {
+		} catch (_error) {
+			void _error;
 			return null;
 		}
 	}

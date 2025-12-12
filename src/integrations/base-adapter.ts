@@ -333,6 +333,7 @@ export abstract class BaseIntegrationAdapter implements IntegrationAdapter {
 	}
 
 	// Abstract methods that must be implemented by concrete adapters
+	/* eslint-disable no-unused-vars */
 	protected abstract onInitialize(): Promise<void>;
 	protected abstract onTestConnection(): Promise<boolean>;
 	protected abstract onHealthCheck(): Promise<boolean>;
@@ -343,6 +344,7 @@ export abstract class BaseIntegrationAdapter implements IntegrationAdapter {
 	protected abstract onDeleteExternalTask(externalId: string): Promise<void>;
 	protected abstract onHandleWebhook(payload: Record<string, unknown>): Promise<void>;
 	protected abstract onCleanup(): Promise<void>;
+	/* eslint-enable no-unused-vars */
 
 	// Optional methods with default implementations
 	protected async validateConfig(config: IntegrationConfig): Promise<void> {
@@ -356,6 +358,8 @@ export abstract class BaseIntegrationAdapter implements IntegrationAdapter {
 		_payload: Record<string, unknown>,
 		_signature?: string,
 	): Promise<void> {
+		void _payload;
+		void _signature;
 		// Default implementation - can be overridden by subclasses
 		// In a real implementation, this would verify webhook signatures
 	}

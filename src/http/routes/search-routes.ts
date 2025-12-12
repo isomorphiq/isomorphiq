@@ -1,18 +1,16 @@
 import type express from "express";
 import type {
-    CreateSavedSearchInput,
-    SavedSearch,
-    SearchQuery,
-    SearchSort,
-    UpdateSavedSearchInput,
-    User,
+	CreateSavedSearchInput,
+	SearchQuery,
+	UpdateSavedSearchInput,
+	User,
 } from "../../types.ts";
 import { ProductManager } from "../../index.ts";
 import { getUserManager } from "../../user-manager.ts";
 import {
-    authenticateToken,
-    requirePermission,
-    type AuthContextRequest,
+	authenticateToken,
+	requirePermission,
+	type AuthContextRequest,
 } from "../middleware.ts";
 
 export function registerSearchRoutes(app: express.Application, pm: ProductManager) {
@@ -34,7 +32,6 @@ export function registerSearchRoutes(app: express.Application, pm: ProductManage
 
             if (!hasAdminPermission) {
                 searchQuery.createdBy = [user.id];
-                const userTasks = await pm.getTasksForUser(user.id, ["created", "assigned", "collaborating"]);
                 searchQuery.assignedTo = [user.id];
                 searchQuery.collaborators = [user.id];
             }

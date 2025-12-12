@@ -1,91 +1,74 @@
 #!/usr/bin/env node
 
-import http from 'http';
+import { createConnection } from 'net';
 
-/**
- * Claim highest priority task for development
- */
-async function claimHighestPriorityTask() {
-  try {
-    console.log("[HANDOFF] Claiming highest priority task for development...");
+// Known high priority task IDs from the earlier listing
+const highPriorityTaskIds = [
+  'task-1765349468004',  // Enable Task Predictive Analytics and Forecasting - todo
+  'task-1765349479463',  // Add Task Advanced Reporting and Business Intelligence - todo
+  'task-1765349495640',  // Implement Task Blockchain Verification and Audit Trail - todo (low priority)
+];
+
+async function claimTask(taskId) {
+  return new Promise((resolve, reject) => {
+    const client = createConnection({ port: 3001 }, () => {
+      console.log(`Connected to daemon, claiming task ${taskId}...`);
+      
+      const command = JSON.stringify({
+        command: 'update_task_status',
+        data: {
+          id: taskId,
+          status: 'in-progress'
+        }
+      });
+      
+      client.write(command + '\n');
+    });
     
-    // Make request to daemon API
-    const client = {
-      claimHighestPriorityTask: async (assignedTo) => {
-        return new Promise((resolve, reject) => {
-          const postData = JSON.stringify({ assignedTo });
-          
-          const options = {
-            hostname: 'localhost',
-            port: 3003,
-            path: '/claim-highest-priority-task',
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Content-Length': Buffer.byteLength(postData)
-            }
-          };
-
-          const req = http.request(options, (res) => {
-            let data = '';
-            
-            res.on('data', (chunk) => {
-              data += chunk;
-            });
-            
-            res.on('end', () => {
-              try {
-                const response = JSON.parse(data);
-                if (res.statusCode === 200 && response.success) {
-                  resolve(response.task);
-                } else {
-                  resolve(null);
-                }
-              } catch (error) {
-                reject(error);
-              }
-            });
-          });
-
-          req.on('error', (error) => {
-            reject(error);
-          });
-
-          req.write(postData);
-          req.end();
-        });
+    client.on('data', (data) => {
+      try {
+        const response = JSON.parse(data.toString());
+        resolve(response);
+      } catch (error) {
+        reject(error);
       }
-    };
+      client.end();
+    });
     
-    const result = await client.claimHighestPriorityTask("development");
+    client.on('error', (err) => {
+      reject(err);
+    });
     
-    if (result) {
-      console.log("[HANDOFF] ✅ Successfully claimed task:");
-      console.log(`   ID: ${result.id}`);
-      console.log(`   Title: ${result.title}`);
-      console.log(`   Priority: ${result.priority}`);
-      console.log(`   Status: ${result.status}`);
-      console.log(`   Assigned to: ${result.assignedTo}`);
-      console.log(`   Description: ${result.description || 'No description'}`);
-      console.log("\n[HANDOFF] 🚀 Task handed to development for implementation!");
-      process.exit(0);
-    } else {
-      console.log("[HANDOFF] ❌ No tasks available to claim");
-      process.exit(1);
+    setTimeout(() => {
+      client.destroy();
+      reject(new Error('Timeout'));
+    }, 5000);
+  });
+}
+
+async function claimHighPriorityTask() {
+  for (const taskId of highPriorityTaskIds) {
+    try {
+      console.log(`\n🔧 Attempting to claim task: ${taskId}`);
+      const response = await claimTask(taskId);
+      
+      if (response.success) {
+        console.log(`\n✅ SUCCESS! Task assigned to development:`);
+        console.log(`Task ID: ${response.data.id}`);
+        console.log(`Title: ${response.data.title}`);
+        console.log(`Priority: ${response.data.priority}`);
+        console.log(`Status: ${response.data.status}`);
+        console.log(`\n🚀 Ready for implementation!`);
+        return;
+      } else {
+        console.log(`❌ Failed: ${response.error?.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.log(`❌ Error: ${error.message}`);
     }
-  } catch (error) {
-    console.error("[HANDOFF] Error claiming task:", error.message);
-    process.exit(1);
   }
+  
+  console.log('\n❌ Could not claim any high-priority tasks');
 }
 
-// Get task ID from command line args if provided
-const taskId = process.argv[2];
-
-if (taskId) {
-  console.log(`[HANDOFF] Attempting to claim specific task: ${taskId}`);
-  // For now, we'll just claim the highest priority task
-  // The specific task claiming can be implemented later
-}
-
-claimHighestPriorityTask();
+claimHighPriorityTask();

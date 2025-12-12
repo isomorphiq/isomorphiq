@@ -567,7 +567,6 @@ export class GitHubIntegration extends BaseIntegrationAdapter {
 	private async handleIssueCommentWebhook(payload: Record<string, unknown>): Promise<void> {
 		const action = payload.action;
 		const issue = payload.issue as GitHubIssue;
-		const _comment = payload.comment;
 
 		console.log(`[GITHUB] Issue comment ${action}: ${issue.title} (#${issue.number})`);
 

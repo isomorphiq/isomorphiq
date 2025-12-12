@@ -132,13 +132,13 @@ export async function sendPrompt(
 	console.log("[ACP] 📊 Prompt result:", JSON.stringify(result, null, 2));
 	// Mark turn complete on the task client if available
 	const client = taskClient as {
-		markTurnComplete?: (_reason?: string) => void;
+		markTurnComplete?: () => void;
 		stopReason?: string;
 	};
 	if (client && typeof client.markTurnComplete === "function") {
 		try {
 			client.stopReason = result.stopReason ?? client.stopReason;
-			client.markTurnComplete(result.stopReason);
+			client.markTurnComplete();
 		} catch (err) {
 			console.log("[ACP] ⚠️ Failed to mark turn complete on task client:", err);
 		}

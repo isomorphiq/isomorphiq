@@ -12,10 +12,9 @@ import { registerSearchRoutes } from "./http/routes/search-routes.ts";
 import { registerProfileRoutes } from "./http/routes/profile-routes.ts";
 import { registerUserRoutes } from "./http/routes/user-routes.ts";
 import { registerMetricsRoutes } from "./http/routes/metrics-routes.ts";
-import { authenticateToken, softAuthContext, type AuthContextRequest } from "./http/middleware.ts";
+import { softAuthContext } from "./http/middleware.ts";
 import {
 	appRouter,
-	createTrpcContext,
 	createTrpcMiddleware,
 	type TrpcContext,
 } from "./http/trpc.ts";
@@ -33,12 +32,11 @@ const errorHandler = (
 	res: express.Response,
 	_next: express.NextFunction,
 ) => {
+	void _next;
 	const message = err instanceof Error ? err.message : String(err);
 	console.error("[HTTP API] Error:", err);
 	res.status(500).json({ error: message || "Internal server error" });
 };
-
-type AuthenticatedRequest = AuthContextRequest;
 
 // Factory to build an Express app bound to an existing ProductManager instance
 export function buildHttpApiApp(pm: ProductManager) {

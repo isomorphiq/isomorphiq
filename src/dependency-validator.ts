@@ -165,7 +165,7 @@ export class DependencyValidator {
 		const warnings: string[] = [];
 
 		// Check for tasks with too many dependencies
-		for (const [_taskId, task] of this.taskMap) {
+		for (const task of this.taskMap.values()) {
 			if (task.dependencies.length > 5) {
 				warnings.push(
 					`Task "${task.title}" has ${task.dependencies.length} dependencies - consider breaking it down`,

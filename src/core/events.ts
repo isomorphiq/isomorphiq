@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars, @typescript-eslint/no-unused-vars -- Type definitions require parameter names for clarity */
 // Base event interface
 export interface BaseEvent {
 	id: string;

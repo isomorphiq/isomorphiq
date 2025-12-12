@@ -33,6 +33,7 @@ export const ResultUtils = {
 		}
 	},
 
+	// eslint-disable-next-line no-unused-vars
 	map<T, U>(result: Result<T>, fn: (data: T) => U): Result<U> {
 		if (result.success && result.data !== undefined) {
 			return ResultUtils.ok(fn(result.data));
@@ -40,6 +41,7 @@ export const ResultUtils = {
 		return { success: result.success, error: result.error } as Result<U>;
 	},
 
+	// eslint-disable-next-line no-unused-vars
 	flatMap<T, U>(result: Result<T>, fn: (data: T) => Result<U>): Result<U> {
 		if (result.success && result.data !== undefined) {
 			return fn(result.data);

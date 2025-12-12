@@ -74,10 +74,12 @@ class StubProfileManager implements Pick<
 	}
 
 	assignTaskToProfile(name: string, _task: Task) {
+		void _task;
 		return name === "alpha";
 	}
 
 	getBestProfileForTask(_task: Task) {
+		void _task;
 		return this.profile;
 	}
 }

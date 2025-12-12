@@ -122,7 +122,6 @@ export class CalendarIntegration extends BaseIntegrationAdapter {
 		// Handle Google Calendar push notifications
 		const headers = payload.headers ?? {};
 		const resourceState = headers?.["x-goog-resource-state"];
-		const _channelId = headers?.["x-goog-channel-id"];
 		const resourceId = headers?.["x-goog-resource-id"];
 
 		console.log(`[CALENDAR] Processing webhook: ${resourceState} for resource ${resourceId}`);
