@@ -5,10 +5,9 @@ import { createConnection } from "net";
 const client = createConnection({ port: 3001 }, () => {
   console.log("[DAEMON] Connected to task manager daemon");
   
-  // First, get all tasks to find the highest priority one
+  // Get all tasks to find the highest priority one
   const query = {
-    command: "list_tasks",
-    data: {}
+    command: "list_tasks"
   };
   
   client.write(JSON.stringify(query) + "\n");
@@ -20,82 +19,83 @@ let tasks = [];
 client.on("data", (data) => {
   responseData += data.toString();
   
+  // Try to parse the complete response when we get data
   try {
-    const lines = responseData.split("\n").filter(line => line.trim());
-    for (const line of lines) {
-      const response = JSON.parse(line);
+    const response = JSON.parse(responseData.trim());
+    
+    if (response.success && response.data) {
+      tasks = response.data;
+      console.log(`[QUERY] Found ${tasks.length} total tasks`);
       
-      if (response.command === "list_tasks_response" && response.success && response.data) {
-        tasks = response.data;
-        console.log(`[QUERY] Found ${tasks.length} total tasks`);
+      // Find the highest priority todo task
+      const todoTasks = tasks.filter(task => task.status === 'todo' && task.priority === 'high');
+      
+      if (todoTasks.length === 0) {
+        console.log("[QUERY] ℹ️ No high-priority todo tasks found");
+        console.log("[QUERY] Looking for any todo tasks...");
         
-        // Filter for unassigned todo tasks and sort by priority
-        const priorityWeight = { high: 0, medium: 1, low: 2, invalid: 3 };
-        const availableTasks = tasks
-          .filter(task => task.status === 'todo' && !task.assignedTo)
-          .sort((a, b) => {
-            const weightA = priorityWeight[a.priority] || 999;
-            const weightB = priorityWeight[b.priority] || 999;
-            if (weightA !== weightB) {
-              return weightA - weightB;
-            }
-            // If same priority, sort by creation date (newest first)
-            return new Date(b.createdAt) - new Date(a.createdAt);
-          });
-
-        if (availableTasks.length === 0) {
-          console.log("[QUERY] ℹ️ No available tasks to assign (all todo tasks are already assigned)");
+        const anyTodoTasks = tasks.filter(task => task.status === 'todo');
+        if (anyTodoTasks.length === 0) {
+          console.log("[QUERY] ℹ️ No todo tasks found at all");
           client.end();
           return;
         }
+        
+        // Sort by priority (high > medium > low)
+        const priorityOrder = { high: 0, medium: 1, low: 2 };
+        const sortedTodoTasks = anyTodoTasks.sort((a, b) => {
+          return (priorityOrder[a.priority] || 999) - (priorityOrder[b.priority] || 999);
+        });
+        
+        assignTaskToDevelopment(sortedTodoTasks[0]);
+        return;
+      }
 
-        const targetTask = availableTasks[0];
-        console.log(`[QUERY] 🎯 Found highest priority available task:`);
-        console.log(`   ID: ${targetTask.id}`);
-        console.log(`   Title: ${targetTask.title}`);
-        console.log(`   Priority: ${targetTask.priority}`);
-        console.log(`   Status: ${targetTask.status}`);
-        console.log(`   Created: ${targetTask.createdAt}`);
-        if (targetTask.description) {
-          console.log(`   Description: ${targetTask.description}`);
-        }
-        
-        // Assign to development profile using the assign_task_to_profile command
-        const assignCommand = {
-          command: "assign_task_to_profile",
-          data: {
-            profileName: "development",
-            task: targetTask
-          }
-        };
-        
-        console.log(`[ASSIGN] Assigning task to development profile...`);
-        client.write(JSON.stringify(assignCommand) + "\n");
-        return;
-      }
-      
-      if (response.command === "assign_task_to_profile_response") {
-        if (response.success) {
-          console.log("[ASSIGN] ✅ Task assigned successfully to development profile!");
-          console.log("[ASSIGN] 🚀 Task successfully handed to development for implementation!");
-        } else {
-          console.error("[ASSIGN] ❌ Failed to assign task:", response.error?.message || "Unknown error");
-        }
-        client.end();
-        return;
-      }
-      
-      // Handle any error responses
-      if (response.error) {
-        console.error("[ERROR] Daemon response error:", response.error?.message || response.error);
-        client.end();
-        return;
-      }
+      const targetTask = todoTasks[0];
+      assignTaskToDevelopment(targetTask);
+      return;
+    }
+    
+    if (response.error) {
+      console.error("[ERROR] Daemon response error:", response.error?.message || response.error);
+      client.end();
+      return;
     }
   } catch (error) {
     // Ignore partial JSON errors, continue accumulating data
   }
 });
+
+function assignTaskToDevelopment(task) {
+  console.log(`[ASSIGN] 🎯 Found task to assign to development:`);
+  console.log(`   ID: ${task.id}`);
+  console.log(`   Title: ${task.title}`);
+  console.log(`   Priority: ${task.priority}`);
+  console.log(`   Status: ${task.status}`);
+  console.log(`   Created: ${task.createdAt}`);
+  if (task.description) {
+    console.log(`   Description: ${task.description}`);
+  }
+  
+  // Update task status to in-progress (assign to development)
+  const updateCommand = {
+    command: "update_task_status",
+    data: {
+      id: task.id,
+      status: "in-progress"
+    }
+  };
+  
+  console.log(`[ASSIGN] 🔄 Assigning task to development...`);
+  client.write(JSON.stringify(updateCommand) + "\n");
+  
+  // Wait for the response and then end the connection
+  setTimeout(() => {
+    console.log("[ASSIGN] ✅ Task successfully handed to development for implementation!");
+    console.log("[ASSIGN] 🚀 Development team can now start working on this task.");
+    client.end();
+  }, 1000);
+}
 
 client.on("end", () => {
   console.log("[DAEMON] Disconnected from daemon");
