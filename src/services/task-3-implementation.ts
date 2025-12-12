@@ -26,8 +26,6 @@ export interface TaskDependencyGraph {
 }
 
 export class AdvancedTaskManager {
-  private taskMetrics: Map<string, number> = new Map();
-  private dependencyGraph: TaskDependencyGraph = { nodes: [], edges: [] };
   
   /**
    * Calculate task completion metrics

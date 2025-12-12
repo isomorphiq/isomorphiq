@@ -10,6 +10,8 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { registerAuthRoutes } from "./http/routes/auth-routes.ts";
 import { registerAdminRoutes } from "./http/routes/admin-routes.ts";
+import { registerTaskRoutes } from "./http/routes/task-routes.ts";
+import { registerSearchRoutes } from "./http/routes/search-routes.ts";
 import {
 	authenticateToken,
 	enforceAdminWriteAccess,
@@ -44,113 +46,7 @@ const errorHandler = (
 	res.status(500).json({ error: message || "Internal server error" });
 };
 
-// Validation helpers
-const validateTaskInput = (title: string, description: string, priority?: string) => {
-	if (!title || typeof title !== "string" || title.trim().length === 0) {
-		throw new Error("Title is required and must be a non-empty string");
-	}
-	if (!description || typeof description !== "string" || description.trim().length === 0) {
-		throw new Error("Description is required and must be a non-empty string");
-	}
-	if (priority && !["low", "medium", "high"].includes(priority)) {
-		throw new Error("Priority must be one of: low, medium, high");
-	}
-};
-
-const validateTaskStatus = (status: string) => {
-	if (!["todo", "in-progress", "done"].includes(status)) {
-		throw new Error("Status must be one of: todo, in-progress, done");
-	}
-};
-
-const priorityWeight: Record<Task["priority"], number> = {
-	high: 0,
-	medium: 1,
-	low: 2,
-};
 type AuthenticatedRequest = AuthContextRequest;
-
-// Import advanced search types
-import type { 
-	SearchQuery, 
-	SearchResult, 
-	SearchSort,
-	SavedSearch, 
-	CreateSavedSearchInput, 
-	UpdateSavedSearchInput 
-} from "./types.ts";
-
-// Simple text search and relevance scoring
-function searchTasks(
-	tasks: Task[],
-	query: string,
-): {
-	task: Task;
-	score: number;
-	matches?: { title: number[]; description: number[] };
-}[] {
-	if (!query || query.trim().length === 0) {
-		return tasks.map((task) => ({ task, score: 0 }));
-	}
-
-	const searchTerms = query
-		.toLowerCase()
-		.split(/\s+/)
-		.filter((term) => term.length > 0);
-
-	return tasks
-		.map((task) => {
-			const title = task.title.toLowerCase();
-			const description = task.description.toLowerCase();
-
-			let score = 0;
-			const titleMatches: number[] = [];
-			const descriptionMatches: number[] = [];
-
-			searchTerms.forEach((term) => {
-				// Title matches (higher weight)
-				let titleIndex = title.indexOf(term);
-				while (titleIndex !== -1) {
-					score += 10; // Title matches get 10 points
-					titleMatches.push(titleIndex);
-					titleIndex = title.indexOf(term, titleIndex + 1);
-				}
-
-				// Description matches (lower weight)
-				let descIndex = description.indexOf(term);
-				while (descIndex !== -1) {
-					score += 5; // Description matches get 5 points
-					descriptionMatches.push(descIndex);
-					descIndex = description.indexOf(term, descIndex + 1);
-				}
-			});
-
-			// Exact phrase match bonus
-			if (title.includes(query.toLowerCase()) || description.includes(query.toLowerCase())) {
-				score += 20;
-			}
-
-			const result: {
-				task: Task;
-				score: number;
-				matches?: { title: number[]; description: number[] };
-			} = {
-				task,
-				score,
-			};
-
-			if (titleMatches.length > 0 || descriptionMatches.length > 0) {
-				result.matches = {
-					title: titleMatches,
-					description: descriptionMatches,
-				};
-			}
-
-			return result;
-		})
-		.filter((result) => result.score > 0)
-		.sort((a, b) => b.score - a.score);
-}
 
 // tRPC setup
 type TrpcContext = { pm: ProductManager; wsManager?: WebSocketManager };

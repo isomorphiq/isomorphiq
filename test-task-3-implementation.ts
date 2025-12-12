@@ -3,7 +3,7 @@
 // Test Task 3 Implementation
 // Verify that the advanced task management features are working
 
-import { advancedTaskManager, Task3Utils } from "./src/services/task-3-implementation.ts";
+import { advancedTaskManager, Task3Utils } from "./src/services/task-3-implementation";
 
 console.log("🧪 Testing Task 3 Implementation...");
 
