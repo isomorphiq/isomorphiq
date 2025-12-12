@@ -20,6 +20,7 @@ import type { TaskStatus, TaskType, WebSocketEventType } from "./types.ts";
 import { buildWorkflowWithEffects } from "./workflow.ts";
 import { advanceToken, createToken } from "./workflow-engine.ts";
 import type { WebSocketManager } from "./websocket-server.ts";
+import { optimizedPriorityService } from "./services/priority-update-manager.ts";
 
 // Initialize LevelDB
 const dbPath = path.join(process.cwd(), "db");
@@ -36,6 +37,7 @@ export class ProductManager {
 	private automationEngine: AutomationRuleEngine;
 	private dbReady = false;
 	private wsManager: WebSocketManager | null = null;
+	private priorityService = optimizedPriorityService;
 
 	private async ensureDbOpen(): Promise<void> {
 		if (this.dbReady) return;
@@ -378,7 +380,7 @@ export class ProductManager {
 		return task;
 	}
 
-	// Update task priority
+	// Update task priority with optimized service
 	async updateTaskPriority(id: string, priority: "low" | "medium" | "high"): Promise<Task> {
 		// Ensure database is open
 		if (!this.dbReady) {
@@ -386,36 +388,51 @@ export class ProductManager {
 			this.dbReady = true;
 		}
 
-		const task = await db.get(id);
-		const oldPriority = task.priority;
-		task.priority = priority;
-		task.updatedAt = new Date();
-		await db.put(id, task);
+		// Get current task for priority comparison
+		const currentTask = await db.get(id);
+		const oldPriority = currentTask.priority;
 
-		// Process automation rules for priority change
-		const allTasks = await this.getAllTasks();
-		const automationResults = await this.automationEngine.processTaskEvent(
-			"task_priority_changed",
-			{
-				taskId: id,
-				oldPriority,
-				newPriority: priority,
-				task,
+		// Use optimized priority service for update
+		return await this.priorityService.updateTaskPriority(
+			id,
+			priority,
+			oldPriority,
+			async (taskId: string, newPriority: "low" | "medium" | "high") => {
+				// Perform the actual database update
+				const task = currentTask;
+				task.priority = newPriority;
+				task.updatedAt = new Date();
+				await db.put(taskId, task);
+
+				// Process automation rules for priority change (optimized)
+				// Only process if priority actually changed
+				if (oldPriority !== newPriority) {
+					const automationResults = await this.automationEngine.processTaskEvent(
+						"task_priority_changed",
+						{
+							taskId,
+							oldPriority,
+							newPriority,
+							task,
+						},
+						[task], // Pass just the updated task to reduce processing
+					);
+					
+					if (automationResults.length > 0) {
+						console.log(
+							`[AUTOMATION] Processed ${automationResults.length} automation rules for priority change`,
+						);
+					}
+
+					// Broadcast priority change to WebSocket clients
+					if (this.wsManager) {
+						this.wsManager.broadcastTaskPriorityChanged(taskId, oldPriority, newPriority, task);
+					}
+				}
+
+				return task;
 			},
-			allTasks,
 		);
-		if (automationResults.length > 0) {
-			console.log(
-				`[AUTOMATION] Processed ${automationResults.length} automation rules for priority change`,
-			);
-		}
-
-		// Broadcast priority change to WebSocket clients
-		if (this.wsManager) {
-			this.wsManager.broadcastTaskPriorityChanged(id, oldPriority, priority, task);
-		}
-
-		return task;
 	}
 
 	// Delete a task
