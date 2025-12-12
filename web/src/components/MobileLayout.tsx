@@ -17,6 +17,8 @@ export function MobileLayout({ children, showNav = true, showFooter = true }: Mo
 	const [_showUserMenu, _setShowUserMenu] = useState(false);
 	const { isOnline, syncInProgress, getSyncQueueSize } = useOfflineSync();
 	const [_syncQueueSize, setSyncQueueSize] = useState(0);
+	const getIsMobile = () => (typeof window !== "undefined" ? window.innerWidth <= 768 : false);
+	const [isMobile, setIsMobile] = useState(getIsMobile());
 
 	useEffect(() => {
 		const updateSyncQueueSize = async () => {
@@ -28,6 +30,15 @@ export function MobileLayout({ children, showNav = true, showFooter = true }: Mo
 		return () => clearInterval(interval);
 	}, [getSyncQueueSize]);
 
+	useEffect(() => {
+		const handleResize = () => setIsMobile(getIsMobile());
+		if (typeof window !== "undefined") {
+			window.addEventListener("resize", handleResize);
+			return () => window.removeEventListener("resize", handleResize);
+		}
+		return () => {};
+	}, []);
+
 	const navItems = [
 		{ to: "/", label: "Dashboard", icon: "📊" },
 		{ to: "/analytics", label: "Analytics", icon: "📈" },
@@ -37,8 +48,6 @@ export function MobileLayout({ children, showNav = true, showFooter = true }: Mo
 		{ to: "/dependencies", label: "Dependencies", icon: "🔗" },
 		{ to: "/users/me", label: "Profile", icon: "👤", requireAuth: true },
 	];
-
-	const isMobile = window.innerWidth <= 768;
 
 	return (
 		<div

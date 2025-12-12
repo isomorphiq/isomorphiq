@@ -21,7 +21,8 @@ export function DependencyAnalysisPage({ tasks }: DependencyAnalysisPageProps) {
 		top: number;
 		left: number;
 	} | null>(null);
-	const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+	const getIsMobile = () => (typeof window !== "undefined" ? window.innerWidth <= 768 : false);
+	const [isMobile, setIsMobile] = useState(getIsMobile());
 	const availableListRef = useRef<HTMLDivElement | null>(null);
 
 	// Calculate project statistics (memoized to reduce rerender cost)
@@ -33,15 +34,18 @@ export function DependencyAnalysisPage({ tasks }: DependencyAnalysisPageProps) {
 
 	useEffect(() => {
 		const handleResize = () => {
-			const mobileView = window.innerWidth <= 768;
+			const mobileView = getIsMobile();
 			setIsMobile(mobileView);
 			if (mobileView) {
 				setHoverInfo(null);
 			}
 		};
 
-		window.addEventListener("resize", handleResize);
-		return () => window.removeEventListener("resize", handleResize);
+		if (typeof window !== "undefined") {
+			window.addEventListener("resize", handleResize);
+			return () => window.removeEventListener("resize", handleResize);
+		}
+		return () => {};
 	}, []);
 
 	const handleTaskClick = (task: Task) => {

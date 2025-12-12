@@ -32,10 +32,13 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 
 	useEffect(() => {
 		const handleResize = () => {
-			setIsMobile(window.innerWidth <= 900);
+			setIsMobile(getIsMobile());
 		};
-		window.addEventListener("resize", handleResize);
-		return () => window.removeEventListener("resize", handleResize);
+		if (typeof window !== "undefined") {
+			window.addEventListener("resize", handleResize);
+			return () => window.removeEventListener("resize", handleResize);
+		}
+		return () => {};
 	}, []);
 
 	useEffect(() => {

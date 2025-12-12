@@ -74,7 +74,7 @@ export function PWAInstallPrompt({ onInstall }: PWAInstallPromptProps) {
 		return null;
 	}
 
-	const isMobile = window.innerWidth <= 768;
+	const isMobile = typeof window !== "undefined" ? window.innerWidth <= 768 : false;
 
 	return (
 		<div
