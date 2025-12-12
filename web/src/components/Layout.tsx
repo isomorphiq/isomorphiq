@@ -11,12 +11,14 @@ type LayoutProps = {
 	showFooter?: boolean;
 };
 
+const getIsMobile = () => (typeof window !== "undefined" ? window.innerWidth <= 900 : false);
+
 export function Layout({ children, showNav = true, showFooter = true }: LayoutProps) {
 	const auth = useAtomValue(authAtom);
 	const location = useLocation();
 	const [showUserMenu, setShowUserMenu] = useState(false);
 	const [navOpen, setNavOpen] = useState(false);
-	const [isMobile, setIsMobile] = useState(window.innerWidth <= 900);
+	const [isMobile, setIsMobile] = useState(getIsMobile());
 
 	const navItems = [
 		{ to: "/", label: "Dashboard", icon: "📊" },
