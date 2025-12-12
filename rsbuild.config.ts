@@ -10,7 +10,7 @@ export default defineConfig({
     },
     html: {
         template: "./web/index.html",
-        title: "Isomorphia - Command Flow",
+        title: "Isomorphiq - Command Flow",
     },
     output: {
         distPath: {

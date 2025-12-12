@@ -117,7 +117,7 @@ export function PWAInstallPrompt({ onInstall }: PWAInstallPromptProps) {
 							fontWeight: 600,
 						}}
 					>
-						Install Isomorphia
+						Install Isomorphiq
 					</h3>
 					<p
 						style={{
