@@ -1,11 +1,16 @@
 import { exec } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { createConnection } from "node:net";
+import { resolve } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
-	CallToolRequestSchema,
-	ListToolsRequestSchema,
-	type Tool,
+    CallToolRequestSchema,
+    ListResourcesRequestSchema,
+    ListToolsRequestSchema,
+    ReadResourceRequestSchema,
+    type Resource,
+    type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 
 // TCP client to communicate with the daemon
@@ -75,18 +80,33 @@ class DaemonClient {
 
 // Create daemon client
 const daemonClient = new DaemonClient();
+const gbnfResourcePath = resolve(process.cwd(), "resources", "mcp-tool-calls.gbnf");
+const gbnfResourceUri = "file://resources/mcp-tool-calls.gbnf";
+const mcpResources: Resource[] = [
+    {
+        name: "MCP tool call grammar",
+        uri: gbnfResourceUri,
+        description: "GBNF grammar describing the TCP JSON payloads accepted by the daemon",
+        mimeType: "text/plain",
+        annotations: {
+            audience: ["assistant"],
+            priority: 1,
+        },
+    },
+];
 
 // Define the MCP server
 const server = new Server(
-	{
-		name: "task-manager-mcp",
-		version: "1.0.0",
-	},
-	{
-		capabilities: {
-			tools: {},
-		},
-	},
+    {
+        name: "task-manager-mcp",
+        version: "1.0.0",
+    },
+    {
+        capabilities: {
+            tools: {},
+            resources: {},
+        },
+    },
 );
 
 // Define available tools
@@ -393,6 +413,27 @@ const tools: Tool[] = [
 		},
 	},
 ];
+
+server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    return { resources: mcpResources };
+});
+
+server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const resource = mcpResources.find((entry) => entry.uri === request.params.uri);
+    if (!resource) {
+        throw new Error(`Resource not found: ${request.params.uri}`);
+    }
+    const contents = await readFile(gbnfResourcePath, "utf8");
+    return {
+        contents: [
+            {
+                uri: resource.uri,
+                mimeType: resource.mimeType ?? "text/plain",
+                text: contents,
+            },
+        ],
+    };
+});
 
 // Handle tool listing
 server.setRequestHandler(ListToolsRequestSchema, async () => {

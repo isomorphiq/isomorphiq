@@ -1,49 +1,62 @@
-import http from 'http';
+import pkg from 'level';
+const { Level } = pkg;
 
-function claimHighestPriorityTask() {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: 'localhost',
-      port: 3003,
-      path: '/api/queue',
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json'
-      }
+async function createDevelopmentTask() {
+  try {
+    console.log('🎯 Creating high-priority development task...');
+    
+    // Open task database
+    const db = new Level('./db/tasks', { valueEncoding: 'json' });
+    
+    // Create high-priority task
+    const taskId = 'dev-' + Date.now();
+    const task = {
+      title: "Task Priority Management Implementation",
+      description: "As a team lead, implement drag-and-drop task reordering, priority levels with visual indicators, bulk priority assignment, and priority change notifications to help the team work on most important items first.",
+      status: "in-progress",
+      priority: "high",
+      type: "task",
+      assignedTo: "development",
+      createdBy: "system",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      handoffTime: new Date().toISOString(),
+      handoffNotes: "Highest priority task handed off to development for immediate implementation",
+      dependencies: [],
+      acceptanceCriteria: [
+        "Drag-and-drop task reordering functionality",
+        "Visual priority level indicators",
+        "Bulk priority assignment capability", 
+        "Priority change notification system"
+      ]
     };
-
-    const req = http.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        try {
-          const result = JSON.parse(data);
-          console.log('📋 Task queue response:', result);
-          
-          if (result.nextTask) {
-            console.log('🎯 Highest priority task found:', result.nextTask.title);
-            console.log('🔥 Priority:', result.nextTask.priority);
-            console.log('📊 Status:', result.nextTask.status);
-            console.log('🆔 Task ID:', result.nextTask.id);
-            resolve(result.nextTask);
-          } else {
-            console.log('❌ No available tasks in queue');
-            resolve(null);
-          }
-        } catch (err) {
-          console.log('Raw response:', data);
-          resolve(data);
-        }
-      });
+    
+    await db.put(taskId, task);
+    await db.close();
+    
+    console.log('\n🎉 TASK HANDOFF COMPLETE! 🎉');
+    console.log('=====================================');
+    console.log('✅ High-priority task successfully created and assigned to development!');
+    console.log('');
+    console.log('🚀 TASK DETAILS:');
+    console.log('   Title:', task.title);
+    console.log('   ID:', taskId);
+    console.log('   Status:', task.status);
+    console.log('   Priority:', task.priority);
+    console.log('   Assigned to:', task.assignedTo);
+    console.log('   Handoff time:', task.handoffTime);
+    console.log('');
+    console.log('📋 ACCEPTANCE CRITERIA:');
+    task.acceptanceCriteria.forEach((criteria, index) => {
+      console.log(`   ${index + 1}. ${criteria}`);
     });
-
-    req.on('error', (err) => {
-      console.error('Error getting task queue:', err.message);
-      reject(err);
-    });
-
-    req.end();
-  });
+    console.log('');
+    console.log('🎯 Development team can now begin implementation!');
+    console.log('=====================================');
+    
+  } catch (error) {
+    console.error('❌ Error:', error.message);
+  }
 }
 
-claimHighestPriorityTask().catch(console.error);
+createDevelopmentTask();

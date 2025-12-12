@@ -1,0 +1,29 @@
+root ::= message
+
+message ::= "{" ws "\"command\"" ws ":" ws command ws dataSection? ws "}"
+dataSection ::= "," ws "\"data\"" ws ":" ws jsonObject
+
+command ::= "\"create_task\"" | "\"list_tasks\"" | "\"get_task\"" | "\"update_task_status\"" | "\"update_task_priority\"" | "\"delete_task\"" | "\"restart\"" | "\"ws_status\"" | "\"create_template\"" | "\"list_templates\"" | "\"get_template\"" | "\"create_task_from_template\"" | "\"initialize_templates\"" | "\"create_automation_rule\"" | "\"list_automation_rules\"" | "\"update_automation_rule\"" | "\"delete_automation_rule\"" | "\"reload_automation_rules\"" | "\"create_user\"" | "\"authenticate_user\"" | "\"get_user\"" | "\"list_users\"" | "\"update_user\"" | "\"delete_user\"" | "\"validate_session\"" | "\"logout_user\"" | "\"refresh_token\"" | "\"cleanup_sessions\"" | "\"get_profile_states\"" | "\"get_profile_state\"" | "\"get_profile_metrics\"" | "\"get_all_profile_metrics\"" | "\"get_profiles_with_states\"" | "\"get_profile_task_queue\"" | "\"update_profile_status\"" | "\"get_best_profile_for_task\"" | "\"assign_task_to_profile\"" | "\"unlock_accounts\""
+
+jsonObject ::= "{" ws pairList? ws "}"
+pairList ::= pair (ws "," ws pair)*
+pair ::= string ws ":" ws value
+
+value ::= string | number | object | array | "true" | "false" | "null"
+object ::= jsonObject
+array ::= "[" ws valueList? ws "]"
+valueList ::= value (ws "," ws value)*
+
+string ::= "\"" chars "\""
+chars ::= char*
+char ::= [^"\\] | escape
+escape ::= "\\" ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t")
+
+number ::= int frac? exp?
+int ::= "-"? ("0" | nonZeroDigit digit*)
+frac ::= "." digit+
+exp ::= ("e" | "E") ("+" | "-")? digit+
+digit ::= [0-9]
+nonZeroDigit ::= [1-9]
+
+ws ::= [ \t\n\r]*
