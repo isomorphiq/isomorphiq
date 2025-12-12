@@ -37,9 +37,6 @@ export function registerSearchRoutes(app: express.Application, pm: ProductManage
                 const userTasks = await pm.getTasksForUser(user.id, ["created", "assigned", "collaborating"]);
                 searchQuery.assignedTo = [user.id];
                 searchQuery.collaborators = [user.id];
-                if (!searchQuery.tasks) {
-                    searchQuery.tasks = userTasks.map((t) => t.id);
-                }
             }
 
             const searchResult = await pm.searchTasks(searchQuery);
