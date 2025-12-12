@@ -1,6 +1,6 @@
-2025/12/12-05:27:44.523771 7f6f80bfc6c0 Recovering log #57
-2025/12/12-05:27:44.523810 7f6f80bfc6c0 Level-0 table #59: started
-2025/12/12-05:27:44.524751 7f6f80bfc6c0 Level-0 table #59: 1068 bytes OK
-2025/12/12-05:27:44.527516 7f6f80bfc6c0 Delete type=0 #57
-2025/12/12-05:27:44.527547 7f6f80bfc6c0 Delete type=3 #55
-2025/12/12-05:27:44.529152 7f6f73fff6c0 Moved #50 to level-1 1068 bytes OK: files[ 3 16 0 0 0 0 0 ]
+2025/12/12-05:30:44.654563 7f3f8b7fe6c0 Recovering log #60
+2025/12/12-05:30:44.654584 7f3f8b7fe6c0 Level-0 table #62: started
+2025/12/12-05:30:44.656151 7f3f8b7fe6c0 Level-0 table #62: 1068 bytes OK
+2025/12/12-05:30:44.659869 7f3f8b7fe6c0 Delete type=3 #58
+2025/12/12-05:30:44.659881 7f3f8b7fe6c0 Delete type=0 #60
+2025/12/12-05:30:44.661815 7f3f8affd6c0 Moved #53 to level-1 1068 bytes OK: files[ 3 17 0 0 0 0 0 ]

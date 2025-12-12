@@ -57,6 +57,56 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 		}
 	}, [isMobile]);
 
+	const isAdminUser = auth.user?.username === "nyan";
+
+	useEffect(() => {
+		const fetchAdminSettings = async () => {
+			if (!isAdminUser || !auth.token) return;
+			try {
+				const response = await fetch("/api/admin/settings", {
+					headers: {
+						Authorization: `Bearer ${auth.token}`,
+					},
+				});
+				const data = await response.json();
+				if (response.ok && data?.settings) {
+					setAdminSettings(data.settings as AdminSettings);
+					setAdminSettingsError(null);
+				} else {
+					setAdminSettingsError(data.error || "Failed to load admin settings");
+				}
+			} catch (error) {
+				console.error("Failed to load admin settings", error);
+				setAdminSettingsError("Failed to load admin settings");
+			}
+		};
+		fetchAdminSettings();
+	}, [auth.token, isAdminUser]);
+
+	const updateAdminSettings = async (patch: Partial<AdminSettings>) => {
+		if (!isAdminUser || !auth.token) return;
+		try {
+			const response = await fetch("/api/admin/settings", {
+				method: "PUT",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${auth.token}`,
+				},
+				body: JSON.stringify(patch),
+			});
+			const data = await response.json();
+			if (response.ok && data?.settings) {
+				setAdminSettings(data.settings as AdminSettings);
+				setAdminSettingsError(null);
+			} else {
+				setAdminSettingsError(data.error || "Failed to update admin settings");
+			}
+		} catch (error) {
+			console.error("Failed to update admin settings", error);
+			setAdminSettingsError("Failed to update admin settings");
+		}
+	};
+
 	return (
 		<div
 			style={{
@@ -197,6 +247,67 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 								<Link to="/security" onClick={() => setShowUserMenu(false)} style={menuLinkStyle}>
 									🔒 Security
 								</Link>
+								{isAdminUser && (
+									<div
+										style={{
+											padding: "10px 12px",
+											borderBottom: "1px solid var(--color-border-primary)",
+											display: "grid",
+											gap: "8px",
+										}}
+									>
+										<div
+											style={{
+												fontSize: "12px",
+												color: "var(--color-text-muted)",
+												fontWeight: 700,
+												display: "flex",
+												alignItems: "center",
+												justifyContent: "space-between",
+												gap: "8px",
+											}}
+										>
+											<span>Admin controls</span>
+											<Link
+												to="/security"
+												onClick={() => setShowUserMenu(false)}
+												style={{
+													color: "var(--color-accent-primary)",
+													textDecoration: "none",
+													fontWeight: 700,
+													fontSize: "12px",
+												}}
+											>
+												open
+											</Link>
+										</div>
+										<label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "var(--color-text-primary)" }}>
+											<input
+												type="checkbox"
+												checked={adminSettings.registrationEnabled}
+												onChange={(e) =>
+													updateAdminSettings({ registrationEnabled: e.target.checked })
+												}
+											/>
+											Allow user registration
+										</label>
+										<label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "var(--color-text-primary)" }}>
+											<input
+												type="checkbox"
+												checked={adminSettings.allowNonAdminWrites}
+												onChange={(e) =>
+													updateAdminSettings({ allowNonAdminWrites: e.target.checked })
+												}
+											/>
+											Allow non-admin writes
+										</label>
+										{adminSettingsError && (
+											<div style={{ color: "var(--color-accent-error)", fontSize: "11px" }}>
+												{adminSettingsError}
+											</div>
+										)}
+									</div>
+								)}
 								<button
 									type="button"
 									onClick={() => {
