@@ -25,6 +25,7 @@ import {
 	ValidationError,
 } from "../core/result.ts";
 
+/* eslint-disable no-unused-vars */
 export interface IApprovalWorkflowRepository {
 	create(workflow: ApprovalWorkflow): Promise<Result<ApprovalWorkflow>>;
 	findById(id: string): Promise<Result<ApprovalWorkflow | null>>;
@@ -115,6 +116,7 @@ export interface IApprovalWorkflowService {
 		getWorkflowStats(workflowId: string): Promise<Result<ApprovalStats>>;
 	};
 }
+/* eslint-enable no-unused-vars */
 
 export class ApprovalWorkflowService implements IApprovalWorkflowService {
 	private readonly workflowRepo: IApprovalWorkflowRepository;
@@ -291,7 +293,7 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 					return { success: false, error: activeWorkflowsResult.error };
 				}
 
-				const matchedWorkflow = this.findMatchingWorkflow(activeWorkflowsResult.data, input.taskId);
+				const matchedWorkflow = this.findMatchingWorkflow(activeWorkflowsResult.data);
 				if (!matchedWorkflow) {
 					return {
 						success: false,
@@ -828,10 +830,7 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 		return { success: true, data: undefined };
 	}
 
-	private findMatchingWorkflow(
-		workflows: ApprovalWorkflow[],
-		_taskId: string,
-	): ApprovalWorkflow | null {
+	private findMatchingWorkflow(workflows: ApprovalWorkflow[]): ApprovalWorkflow | null {
 		return workflows.find((w: ApprovalWorkflow) => w.isActive) || null;
 	}
 

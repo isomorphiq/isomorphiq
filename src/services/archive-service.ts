@@ -134,6 +134,7 @@ export class ArchiveService {
 	 */
 	async restoreTask(archivedTaskId: string, restoredBy: string): Promise<Task> {
 		try {
+			console.log(`[ARCHIVE] Restoring task ${archivedTaskId} by ${restoredBy}`);
 			// Get archived task
 			const archivedTask = await this.archiveDb.get(archivedTaskId);
 			
@@ -217,23 +218,23 @@ export class ArchiveService {
 
 			// Get all tasks from main database
 			const { Level } = await import("level");
-			const mainDb = new Level(this.dbPath, { valueEncoding: "json" });
-			await mainDb.open();
+				const mainDb = new Level(this.dbPath, { valueEncoding: "json" });
+				await mainDb.open();
 
-			const matchingTasks: Task[] = [];
-			for await (const [taskId, task] of mainDb.iterator()) {
-				const taskData = task as unknown as Task;
-				if (this.taskMatchesConditions(taskData, policy.conditions)) {
-					matchingTasks.push(taskData);
+				const matchingTasks: Task[] = [];
+				for await (const [, task] of mainDb.iterator()) {
+					const taskData = task as unknown as Task;
+					if (this.taskMatchesConditions(taskData, policy.conditions)) {
+						matchingTasks.push(taskData);
+					}
 				}
-			}
 
 			await mainDb.close();
 
 			// Apply policy actions
 			for (const task of matchingTasks) {
 				switch (policy.action.type) {
-					case "archive":
+					case "archive": {
 						const archived = await this.archiveTask(
 							task.id,
 							`Automated archival: ${policy.name}`,
@@ -242,15 +243,17 @@ export class ArchiveService {
 						);
 						result.archived.push(archived);
 						break;
-					
-					case "delete":
+					}
+
+					case "delete": {
 						const deleteDb = new Level(this.dbPath, { valueEncoding: "json" });
 						await deleteDb.open();
 						await deleteDb.del(task.id);
 						await deleteDb.close();
 						result.deleted.push(task.id);
 						break;
-					
+					}
+
 					case "flag":
 						result.flagged.push(task.id);
 						// Could add tags or notifications here

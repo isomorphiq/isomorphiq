@@ -71,12 +71,12 @@ function calculateCriticalPath(tasks: Task[]): CriticalPathResult {
 	const levels = calculateTaskLevels(dependencyMap);
 
 	// Create nodes with positions
-	const nodes: TaskNode[] = [];
-	const maxLevel = Math.max(...Object.values(levels));
+		const nodes: TaskNode[] = [];
+		const maxLevel = Math.max(...Object.values(levels));
 
-	for (const task of tasks) {
-		const level = levels[task.id] || 0;
-		const levelTasks = Object.entries(levels).filter(([_, l]) => l === level);
+		for (const task of tasks) {
+			const level = levels[task.id] || 0;
+			const levelTasks = Object.entries(levels).filter((entry) => entry[1] === level);
 		const indexInLevel = levelTasks.findIndex(([id]) => id === task.id);
 		const tasksInLevel = levelTasks.length;
 

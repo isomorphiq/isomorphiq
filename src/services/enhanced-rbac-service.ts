@@ -332,7 +332,7 @@ export class EnhancedRbacService {
 		const roles: EnhancedRole[] = [];
 		try {
 			const iterator = this.rolesDb.iterator();
-			for await (const [_key, value] of iterator) {
+			for await (const [, value] of iterator) {
 				roles.push(value);
 			}
 			await iterator.close();
@@ -348,6 +348,7 @@ export class EnhancedRbacService {
 		try {
 			return await this.rolesDb.get(id);
 		} catch (_error) {
+			void _error;
 			return null;
 		}
 	}
@@ -400,7 +401,7 @@ export class EnhancedRbacService {
 		const permissions: Permission[] = [];
 		try {
 			const iterator = this.permissionsDb.iterator();
-			for await (const [_key, value] of iterator) {
+			for await (const [, value] of iterator) {
 				permissions.push(value);
 			}
 			await iterator.close();
@@ -416,6 +417,7 @@ export class EnhancedRbacService {
 		try {
 			return await this.permissionsDb.get(id);
 		} catch (_error) {
+			void _error;
 			return null;
 		}
 	}
@@ -454,6 +456,7 @@ export class EnhancedRbacService {
 		try {
 			return await this.userRoleAssignmentsDb.get(userId);
 		} catch (_error) {
+			void _error;
 			return [];
 		}
 	}

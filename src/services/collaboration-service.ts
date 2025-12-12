@@ -51,6 +51,7 @@ export interface ConflictResolution {
 }
 
 // Collaboration service interface
+/* eslint-disable no-unused-vars */
 export interface ICollaborationService {
 	// Session management
 	joinTaskSession(taskId: string, userId: string, user: User): Promise<Result<TaskEditSession>>;
@@ -80,6 +81,7 @@ export interface ICollaborationService {
 	// Cleanup
 	cleanupInactiveSessions(): Promise<Result<void>>;
 }
+/* eslint-enable no-unused-vars */
 
 // --- Operational Transformation helpers (functional, no classes) ---
 
@@ -117,53 +119,6 @@ const transformOperations = (
 	}
 
 	return [op1, op2];
-};
-
-const _applyOperation = (text: string, operation: TextOperation): string => {
-	switch (operation.type) {
-		case "retain":
-			return text;
-		case "insert": {
-			const pos = operation.position || 0;
-			return text.slice(0, pos) + (operation.text || "") + text.slice(pos);
-		}
-		case "delete": {
-			const delPos = operation.position || 0;
-			const length = operation.length || 0;
-			return text.slice(0, delPos) + text.slice(delPos + length);
-		}
-		default:
-			return text;
-	}
-};
-
-const _composeOperations = (op1: TextOperation, op2: TextOperation): TextOperation => {
-	if (op1.type === "retain") return op2;
-	if (op2.type === "retain") return op1;
-
-	if (op1.type === "insert" && op2.type === "insert") {
-		if ((op1.position || 0) === (op2.position || 0)) {
-			return {
-				type: "insert",
-				position: op1.position,
-				text: (op1.text || "") + (op2.text || ""),
-			};
-		}
-		if ((op1.position || 0) < (op2.position || 0)) {
-			return {
-				type: "insert",
-				position: op1.position,
-				text: (op1.text || "") + (op2.text || ""),
-			};
-		}
-		return {
-			type: "insert",
-			position: op2.position,
-			text: (op2.text || "") + (op1.text || ""),
-		};
-	}
-
-	return op2;
 };
 
 // User color assignment helpers

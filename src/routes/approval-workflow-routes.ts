@@ -21,6 +21,10 @@ export function createApprovalWorkflowRoutes(
 ): Router {
 	const router = Router();
 	const authMiddleware = createAuthMiddleware(userManager);
+	const handleRouteError = (res: Response, error: unknown): void => {
+		console.error("[APPROVAL-ROUTES] Internal server error:", error);
+		res.status(500).json({ error: "Internal server error" });
+	};
 
 	// Workflow routes
 	router.post("/workflows", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
@@ -33,9 +37,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(400).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.get("/workflows", authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
@@ -47,9 +51,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(500).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.get("/workflows/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
@@ -61,9 +65,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(404).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.put("/workflows/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
@@ -76,9 +80,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(400).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.delete("/workflows/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
@@ -90,9 +94,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(400).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.get(
@@ -107,9 +111,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(500).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	// Approval routes
@@ -123,9 +127,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(400).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.get("/approvals", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
@@ -148,9 +152,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(500).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.get("/approvals/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
@@ -162,9 +166,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(404).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.post(
@@ -184,9 +188,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(400).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.post(
@@ -202,9 +206,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(400).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.post(
@@ -225,9 +229,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(400).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.post(
@@ -248,9 +252,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(400).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	// Template routes
@@ -264,9 +268,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(400).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.get("/templates", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
@@ -287,9 +291,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(500).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.get(
@@ -304,9 +308,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(404).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.put("/templates/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
@@ -318,9 +322,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(400).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	router.delete("/templates/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
@@ -332,9 +336,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(400).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	// Stats routes
@@ -356,9 +360,9 @@ export function createApprovalWorkflowRoutes(
 			} else {
 				res.status(500).json({ error: result.error?.message });
 			}
-		} catch (_error) {
-			res.status(500).json({ error: "Internal server error" });
-		}
+		} catch (error) {
+            handleRouteError(res, error);
+        }
 	});
 
 	return router;

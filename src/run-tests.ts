@@ -1,7 +1,4 @@
 import { exec } from "node:child_process";
-import { promisify } from "node:util";
-
-const _pexec = promisify(exec);
 
 function execWithCode(
 	command: string,
