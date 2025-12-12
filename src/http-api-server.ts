@@ -339,33 +339,7 @@ export function buildHttpApiApp(pm: ProductManager) {
 		},
 	);
 
-	// Task endpoints (with authentication)
-
-	// GET /api/tasks - List all tasks (requires authentication)
-	app.get("/api/tasks", authenticateToken, async (req: AuthenticatedRequest, res, next) => {
-		try {
-			const user = req.user;
-			if (!user) {
-				return res.status(401).json({ error: "Authentication required" });
-			}
-			console.log(`[HTTP API] GET /api/tasks - Listing all tasks for user: ${user.username}`);
-
-			// Filter tasks based on user permissions
-			const allTasks = await pm.getAllTasks();
-			const userManager = getUserManager();
-			const hasAdminPermission = await userManager.hasPermission(user, "tasks", "read");
-
-			let tasks = allTasks;
-			if (!hasAdminPermission) {
-				// Non-admin users can only see their own tasks (created, assigned, or collaborating)
-				tasks = await pm.getTasksForUser(user.id);
-			}
-
-			res.json({ tasks, count: tasks.length });
-		} catch (error) {
-			next(error);
-		}
-	});
+	// Task endpoints are registered via ./http/routes/task-routes.ts
 
 	// GET /api/queue - Show prioritized task queue (next up for ACP)
 	app.get("/api/queue", async (_req, res, next) => {
