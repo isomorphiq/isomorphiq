@@ -58,6 +58,50 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
         }
     });
 
+    // GET /api/users/:userId/tasks - Get tasks for a specific user
+    app.get(
+        "/api/users/:userId/tasks",
+        authenticateToken,
+        async (req: AuthContextRequest, res, next) => {
+            try {
+                const { userId } = req.params;
+                if (!userId) {
+                    return res.status(400).json({ error: "User ID is required" });
+                }
+                const user = req.user;
+                if (!user) {
+                    return res.status(401).json({ error: "Authentication required" });
+                }
+                const { include = "created,assigned,collaborating" } = req.query;
+                console.log(
+                    `[HTTP API] GET /api/users/${userId}/tasks - Getting tasks for user: ${userId}`,
+                );
+
+                if (userId !== user.id) {
+                    const userManager = getUserManager();
+                    const hasPermission = await userManager.hasPermission(user, "users", "read");
+                    if (!hasPermission) {
+                        return res.status(403).json({
+                            error: "Insufficient permissions to view other users tasks",
+                        });
+                    }
+                }
+
+                const includeTypes = (include as string).split(",").map((s) => s.trim()) as (
+                    | "created"
+                    | "assigned"
+                    | "collaborating"
+                    | "watching"
+                )[];
+                const tasks = await pm.getTasksForUser(userId, includeTypes);
+
+                res.json({ tasks, count: tasks.length });
+            } catch (error) {
+                next(error);
+            }
+        },
+    );
+
     // GET /api/queue - Show prioritized task queue (next up for ACP)
     app.get("/api/queue", async (_req, res, next) => {
         try {
