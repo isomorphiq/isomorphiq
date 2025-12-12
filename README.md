@@ -1,4 +1,4 @@
-# Opencode Task Manager
+# Isomorphiq Task Manager
 
 A TypeScript application that uses LevelDB to track task progress and delegates to an opencode ACP server via stdio.
 
@@ -47,7 +47,7 @@ Note: The current implementation spawns the opencode process for each command. E
 
 ## MCP Server Integration
 
-The application includes an MCP (Model Context Protocol) server that allows OpenCode agents to directly manage tasks. The MCP server exposes tools for creating, reading, updating, and prioritizing tasks stored in LevelDB.
+The application includes an MCP (Model Context Protocol) server that allows Isomorphiq agents to directly manage tasks. The MCP server exposes tools for creating, reading, updating, and prioritizing tasks stored in LevelDB.
 
 ### Starting the MCP Server
 ```bash

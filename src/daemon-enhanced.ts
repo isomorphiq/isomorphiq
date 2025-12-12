@@ -43,7 +43,7 @@ class EnhancedDaemon {
 
 	// Initialize and start the daemon
 	async start(): Promise<void> {
-		console.log("[DAEMON] Starting Enhanced Opencode Task Manager Daemon");
+		console.log("[DAEMON] Starting Enhanced Isomorphiq Task Manager Daemon");
 
 		try {
 			// Initialize process manager
@@ -191,7 +191,7 @@ async function main(): Promise<void> {
 const args = process.argv.slice(2);
 if (args.includes("--help") || args.includes("-h")) {
 	console.log(`
-Enhanced Opencode Task Manager Daemon
+Enhanced Isomorphiq Task Manager Daemon
 
 Usage: node src/daemon.ts [options]
 
@@ -212,7 +212,7 @@ Signals:
 }
 
 if (args.includes("--version") || args.includes("-v")) {
-	console.log("Enhanced Opencode Task Manager Daemon v1.0.0");
+	console.log("Enhanced Isomorphiq Task Manager Daemon v1.0.0");
 	process.exit(0);
 }
 
