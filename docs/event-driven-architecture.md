@@ -1,6 +1,6 @@
 # Event-Driven Architecture Implementation
 
-This document describes the event-driven architecture implementation for the Opencode Task Manager, providing real-time updates via WebSocket.
+This document describes the event-driven architecture implementation for the Isomorphiq Task Manager, providing real-time updates via WebSocket.
 
 ## Overview
 
@@ -392,4 +392,4 @@ setInterval(() => {
 }, 10000);
 ```
 
-This event-driven architecture provides a robust foundation for real-time features, scalability, and maintainability of the Opencode Task Manager system.
+This event-driven architecture provides a robust foundation for real-time features, scalability, and maintainability of the Isomorphiq Task Manager system.

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Opencode Task Manager now supports comprehensive multi-user functionality with role-based access control, user authentication, and task isolation. This document provides an overview of the multi-user features and how to use them.
+The Isomorphiq Task Manager now supports comprehensive multi-user functionality with role-based access control, user authentication, and task isolation. This document provides an overview of the multi-user features and how to use them.
 
 ## User Management
 
