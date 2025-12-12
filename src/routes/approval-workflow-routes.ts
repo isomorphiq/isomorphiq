@@ -254,7 +254,7 @@ export function createApprovalWorkflowRoutes(
 	});
 
 	// Template routes
-	router.post("/templates", authMiddleware, async (req: Request, res: Response) => {
+	router.post("/templates", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const input = { ...req.body, createdBy: req.user?.id };
 			const result = await approvalService.template.create(input);
@@ -269,7 +269,7 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.get("/templates", authMiddleware, async (req: Request, res: Response) => {
+	router.get("/templates", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const { category, public: isPublic } = req.query;
 
@@ -292,7 +292,10 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.get("/templates/:id", authMiddleware, async (req: Request, res: Response) => {
+	router.get(
+		"/templates/:id",
+		authMiddleware,
+		async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const result = await approvalService.template.get(req.params.id);
 
@@ -306,7 +309,7 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.put("/templates/:id", authMiddleware, async (req: Request, res: Response) => {
+	router.put("/templates/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const result = await approvalService.template.update(req.params.id, req.body);
 
@@ -320,7 +323,7 @@ export function createApprovalWorkflowRoutes(
 		}
 	});
 
-	router.delete("/templates/:id", authMiddleware, async (req: Request, res: Response) => {
+	router.delete("/templates/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
 		try {
 			const result = await approvalService.template.delete(req.params.id);
 

@@ -516,7 +516,8 @@ export function createIntegrationRoutes(integrationService: IntegrationService):
 	router.post("/webhook/:type", async (req: Request, res: Response) => {
 		try {
 			const { type } = req.params;
-			const signature = req.headers["x-hub-signature-256"] || req.headers["x-slack-signature"];
+			const signatureHeader = req.headers["x-hub-signature-256"] || req.headers["x-slack-signature"];
+			const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
 			const payload = req.body;
 
 			if (!type) {

@@ -179,7 +179,7 @@ export class ResourceManagementService {
 		);
 
 		// Analyze impact
-		const impactAnalysis = bestCandidate
+		const impactAnalysis: ResourceAllocationResult["impactAnalysis"] = bestCandidate
 			? await this.analyzeAllocationImpact(bestCandidate.userId, requirements)
 			: {
 					utilizationChange: 0,

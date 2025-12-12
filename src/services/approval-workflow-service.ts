@@ -141,7 +141,10 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 		): Promise<Result<ApprovalWorkflow>> => {
 			const validation = this.validateWorkflowInput(input);
 			if (!validation.success) {
-				return validation as Result<ApprovalWorkflow>;
+				return {
+					success: false,
+					error: validation.error,
+				};
 			}
 
 			const workflow: ApprovalWorkflow = {
@@ -219,7 +222,7 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 					id:
 						stage.id ||
 						`stage-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 11)}`,
-				})) as WorkflowStage[];
+				}));
 			}
 
 			if (input.rules) {
@@ -227,7 +230,7 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 					...rule,
 					id:
 						rule.id || `rule-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 11)}`,
-				})) as WorkflowRule[];
+				}));
 			}
 
 			const result = await this.workflowRepo.update(id, updated);
@@ -246,7 +249,7 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 		delete: async (id: string, deletedBy: string): Promise<Result<void>> => {
 			const existingResult = await this.workflow.get(id);
 			if (!existingResult.success) {
-				return existingResult as Result<void>;
+				return { success: false, error: existingResult.error };
 			}
 
 			const result = await this.workflowRepo.delete(id);
@@ -277,14 +280,14 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 
 			if (input.workflowId) {
 				const workflowResult = await this.workflow.get(input.workflowId);
-				if (!workflowResult.success) {
-					return workflowResult as Result<TaskApproval>;
+				if (!workflowResult.success || !workflowResult.data) {
+					return { success: false, error: workflowResult.error };
 				}
 				workflow = workflowResult.data;
 			} else {
 				const activeWorkflowsResult = await this.workflow.getActive();
-				if (!activeWorkflowsResult.success) {
-					return activeWorkflowsResult as Result<TaskApproval>;
+				if (!activeWorkflowsResult.success || !activeWorkflowsResult.data) {
+					return { success: false, error: activeWorkflowsResult.error };
 				}
 
 				const matchedWorkflow = this.findMatchingWorkflow(activeWorkflowsResult.data, input.taskId);
@@ -298,7 +301,7 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 			}
 
 			const existingApprovalResult = await this.approvalRepo.findByTaskId(input.taskId);
-			if (existingApprovalResult.success) {
+			if (existingApprovalResult.success && existingApprovalResult.data) {
 				const pendingApprovals = existingApprovalResult.data.filter(
 					(a: TaskApproval) => a.status === "pending",
 				);
@@ -684,8 +687,8 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 	stats = {
 		getStats: async (): Promise<Result<ApprovalStats>> => {
 			const allApprovalsResult = await this.approvalRepo.findAll();
-			if (!allApprovalsResult.success) {
-				return allApprovalsResult as Result<ApprovalStats>;
+			if (!allApprovalsResult.success || !allApprovalsResult.data) {
+				return { success: false, error: allApprovalsResult.error };
 			}
 
 			const approvals = allApprovalsResult.data;
@@ -715,8 +718,8 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 
 		getUserStats: async (userId: string): Promise<Result<ApprovalStats>> => {
 			const userApprovalsResult = await this.approvalRepo.findByApprover(userId);
-			if (!userApprovalsResult.success) {
-				return userApprovalsResult as Result<ApprovalStats>;
+			if (!userApprovalsResult.success || !userApprovalsResult.data) {
+				return { success: false, error: userApprovalsResult.error };
 			}
 
 			const approvals = userApprovalsResult.data;
@@ -746,8 +749,8 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 
 		getWorkflowStats: async (workflowId: string): Promise<Result<ApprovalStats>> => {
 			const allApprovalsResult = await this.approvalRepo.findAll();
-			if (!allApprovalsResult.success) {
-				return allApprovalsResult as Result<ApprovalStats>;
+			if (!allApprovalsResult.success || !allApprovalsResult.data) {
+				return { success: false, error: allApprovalsResult.error };
 			}
 
 			const workflowApprovals = allApprovalsResult.data.filter(

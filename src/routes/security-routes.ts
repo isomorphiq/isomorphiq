@@ -5,9 +5,11 @@ import type {
 	CreateSecurityAlertInput,
 	CreateSecurityPolicyInput,
 	SecurityAlert,
+	SecurityAlertType,
 	SecuritySearchFilters,
 	UpdateSecurityPolicyInput,
 } from "../types/security-types.ts";
+import type { User } from "../types.ts";
 import { getUserManager } from "../user-manager.ts";
 
 // Authentication middleware
@@ -31,7 +33,7 @@ const authenticateToken = async (
 			return res.status(401).json({ error: "Invalid or expired token" });
 		}
 
-		(req as unknown as { user?: unknown }).user = user;
+		(req as unknown as { user?: User }).user = user;
 		next();
 	} catch (error) {
 		console.error("[SECURITY-ROUTES] Authentication error:", error);
@@ -42,7 +44,7 @@ const authenticateToken = async (
 // Authorization middleware
 const requirePermission = (resource: string, action: string) => {
 	return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-		const user = (req as unknown as { user?: unknown }).user;
+		const user = (req as unknown as { user?: User }).user;
 
 		if (!user) {
 			return res.status(401).json({ error: "Authentication required" });
@@ -194,11 +196,18 @@ export function createSecurityRoutes(): express.Router {
 					dateFrom: req.query.dateFrom as string,
 					dateTo: req.query.dateTo as string,
 					userId: req.query.userId as string,
-					severities: req.query.severities
-						? (req.query.severities as string).split(",")
+					severities: typeof req.query.severities === "string"
+						? (req.query.severities as string)
+								.split(",")
+								.filter(
+									(severity): severity is SecurityAlert["severity"] =>
+										["low", "medium", "high", "critical"].includes(severity),
+								)
 						: undefined,
-					alertTypes: req.query.alertTypes
-						? (req.query.alertTypes as string).split(",")
+					alertTypes: typeof req.query.alertTypes === "string"
+						? (req.query.alertTypes as string)
+								.split(",")
+								.filter((type): type is SecurityAlertType => type.length > 0)
 						: undefined,
 					status: req.query.status as SecurityAlert["status"],
 				};

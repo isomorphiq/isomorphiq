@@ -1725,12 +1725,13 @@ export class ProductManager {
 			if (this.wsManager) {
 				this.wsManager.broadcast({
 					type: "task_archived",
+					timestamp: new Date(),
 					data: {
 						taskId,
 						reason,
 						archivedBy,
-						archivedAt: archivedTask.archivedAt
-					}
+						archivedAt: archivedTask.archivedAt,
+					},
 				});
 			}
 			
@@ -1750,11 +1751,12 @@ export class ProductManager {
 			if (this.wsManager) {
 				this.wsManager.broadcast({
 					type: "task_restored",
+					timestamp: new Date(),
 					data: {
 						taskId: restoredTask.id,
 						restoredBy,
-						restoredAt: new Date().toISOString()
-					}
+						restoredAt: new Date().toISOString(),
+					},
 				});
 			}
 			
@@ -1798,15 +1800,16 @@ export class ProductManager {
 			if (this.wsManager) {
 				this.wsManager.broadcast({
 					type: "retention_policy_executed",
+					timestamp: new Date(),
 					data: {
 						policyId,
 						executedBy,
 						result: {
 							archivedCount: result.archived.length,
 							deletedCount: result.deleted.length,
-							flaggedCount: result.flagged.length
-						}
-					}
+							flaggedCount: result.flagged.length,
+						},
+					},
 				});
 			}
 			
