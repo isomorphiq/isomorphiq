@@ -59,9 +59,9 @@ export async function runFlow(
 	console.log(`[WORKFLOW] effect result type=${typeof result} keys=${resultKeys}`);
 
 	if (Effect.isEffect?.(result)) {
-		await Effect.runPromise(result as EffectType<unknown, unknown, unknown>);
+		await Effect.runPromise(result as unknown as EffectType<never, never, never>);
 	} else if (result && typeof result === "object" && "_tag" in result) {
-		await Effect.runPromise(result as EffectType<unknown, unknown, unknown>);
+		await Effect.runPromise(result as unknown as EffectType<never, never, never>);
 	} else if (result instanceof Promise) {
 		await result;
 	}
@@ -79,8 +79,13 @@ export async function advanceToken<Ctx = Record<string, unknown>>(
 	workflow: Record<WorkflowStateName, RuntimeState> = WORKFLOW,
 	payload?: Record<string, unknown>,
 ): Promise<WorkflowToken<Ctx>> {
+	const contextPayload: Record<string, unknown> =
+		payload ??
+		(typeof token.context === "object" && token.context !== null
+			? (token.context as Record<string, unknown>)
+			: {});
 	const nextState = await runFlow(
-		{ currentState: token.state, transition, payload: payload ?? token.context },
+		{ currentState: token.state, transition, payload: contextPayload },
 		workflow,
 	);
 	return { ...token, state: nextState };

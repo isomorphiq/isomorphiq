@@ -9,7 +9,7 @@ export type TrpcContext = { pm: ProductManager; wsManager?: WebSocketManager };
 
 const t = initTRPC.context<TrpcContext>().create();
 
-export const appRouter = t.router({
+export const appRouter: ReturnType<typeof t.router> = t.router({
     tasks: t.procedure.query(async ({ ctx }) => ctx.pm.getAllTasks()),
     queue: t.procedure.query(async ({ ctx }) => ctx.pm.getTasksSortedByDependencies()),
     advancedSearch: t.procedure

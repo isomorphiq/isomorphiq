@@ -151,10 +151,10 @@ export interface SystemEvent extends BaseEvent {
 export type DomainEvent = TaskEvent | UserEvent | SystemEvent;
 
 // Event handler interface
-export type EventHandler<T extends DomainEvent = DomainEvent> = (event: T) => Promise<void> | void;
+export type EventHandler<T extends DomainEvent = DomainEvent> = (_event: T) => Promise<void> | void;
 
 // Event middleware interface
-export type EventMiddleware = (event: DomainEvent, next: () => void) => void;
+export type EventMiddleware = (_event: DomainEvent, _next: () => void) => void;
 
 // Event store interface for persistence
 export interface EventStore {

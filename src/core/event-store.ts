@@ -96,7 +96,7 @@ export class LevelDBEventStore implements EventStore {
 	private db: Map<string, unknown>;
 	private namespace: string;
 
-	constructor(_dbPath: string = "./events", namespace: string = "events") {
+	constructor(_dbPath?: string, namespace: string = "events") {
 		this.namespace = namespace;
 		// Note: This would need proper LevelDB initialization
 		// For now, we'll use a simple in-memory fallback
@@ -199,14 +199,14 @@ export class LevelDBEventStore implements EventStore {
 // Event replay service
 export class EventReplayService {
 	private eventStore: EventStore;
-	private eventHandlers: Map<string, ((event: DomainEvent) => void)[]> = new Map();
+	private eventHandlers: Map<string, ((_event: DomainEvent) => void)[]> = new Map();
 
 	constructor(eventStore: EventStore) {
 		this.eventStore = eventStore;
 	}
 
 	// Register event handler for replay
-	registerHandler(eventType: string, handler: (event: DomainEvent) => void): void {
+	registerHandler(eventType: string, handler: (_event: DomainEvent) => void): void {
 		if (!this.eventHandlers.has(eventType)) {
 			this.eventHandlers.set(eventType, []);
 		}
@@ -214,7 +214,7 @@ export class EventReplayService {
 	}
 
 	// Unregister event handler
-	unregisterHandler(eventType: string, handler: (event: DomainEvent) => void): void {
+	unregisterHandler(eventType: string, handler: (_event: DomainEvent) => void): void {
 		const handlers = this.eventHandlers.get(eventType);
 		if (handlers) {
 			const index = handlers.indexOf(handler);

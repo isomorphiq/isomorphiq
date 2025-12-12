@@ -402,7 +402,7 @@ export class TriggerNodeExecutor implements WorkflowNodeExecutor {
 export class ConditionNodeExecutor implements WorkflowNodeExecutor {
 	async execute(
 		node: WorkflowNode,
-		_context: WorkflowExecutionContext,
+		context: WorkflowExecutionContext,
 	): Promise<Record<string, unknown>> {
 		const data = toRecord(node.data);
 		const rawConditions = toArray<Record<string, unknown>>(data.conditions);
@@ -567,7 +567,7 @@ export class NotificationNodeExecutor implements WorkflowNodeExecutor {
 export class TaskCreateNodeExecutor implements WorkflowNodeExecutor {
 	async execute(
 		node: WorkflowNode,
-		_context: WorkflowExecutionContext,
+		context: WorkflowExecutionContext,
 	): Promise<Record<string, unknown>> {
 		const data = toRecord(node.data);
 		const title = toStringOr(data.title, "Untitled task");

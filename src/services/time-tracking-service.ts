@@ -364,7 +364,7 @@ export class TimeTrackingService implements ITimeTrackingService {
 	async getActiveTimeEntry(userId: string): Promise<Result<TimeEntry | null>> {
 		const userEntriesResult = await this.getTimeEntriesByUser(userId);
 		if (!userEntriesResult.success) {
-			return userEntriesResult;
+			return { success: false, error: userEntriesResult.error };
 		}
 
 		const activeEntry = userEntriesResult.data.find(
