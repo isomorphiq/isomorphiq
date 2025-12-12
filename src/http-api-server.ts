@@ -17,7 +17,6 @@ import {
 	appRouter,
 	createTrpcContext,
 	createTrpcMiddleware,
-	type AppRouter,
 	type TrpcContext,
 } from "./http/trpc.ts";
 import { ProductManager } from "./index.ts";
@@ -25,8 +24,7 @@ import { InMemoryTaskRepository } from "./repositories/task-repository.ts";
 import { createSchedulingRoutes } from "./routes/scheduling-routes.ts";
 import { createSecurityRoutes } from "./routes/security-routes.ts";
 import { setupWorkflowRoutes } from "./routes/workflow-routes.ts";
-import type { User } from "./types.ts";
-import { getUserManager } from "./user-manager.ts";
+export type { AppRouter } from "./http/trpc.ts";
 
 // Error handling middleware
 const errorHandler = (

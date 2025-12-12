@@ -115,7 +115,7 @@ export class AuthService {
 			}
 
 			return { userId: decoded.userId, valid: true };
-		} catch (_error) {
+		} catch {
 			return { userId: "", valid: false, error: "Invalid token" };
 		}
 	}
@@ -140,7 +140,7 @@ export class AuthService {
 			}
 
 			return { userId: decoded.userId, valid: true };
-		} catch (_error) {
+		} catch {
 			return { userId: "", valid: false, error: "Invalid refresh token" };
 		}
 	}
@@ -215,7 +215,7 @@ export class AuthService {
 		return result;
 	}
 
-	async resetFailedLoginAttempts(_user: User): Promise<void> {
+	async resetFailedLoginAttempts(): Promise<void> {
 		// This would be handled by the UserManager
 	}
 
@@ -244,10 +244,11 @@ export class AuthService {
 		};
 	}
 
-	sanitizeUserForResponse(user: User): Omit<User, "passwordHash"> {
-		const { passwordHash: _passwordHash, ...sanitizedUser } = user;
-		return sanitizedUser;
-	}
+    sanitizeUserForResponse(user: User): Omit<User, "passwordHash"> {
+        const { passwordHash, ...sanitizedUser } = user;
+        void passwordHash;
+        return sanitizedUser;
+    }
 
 	generatePasswordResetToken(): { token: string; expiresAt: Date } {
 		const token = this.generateSecureToken();

@@ -1,4 +1,4 @@
-import { getUserManager } from "./src/user-manager";
+import { getUserManager } from "./src/user-manager.ts";
 
 async function emergencyUnlock() {
     console.log("🚨 EMERGENCY ACCOUNT UNLOCK - bypassing authentication");

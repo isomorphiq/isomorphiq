@@ -1,13 +1,13 @@
 export interface ACPProfile {
-	name: string;
-	role: string;
-	systemPrompt: string;
-	getTaskPrompt: (_context: Record<string, unknown>) => string;
-	capabilities?: string[];
-	maxConcurrentTasks?: number;
-	priority?: number;
-	color?: string;
-	icon?: string;
+    name: string;
+    role: string;
+    systemPrompt: string;
+	getTaskPrompt: (context: Record<string, unknown>) => string; // eslint-disable-line @typescript-eslint/no-unused-vars
+    capabilities?: string[];
+    maxConcurrentTasks?: number;
+    priority?: number;
+    color?: string;
+    icon?: string;
 }
 
 export interface ProfileState {
@@ -60,7 +60,8 @@ Create feature tickets with:
 
 Return your response as a structured list of feature tickets.`;
 
-	getTaskPrompt(_context: Record<string, unknown>): string {
+	getTaskPrompt(context: Record<string, unknown>): string {
+		void context;
 		return `As a Product Manager, analyze this task manager system and create feature tickets.
 
 Current System Overview:
@@ -446,7 +447,8 @@ export class ProfileManager {
 	}
 
 	// Smart task routing
-	getBestProfileForTask(_task: Record<string, unknown>): ACPProfile | undefined {
+	getBestProfileForTask(task: Record<string, unknown>): ACPProfile | undefined {
+		void task;
 		const availableProfiles = this.getAllProfiles().filter((profile) => {
 			const state = this.profileStates.get(profile.name);
 			return state?.isActive && state.currentTasks < (profile.maxConcurrentTasks || 1);

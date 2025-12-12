@@ -11,15 +11,14 @@ import type {
 } from "./types.ts";
 
 type TaskEventData = Task | Record<string, unknown>;
+type TaskEventCallback = (eventType: WebSocketEventType, data: TaskEventData) => void;
 
 /**
  * Automation rule engine for processing task events and executing rules
  */
 export class AutomationRuleEngine {
 	private rules: AutomationRule[] = [];
-	private taskEventCallbacks: Array<
-		(_eventType: WebSocketEventType, _data: TaskEventData) => void
-	> = [];
+	private taskEventCallbacks: TaskEventCallback[] = [];
 
 	constructor() {
 		console.log("[AUTOMATION] Automation rule engine initialized");
@@ -48,9 +47,7 @@ export class AutomationRuleEngine {
 	}
 
 	// Register for task events
-	onTaskEvent(
-		callback: (_eventType: WebSocketEventType, _data: Record<string, unknown>) => void,
-	): void {
+	onTaskEvent(callback: TaskEventCallback): void {
 		this.taskEventCallbacks.push(callback);
 	}
 
@@ -254,7 +251,6 @@ export class AutomationRuleEngine {
 	private async executeAction(
 		action: RuleAction,
 		context: RuleExecutionContext,
-		_allTasks: Task[],
 	): Promise<Record<string, unknown>> {
 		console.log(`[AUTOMATION] Executing action: ${action.type}`);
 
