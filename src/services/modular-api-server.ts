@@ -8,6 +8,7 @@ import type { UserManager } from "../user-manager.ts";
 type AuthenticatedRequest = Request & { user?: User };
 
 // Base route handler interface
+/* eslint-disable no-unused-vars */
 export type RouteHandler = (
 	req: Request,
 	res: Response,
@@ -33,6 +34,7 @@ export interface ApiModule {
 	registerRoutes(app: express.Router): void;
 	getPathPrefix(): string;
 }
+/* eslint-enable no-unused-vars */
 
 // Authentication middleware factory
 export function createAuthMiddleware(userManager: UserManager): Middleware {
@@ -112,6 +114,7 @@ export function errorHandler(
 	res: express.Response,
 	_next: express.NextFunction,
 ): void {
+	void _next;
 	console.error("[HTTP API] Error:", err);
 	const message = err instanceof Error ? err.message : "Internal server error";
 	res.status(500).json({ error: message });

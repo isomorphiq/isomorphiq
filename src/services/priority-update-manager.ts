@@ -120,12 +120,12 @@ export class OptimizedPriorityService {
     /**
      * Update task priority with caching and consistency validation
      */
-    public async updateTaskPriority(
-        taskId: string, 
-        newPriority: TaskPriority,
-        currentPriority: TaskPriority,
-        updateFunction: (id: string, priority: TaskPriority) => Promise<Task>
-    ): Promise<Task> {
+	    public async updateTaskPriority(
+	        taskId: string, 
+	        newPriority: TaskPriority,
+	        currentPriority: TaskPriority,
+	        updateFunction: (id: string, priority: TaskPriority) => Promise<Task> // eslint-disable-line no-unused-vars
+	    ): Promise<Task> {
         // Skip update if priority is the same
         if (currentPriority === newPriority) {
             console.log(`[PRIORITY SERVICE] Skipping priority update for ${taskId} - priority unchanged`);
@@ -195,11 +195,12 @@ export class OptimizedPriorityService {
     /**
      * Get cached task (this would integrate with a task cache)
      */
-    private getCachedTask(_taskId: string): Task | null {
-        // This would integrate with a broader task caching system
-        // For now, return null to force fresh fetch
-        return null;
-    }
+	    private getCachedTask(_taskId: string): Task | null {
+	        void _taskId;
+	        // This would integrate with a broader task caching system
+	        // For now, return null to force fresh fetch
+	        return null;
+	    }
     
     /**
      * Get cache statistics
@@ -324,22 +325,22 @@ export class PriorityConsistencyValidator {
             errors.push(`Priority not updated: Expected ${newPriority}, got ${updatedTask.priority}`);
         }
         
-        // Check if other fields were preserved
-        if (updatedTask.id !== originalTask.id) {
-            errors.push(`Task ID changed during priority update`);
-        }
-        
-        if (updatedTask.title !== originalTask.title) {
-            errors.push(`Task title changed during priority update`);
-        }
-        
-        if (updatedTask.description !== originalTask.description) {
-            errors.push(`Task description changed during priority update`);
-        }
-        
-        if (updatedTask.status !== originalTask.status) {
-            errors.push(`Task status changed during priority update`);
-        }
+	        // Check if other fields were preserved
+	        if (updatedTask.id !== originalTask.id) {
+	            errors.push("Task ID changed during priority update");
+	        }
+	        
+	        if (updatedTask.title !== originalTask.title) {
+	            errors.push("Task title changed during priority update");
+	        }
+	        
+	        if (updatedTask.description !== originalTask.description) {
+	            errors.push("Task description changed during priority update");
+	        }
+	        
+	        if (updatedTask.status !== originalTask.status) {
+	            errors.push("Task status changed during priority update");
+	        }
         
         // Check if dependencies were preserved
         const originalDeps = JSON.stringify(originalTask.dependencies.sort());

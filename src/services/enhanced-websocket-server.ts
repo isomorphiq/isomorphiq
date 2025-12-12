@@ -233,7 +233,7 @@ export class EnhancedWebSocketManager {
     private messageQueue: MessageQueue;
     private config: Required<EnhancedWebSocketConfig>;
     private isRunning: boolean = false;
-    private listeners: Set<(event: WebSocketEvent) => void> = new Set();
+    private listeners: Set<(event: WebSocketEvent) => void> = new Set(); // eslint-disable-line no-unused-vars
     private heartbeatInterval: NodeJS.Timeout | null = null;
     private cleanupInterval: NodeJS.Timeout | null = null;
     private httpServer: HttpServer | null = null;
@@ -359,6 +359,7 @@ export class EnhancedWebSocketManager {
 
     // Handle new WebSocket connection
     private handleConnection(ws: WebSocket, _req: IncomingMessage): void {
+        void _req;
         const clientId = this.generateClientId();
         const client: WebSocketClient = {
             id: clientId,
@@ -472,6 +473,7 @@ export class EnhancedWebSocketManager {
         code: number,
         _reason: Buffer,
     ): void {
+        void _reason;
         this.connectionPool.removeConnection(clientId);
         console.log(
             `[WS] Client disconnected: ${clientId} (Code: ${code}, Total: ${this.connectionPool.getAllConnections().length})`,
@@ -606,7 +608,7 @@ export class EnhancedWebSocketManager {
     }
 
     // Add event listener
-    addListener(callback: (event: WebSocketEvent) => void): () => void {
+    addListener(callback: (event: WebSocketEvent) => void): () => void { // eslint-disable-line no-unused-vars
         this.listeners.add(callback);
         return () => this.listeners.delete(callback);
     }
