@@ -83,7 +83,7 @@ See `mcp-config.md` and `opencode-mcp-setup.md` for detailed configuration instr
 
 ## 🚀 Launch Status: READY FOR PRODUCTION
 
-The OpenCode Task Manager MCP app is now **launch-ready** with full MCP server functionality and automated task processing.
+The Isomorphiq Task Manager MCP app is now **launch-ready** with full MCP server functionality and automated task processing.
 
 ### ✅ Launch Checklist Completed
 - [x] MCP server with 9 working tools

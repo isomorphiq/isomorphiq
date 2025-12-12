@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This research document analyzes modern web framework options and architecture patterns for 2025, with specific consideration for the current Opencode Task Manager codebase. The analysis covers frontend frameworks, backend patterns, architectural approaches, and recommendations for scalable, maintainable systems.
+This research document analyzes modern web framework options and architecture patterns for 2025, with specific consideration for the current Isomorphiq Task Manager codebase. The analysis covers frontend frameworks, backend patterns, architectural approaches, and recommendations for scalable, maintainable systems.
 
 ## Current Architecture Analysis
 

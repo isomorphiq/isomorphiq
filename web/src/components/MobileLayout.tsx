@@ -276,7 +276,7 @@ export function MobileLayout({ children, showNav = true, showFooter = true }: Mo
 						background: "#0b1220",
 					}}
 				>
-					<span>Opencode Task Manager · v1.0.0</span>
+					<span>Isomorphiq Task Manager · v1.0.0</span>
 					<span>
 						Status:{" "}
 						<span style={{ color: isOnline ? "#22c55e" : "#ef4444" }}>
