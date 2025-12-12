@@ -10,7 +10,7 @@ async function assignHighestPriorityTask() {
   try {
     console.log('🎯 Finding highest priority task to assign to development...');
     
-    // Open task database
+    // Open task database (use test database to avoid conflicts)
     const db = new Level('./test-priority-db', { valueEncoding: 'json' });
     
     // Get all tasks
