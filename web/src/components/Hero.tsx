@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 
-export function Hero(): JSX.Element {
+export function Hero() {
 	return (
 		<section style={heroShell}>
 			<div style={heroBg}>

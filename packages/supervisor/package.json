@@ -1,0 +1,22 @@
+{
+    "name": "@isomorphiq/supervisor",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/init.ts",
+    "types": "src/init.ts",
+    "exports": {
+        ".": {
+            "import": "./src/init.ts",
+            "types": "./src/init.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "start": "node --experimental-strip-types src/init.ts"
+    },
+    "dependencies": {
+        "@isomorphiq/daemon": "workspace:*"
+    }
+}

@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 
 import WebSocket from "ws";
-import type {
-	Task,
-	TaskCreatedEvent,
-	TaskDeletedEvent,
-	TaskPriorityChangedEvent,
-	TaskStatusChangedEvent,
-	TasksListEvent,
-	TaskUpdatedEvent,
-	WebSocketMessage,
+import {
+	TaskCreatedEventSchema,
+	TaskDeletedEventSchema,
+	TaskPriorityChangedEventSchema,
+	TaskStatusChangedEventSchema,
+	TasksListEventSchema,
+	TaskUpdatedEventSchema,
+	type Task,
+	type WebSocketMessage,
 } from "./types.ts";
 
 // WebSocket client for testing real-time task updates
@@ -66,53 +66,88 @@ class TaskWebSocketClient {
 		switch (event.type) {
 			case "task_created":
 				{
-					const taskEvent = event as TaskCreatedEvent;
-					console.log(`[WS-CLIENT] 🆕 Task created: ${taskEvent.data.title}`);
-					console.log(`  ID: ${taskEvent.data.id}`);
-					console.log(`  Priority: ${taskEvent.data.priority}`);
-					console.log(`  Status: ${taskEvent.data.status}`);
-					console.log(`  Description: ${taskEvent.data.description}`);
+					const taskEvent = TaskCreatedEventSchema.safeParse(event);
+					if (!taskEvent.success) {
+						console.log("[WS-CLIENT] Invalid task_created event payload");
+						break;
+					}
+					const task = taskEvent.data.data.task;
+					console.log(`[WS-CLIENT] 🆕 Task created: ${task.title}`);
+					console.log(`  ID: ${task.id}`);
+					console.log(`  Priority: ${task.priority}`);
+					console.log(`  Status: ${task.status}`);
+					console.log(`  Description: ${task.description}`);
+					console.log(`  Created By: ${taskEvent.data.data.createdBy}`);
 				}
 				break;
 
 			case "task_updated":
 				{
-					const taskEvent = event as TaskUpdatedEvent;
-					console.log(`[WS-CLIENT] 📝 Task updated: ${taskEvent.data.task.title}`);
-					console.log("  Changes:", taskEvent.data.changes);
+					const taskEvent = TaskUpdatedEventSchema.safeParse(event);
+					if (!taskEvent.success) {
+						console.log("[WS-CLIENT] Invalid task_updated event payload");
+						break;
+					}
+					console.log(`[WS-CLIENT] 📝 Task updated: ${taskEvent.data.data.task.title}`);
+					console.log("  Changes:", taskEvent.data.data.changes);
 				}
 				break;
 
 			case "task_deleted":
 				{
-					const taskEvent = event as TaskDeletedEvent;
-					console.log(`[WS-CLIENT] 🗑️  Task deleted: ${taskEvent.data.taskId}`);
+					const taskEvent = TaskDeletedEventSchema.safeParse(event);
+					if (!taskEvent.success) {
+						console.log("[WS-CLIENT] Invalid task_deleted event payload");
+						break;
+					}
+					console.log(`[WS-CLIENT] 🗑️  Task deleted: ${taskEvent.data.data.taskId}`);
+					console.log(`  Deleted By: ${taskEvent.data.data.deletedBy}`);
 				}
 				break;
 
 			case "task_status_changed":
 				{
-					const taskEvent = event as TaskStatusChangedEvent;
-					console.log(`[WS-CLIENT] 🔄 Task status changed: ${taskEvent.data.taskId}`);
-					console.log(`  From: ${taskEvent.data.oldStatus} → To: ${taskEvent.data.newStatus}`);
-					console.log(`  Task: ${taskEvent.data.task.title}`);
+					const taskEvent = TaskStatusChangedEventSchema.safeParse(event);
+					if (!taskEvent.success) {
+						console.log("[WS-CLIENT] Invalid task_status_changed event payload");
+						break;
+					}
+					console.log(`[WS-CLIENT] 🔄 Task status changed: ${taskEvent.data.data.taskId}`);
+					console.log(
+						`  From: ${taskEvent.data.data.oldStatus} → To: ${taskEvent.data.data.newStatus}`,
+					);
+					console.log(`  Task: ${taskEvent.data.data.task.title}`);
+					console.log(`  Updated By: ${taskEvent.data.data.updatedBy}`);
 				}
 				break;
 
 			case "task_priority_changed":
 				{
-					const taskEvent = event as TaskPriorityChangedEvent;
-					console.log(`[WS-CLIENT] ⚡ Task priority changed: ${taskEvent.data.taskId}`);
-					console.log(`  From: ${taskEvent.data.oldPriority} → To: ${taskEvent.data.newPriority}`);
-					console.log(`  Task: ${taskEvent.data.task.title}`);
+					const taskEvent = TaskPriorityChangedEventSchema.safeParse(event);
+					if (!taskEvent.success) {
+						console.log("[WS-CLIENT] Invalid task_priority_changed event payload");
+						break;
+					}
+					console.log(`[WS-CLIENT] ⚡ Task priority changed: ${taskEvent.data.data.taskId}`);
+					console.log(
+						`  From: ${taskEvent.data.data.oldPriority} → To: ${taskEvent.data.data.newPriority}`,
+					);
+					console.log(`  Task: ${taskEvent.data.data.task.title}`);
+					console.log(`  Updated By: ${taskEvent.data.data.updatedBy}`);
 				}
 				break;
 
 			case "tasks_list":
 				{
-					const taskEvent = event as TasksListEvent;
-					console.log(`[WS-CLIENT] 📋 Tasks list received (${taskEvent.data.tasks.length} tasks)`);
-					taskEvent.data.tasks.forEach((task: Task, index: number) => {
+					const taskEvent = TasksListEventSchema.safeParse(event);
+					if (!taskEvent.success) {
+						console.log("[WS-CLIENT] Invalid tasks_list event payload");
+						break;
+					}
+					console.log(
+						`[WS-CLIENT] 📋 Tasks list received (${taskEvent.data.data.tasks.length} tasks)`,
+					);
+					taskEvent.data.data.tasks.forEach((task: Task, index: number) => {
 						console.log(`  ${index + 1}. [${task.status}] ${task.title} (${task.priority})`);
 					});
 				}
@@ -208,7 +243,7 @@ function main() {
 			console.log("Examples:");
 			console.log("  node test-websocket-client.js connect");
 			console.log("");
-			console.log("Note: Make sure the daemon is running (npm run daemon)");
+			console.log("Note: Make sure the daemon is running (yarn run daemon)");
 			break;
 	}
 }

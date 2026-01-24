@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import type { User } from "../../../src/types.ts";
 
 interface RegisterFormData {
 	username: string;
@@ -9,7 +10,7 @@ interface RegisterFormData {
 }
 
 interface RegisterFormProps {
-	onSuccess?: (user: { id: string; username: string; email: string }) => void;
+	onSuccess?: (user: User) => void;
 	onError?: (error: string) => void;
 }
 

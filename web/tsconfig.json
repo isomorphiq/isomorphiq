@@ -1,12 +1,16 @@
 {
+    "extends": "../tsconfig.base.json",
     "compilerOptions": {
         "lib": ["dom", "dom.iterable", "esnext"],
-        "types": ["dom", "node"],
+        "types": ["node", "react", "react-dom"],
         "module": "esnext",
         "moduleResolution": "bundler",
         "jsx": "react-jsx",
         "target": "esnext",
         "strict": false,
+        "declaration": false,
+        "declarationMap": false,
+        "noEmit": true,
         "esModuleInterop": true,
         "skipLibCheck": true,
         "forceConsistentCasingInFileNames": true,

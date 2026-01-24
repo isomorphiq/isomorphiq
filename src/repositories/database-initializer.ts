@@ -1,6 +1,5 @@
-import { DatabaseSchemaManager } from "./auth-schema-manager.ts";
-import { AuthenticationRepository } from "./authentication-repository.ts";
-import type { CreateUserInput, User } from "../types.ts";
+import { DatabaseSchemaManager, AuthenticationRepository } from "@isomorphiq/auth";
+import type { CreateUserInput, User } from "@isomorphiq/auth";
 
 export class DatabaseInitializer {
 	private schemaManager: DatabaseSchemaManager;
@@ -117,23 +116,12 @@ export class DatabaseInitializer {
 	}
 
 	private async getAllUsers(): Promise<User[]> {
-		// This is a simplified version - in production you'd want proper pagination
-		const users: User[] = [];
-
 		try {
-			const userDb = (this.authRepository as any).userDb;
-			const iterator = userDb.iterator();
-
-			for await (const [, value] of iterator) {
-				users.push(value);
-			}
-
-			await iterator.close();
+			return await this.authRepository.listUsers();
 		} catch (error) {
 			console.error("[DB-INIT] Error getting users:", error);
+			return [];
 		}
-
-		return users;
 	}
 
 	async cleanup(): Promise<void> {

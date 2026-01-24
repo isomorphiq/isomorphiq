@@ -1,34 +1,7 @@
 {
+    "extends": "./tsconfig.base.json",
     "compilerOptions": {
-        // File Layout
-        "outDir": "./dist",
-
-        // Environment Settings
-        "module": "nodenext",
-        "target": "esnext",
-        "moduleResolution": "nodenext",
-        "allowImportingTsExtensions": true,
-        "types": ["node"],
-
-        // Other Outputs
-        "sourceMap": true,
-        "declaration": true,
-        "declarationMap": true,
-
-        // Stricter Typechecking Options
-        "noUncheckedIndexedAccess": false,
-        "exactOptionalPropertyTypes": false,
-
-        // Recommended Options
-        "strict": false,
-        "jsx": "react-jsx",
-        "verbatimModuleSyntax": true,
-        "isolatedModules": true,
-        "noUncheckedSideEffectImports": true,
-        "moduleDetection": "force",
-        "skipLibCheck": true,
-        "useUnknownInCatchVariables": false,
-        "noEmit": false
+        "outDir": "./dist"
     },
     "include": [
         "src/**/*"
@@ -37,6 +10,8 @@
         "node_modules",
         "dist",
         "web",
-        "scripts"
+        "scripts",
+        "packages",
+        "apps"
     ]
 }

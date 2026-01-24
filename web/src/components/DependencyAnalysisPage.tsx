@@ -1,7 +1,7 @@
 import type { MouseEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CriticalPathService } from "../../../src/services/critical-path-service.ts";
-import type { Task } from "../../../src/types.ts";
+import { CriticalPathService } from "@isomorphiq/service-critical-path";
+import type { Task } from "@isomorphiq/tasks";
 import { DependencyVisualization } from "./DependencyVisualization.tsx";
 import { ImpactAnalysisComponent as ImpactAnalysis } from "./ImpactAnalysis.tsx";
 import { Header, Layout } from "./Layout.tsx";

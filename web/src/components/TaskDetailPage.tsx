@@ -42,7 +42,7 @@ function StatusPill({ status }: { status: Task["status"] }) {
 	);
 }
 
-export function TaskDetailPage(): JSX.Element {
+export function TaskDetailPage() {
 	const { taskId } = useParams();
 	const navigate = useNavigate();
 	const tasks = useAtomValue(tasksAtom) ?? [];

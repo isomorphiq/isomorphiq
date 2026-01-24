@@ -24,7 +24,7 @@ type PreferencesForm = {
 	};
 };
 
-export function UserProfilePage(): JSX.Element {
+export function UserProfilePage() {
 	const [auth, setAuth] = useAtom(authAtom);
 	const [profile, setProfile] = useState<ProfileForm>({});
 	const [preferences, setPreferences] = useState<PreferencesForm>({});

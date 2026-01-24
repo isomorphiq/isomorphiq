@@ -1,0 +1,22 @@
+{
+    "name": "@isomorphiq/plugin-code-review",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "index.ts",
+    "types": "index.ts",
+    "exports": {
+        ".": {
+            "import": "./index.ts",
+            "types": "./index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json"
+    },
+    "dependencies": {
+        "@isomorphiq/plugins": "workspace:*",
+        "@isomorphiq/user-profile": "workspace:*"
+    }
+}

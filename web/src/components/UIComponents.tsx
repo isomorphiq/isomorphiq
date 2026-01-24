@@ -1,4 +1,60 @@
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
+
+type CardProps = {
+	children: ReactNode;
+	className?: string;
+	style?: CSSProperties;
+};
+
+const cardBaseStyle: CSSProperties = {
+	background: "var(--color-surface-primary)",
+	border: "1px solid var(--color-border-primary)",
+	borderRadius: "12px",
+	boxShadow: "0 12px 24px rgba(15, 23, 42, 0.12)",
+};
+
+const cardSectionStyle: CSSProperties = {
+	padding: "16px",
+};
+
+export function Card({ children, className, style }: CardProps) {
+	return (
+		<div className={className} style={{ ...cardBaseStyle, ...style }}>
+			{children}
+		</div>
+	);
+}
+
+export function CardHeader({ children, className, style }: CardProps) {
+	return (
+		<div
+			className={className}
+			style={{
+				...cardSectionStyle,
+				borderBottom: "1px solid var(--color-border-primary)",
+				...style,
+			}}
+		>
+			{children}
+		</div>
+	);
+}
+
+export function CardContent({ children, className, style }: CardProps) {
+	return (
+		<div className={className} style={{ ...cardSectionStyle, ...style }}>
+			{children}
+		</div>
+	);
+}
+
+export function CardTitle({ children, className, style }: CardProps) {
+	return (
+		<h3 className={className} style={{ margin: 0, fontSize: "16px", ...style }}>
+			{children}
+		</h3>
+	);
+}
 
 interface Props {
 	children: ReactNode;

@@ -1,0 +1,7 @@
+{
+  "title": "Web Dashboard for Task Management",
+  "description": "Problem: Users currently have no visual interface to monitor and interact with the task manager daemon. The system only exposes a TCP API on port 3001, making it difficult to track task status, view progress, or manage tasks intuitively. Requirements: Build a web-based dashboard that provides real-time task monitoring, status visualization (pending/in-progress/completed), task creation interface, and system health metrics. The dashboard should connect to the existing TCP API and provide a clean, responsive interface for task management. Impacted files: src/web/dashboard.ts (exists but likely incomplete), potential new frontend components in web/ directory, API client for TCP communication. Testing notes: Need integration tests for dashboard API communication, UI component tests, and end-to-end testing of task creation/monitoring workflow.",
+  "priority": "high",
+  "type": "feature",
+  "assignedTo": "development"
+}

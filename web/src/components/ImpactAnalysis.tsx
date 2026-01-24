@@ -1,9 +1,6 @@
 import { useState } from "react";
-import {
-	CriticalPathService,
-	type ImpactAnalysis as ImpactAnalysisResult,
-} from "../../../src/services/critical-path-service.ts";
-import type { Task } from "../../../src/types.ts";
+import { CriticalPathService, type ImpactAnalysis as ImpactAnalysisResult } from "@isomorphiq/service-critical-path";
+import type { Task } from "@isomorphiq/tasks";
 
 interface ImpactAnalysisProps {
 	tasks: Task[];

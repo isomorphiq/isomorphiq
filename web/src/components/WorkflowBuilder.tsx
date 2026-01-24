@@ -7,9 +7,9 @@ import type {
 	WorkflowNodeParameter,
 	WorkflowNodePort,
 	WorkflowNodeType,
-} from "../../../src/types/workflow-types.ts";
+} from "../../../src/types.ts";
 
-interface WorkflowNodeTypeConfig {
+export interface WorkflowNodeTypeConfig {
 	type: WorkflowNodeType;
 	label: string;
 	description?: string;

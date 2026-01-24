@@ -1,6 +1,6 @@
 import { useAtom, useSetAtom } from "jotai";
 import { useEffect, useMemo, useState } from "react";
-import type { Task } from "../../src/types.ts";
+import type { Task, User } from "../../../src/types.ts";
 import { filteredTasksAtom, lastEventAtom, queueAtom, refreshAtom, tasksAtom } from "../atoms.ts";
 import { authAtom } from "../authAtoms.ts";
 import { type OfflineTask, offlineStorage, useOfflineSync } from "./useOfflineSync.ts";
@@ -8,7 +8,7 @@ import { type OfflineTask, offlineStorage, useOfflineSync } from "./useOfflineSy
 const LOG_PREFIX = "[dashboardTasks]";
 
 export type AuthState = {
-	user: { id: string; username: string; email: string } | null;
+	user: User | null;
 	token: string | null;
 	isAuthenticated: boolean;
 	isLoading: boolean;

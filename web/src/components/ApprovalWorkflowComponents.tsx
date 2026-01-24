@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ApprovalWorkflow } from "../../../src/core/approval-workflow.ts";
+import type { ApprovalWorkflow, CreateApprovalWorkflowInput } from "@isomorphiq/workflow";
 
-interface ApprovalWorkflowListProps {
-	onSelectWorkflow?: (workflow: ApprovalWorkflow) => void;
-	onCreateWorkflow?: () => void;
-}
+type ApprovalWorkflowListProps = {
+    onSelectWorkflow?: (workflow: ApprovalWorkflow) => void;
+    onCreateWorkflow?: () => void;
+};
 
 export function ApprovalWorkflowList({
 	onSelectWorkflow,
@@ -171,45 +171,11 @@ export function ApprovalWorkflowList({
 	);
 }
 
-interface ApprovalWorkflowFormProps {
-	workflow?: ApprovalWorkflow;
-	onSave: (workflow: CreateApprovalWorkflowInput) => void;
-	onCancel: () => void;
-}
-
-interface CreateApprovalWorkflowInput {
-	name: string;
-	description: string;
-	stages: Array<{
-		name: string;
-		description: string;
-		type: "sequential" | "parallel" | "conditional";
-		approvers: Array<{
-			type: "user" | "role" | "group";
-			value: string;
-			isRequired: boolean;
-			canDelegate: boolean;
-		}>;
-		isRequired: boolean;
-		timeoutDays?: number;
-	}>;
-	rules?: Array<{
-		name: string;
-		trigger: {
-			type: "task_created" | "task_status_changed" | "task_priority_changed" | "manual";
-		};
-		conditions: Array<{
-			field: string;
-			operator: "equals" | "not_equals" | "contains" | "greater_than" | "less_than" | "in";
-			value: unknown;
-		}>;
-		actions: Array<{
-			type: "start_approval" | "assign_approvers" | "set_priority" | "notify_user";
-			parameters: Record<string, unknown>;
-		}>;
-		isActive: boolean;
-	}>;
-}
+type ApprovalWorkflowFormProps = {
+    workflow?: ApprovalWorkflow;
+    onSave: (workflow: CreateApprovalWorkflowInput) => void;
+    onCancel: () => void;
+};
 
 export function ApprovalWorkflowForm({ workflow, onSave, onCancel }: ApprovalWorkflowFormProps) {
 	const [formData, setFormData] = useState<CreateApprovalWorkflowInput>({
@@ -228,20 +194,20 @@ export function ApprovalWorkflowForm({ workflow, onSave, onCancel }: ApprovalWor
 			isRequired: stage.isRequired,
 			timeoutDays: stage.timeoutDays,
 		})) || [
-			{
-				name: "Review",
-				description: "Initial review stage",
-				type: "sequential" as const,
-				approvers: [
-					{
-						type: "role" as const,
-						value: "manager",
-						isRequired: true,
-						canDelegate: true,
-					},
-				],
-				isRequired: true,
-			},
+            {
+                name: "Review",
+                description: "Initial review stage",
+                type: "sequential",
+                approvers: [
+                    {
+                        type: "role",
+                        value: "manager",
+                        isRequired: true,
+                        canDelegate: true,
+                    },
+                ],
+                isRequired: true,
+            },
 		],
 		rules:
 			workflow?.rules.map((rule) => ({

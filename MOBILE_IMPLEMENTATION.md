@@ -180,13 +180,13 @@ interface TouchGesture {
 ### Local Development
 ```bash
 # Start development server
-npm run web:dev
+yarn run web:dev
 
 # Build for production
-npm run web:build
+yarn run web:build
 
 # Test PWA features
-npm run test:pwa
+yarn run test:pwa
 ```
 
 ### Mobile Testing

@@ -1,5 +1,4 @@
-import { ProductManager } from "./product-manager.ts";
-import { PriorityConsistencyValidator } from "./services/priority-update-manager.ts";
+import { PriorityConsistencyValidator, ProductManager, type TaskPriority } from "@isomorphiq/tasks";
 import path from "node:path";
 
 /**
@@ -36,8 +35,8 @@ export class EnhancedPriorityConsistencyTester {
         const startTime = Date.now();
         
         for (let i = 0; i < tasks.length; i++) {
-            const newPriority = i % 2 === 0 ? "high" : "low";
-            await this.pm.updateTaskPriority(tasks[i].id, newPriority as "low" | "medium" | "high");
+            const newPriority: TaskPriority = i % 2 === 0 ? "high" : "low";
+            await this.pm.updateTaskPriority(tasks[i].id, newPriority);
         }
 
         const endTime = Date.now();
@@ -94,7 +93,8 @@ export class EnhancedPriorityConsistencyTester {
         
         const updateStartTime = Date.now();
         const updatePromises = tasks.map(async (task, index) => {
-            const priority = ["high", "medium", "low"][index % 3] as "low" | "medium" | "high";
+            const priorities: TaskPriority[] = ["high", "medium", "low"];
+            const priority = priorities[index % priorities.length];
             return this.pm.updateTaskPriority(task.id, priority);
         });
 

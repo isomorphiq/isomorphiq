@@ -1,11 +1,12 @@
 import type React from "react";
 import { useEffect, useState } from "react";
 import type {
-	WorkflowDefinition,
 	WorkflowCategory,
 	WorkflowVariable,
-} from "../../../src/types/workflow-types.ts";
-import { WorkflowBuilder } from "./WorkflowBuilder.tsx";
+	WorkflowDefinition,
+	WorkflowNodeType,
+} from "../../../src/types.ts";
+import { WorkflowBuilder, type WorkflowNodeTypeConfig } from "./WorkflowBuilder.tsx";
 
 interface WorkflowEditorProps {
 	workflow?: WorkflowDefinition;
@@ -46,12 +47,27 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
 			updatedBy: "user",
 		},
 	);
-	const [nodeTypes, setNodeTypes] = useState<
-		Array<{ id: string; name: string; type: string; description?: string }>
-	>([]);
+	const [nodeTypes, setNodeTypes] = useState<WorkflowNodeTypeConfig[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [activeTab, setActiveTab] = useState<"builder" | "settings" | "variables">("builder");
+	const nodeTypeThemes: Record<WorkflowNodeType, { label: string; icon: string; color: string }> =
+		{
+			trigger: { label: "Trigger", icon: "!", color: "#f59e0b" },
+			condition: { label: "Condition", icon: "?", color: "#0ea5e9" },
+			action: { label: "Action", icon: ">", color: "#22c55e" },
+			delay: { label: "Delay", icon: "~", color: "#f97316" },
+			branch: { label: "Branch", icon: "/", color: "#a855f7" },
+			merge: { label: "Merge", icon: "+", color: "#14b8a6" },
+			notification: { label: "Notification", icon: "N", color: "#38bdf8" },
+			task_create: { label: "Create Task", icon: "C", color: "#4f46e5" },
+			task_update: { label: "Update Task", icon: "U", color: "#06b6d4" },
+			task_assign: { label: "Assign Task", icon: "A", color: "#8b5cf6" },
+			webhook: { label: "Webhook", icon: "W", color: "#64748b" },
+			script: { label: "Script", icon: "S", color: "#0f172a" },
+		};
+	const isWorkflowNodeType = (value: string): value is WorkflowNodeType =>
+		Object.prototype.hasOwnProperty.call(nodeTypeThemes, value);
 
 	// Fetch node types
 	useEffect(() => {
@@ -60,8 +76,32 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({
 				const response = await fetch("/api/workflow-node-types");
 				const result = await response.json();
 
-				if (result.success) {
-					setNodeTypes(result.data);
+				if (result.success && Array.isArray(result.data)) {
+					const normalized = result.data
+						.filter((node) => node && typeof node === "object" && "type" in node)
+						.map((node) => {
+							const raw = node as {
+								type: string;
+								name?: string;
+								description?: string;
+								inputs?: WorkflowNodeTypeConfig["inputs"];
+								outputs?: WorkflowNodeTypeConfig["outputs"];
+								parameters?: WorkflowNodeTypeConfig["parameters"];
+							};
+							const type = isWorkflowNodeType(raw.type) ? raw.type : "action";
+							const theme = nodeTypeThemes[type];
+							return {
+								type,
+								label: raw.name?.trim() || theme.label,
+								description: raw.description,
+								icon: theme.icon,
+								color: theme.color,
+								inputs: raw.inputs ?? [],
+								outputs: raw.outputs ?? [],
+								parameters: raw.parameters ?? [],
+							} satisfies WorkflowNodeTypeConfig;
+						});
+					setNodeTypes(normalized);
 				} else {
 					setError("Failed to load node types");
 				}

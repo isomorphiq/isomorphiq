@@ -1,6 +1,6 @@
 import { createWSClient, httpBatchLink, splitLink, wsLink } from "@trpc/client";
 import { createTRPCJotai } from "jotai-trpc";
-import type { AppRouter } from "../../src/http-api-server.ts";
+import type { AppRouter } from "@isomorphiq/http-api";
 
 const API_PORT_FALLBACK = 3003;
 

@@ -1,0 +1,24 @@
+{
+    "name": "@isomorphiq/mcp",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "lint": "echo \"Lint not configured yet for @isomorphiq/mcp\"",
+        "test": "echo \"Tests not configured yet for @isomorphiq/mcp\"",
+        "start": "node --experimental-strip-types src/mcp-server.ts"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.24.3"
+    }
+}

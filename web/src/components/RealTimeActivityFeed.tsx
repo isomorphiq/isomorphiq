@@ -1,6 +1,13 @@
 import { useAtom } from "jotai";
 import { useCallback, useEffect, useState } from "react";
-import type { WebSocketEvent } from "../../../src/types.ts";
+import type {
+	TaskCreatedEvent,
+	TaskDeletedEvent,
+	TaskPriorityChangedEvent,
+	TaskStatusChangedEvent,
+	TaskUpdatedEvent,
+	WebSocketEvent,
+} from "../../../src/types.ts";
 import { lastEventAtom } from "../atoms.ts";
 
 interface ActivityItem {
@@ -19,20 +26,40 @@ export function RealTimeActivityFeed({ maxItems = 20 }: RealTimeActivityFeedProp
 	const [activities, setActivities] = useState<ActivityItem[]>([]);
 	const [isConnected, setIsConnected] = useState(false);
 	const [lastEvent] = useAtom(lastEventAtom);
+	type ActivityEvent =
+		| TaskCreatedEvent
+		| TaskUpdatedEvent
+		| TaskDeletedEvent
+		| TaskStatusChangedEvent
+		| TaskPriorityChangedEvent;
+	const isActivityEvent = (event: WebSocketEvent): event is ActivityEvent =>
+		[
+			"task_created",
+			"task_updated",
+			"task_deleted",
+			"task_status_changed",
+			"task_priority_changed",
+		].includes(event.type);
+	const isRecord = (value: unknown): value is Record<string, unknown> =>
+		Boolean(value) && typeof value === "object" && !Array.isArray(value);
+	const toRecord = (value: unknown): Record<string, unknown> | undefined => {
+		if (!isRecord(value)) return undefined;
+		return value;
+	};
 
-	const mapEventToActivity = useCallback((event: WebSocketEvent): ActivityItem | null => {
+	const mapEventToActivity = useCallback((event: ActivityEvent): ActivityItem => {
 		const baseActivity = {
 			id: `${event.type}-${event.timestamp.getTime()}`,
 			type: event.type,
 			timestamp: event.timestamp,
-			details: event.data,
+			details: toRecord(event.data),
 		};
 
 		switch (event.type) {
 			case "task_created":
 				return {
 					...baseActivity,
-					message: `New task created: "${event.data.title}"`,
+					message: `New task created: "${event.data.task.title}"`,
 				};
 			case "task_updated":
 				return {
@@ -54,19 +81,16 @@ export function RealTimeActivityFeed({ maxItems = 20 }: RealTimeActivityFeedProp
 					...baseActivity,
 					message: `Task "${event.data.task.title}" priority changed from ${event.data.oldPriority} to ${event.data.newPriority}`,
 				};
-			default:
-				return null;
 		}
 	}, []);
 
 	const addActivityFromEvent = useCallback(
 		(event: WebSocketEvent) => {
+			if (!isActivityEvent(event)) return;
 			const activity = mapEventToActivity(event);
-			if (activity) {
-				setActivities((prev) => [activity, ...prev].slice(0, maxItems));
-			}
+			setActivities((prev) => [activity, ...prev].slice(0, maxItems));
 		},
-		[mapEventToActivity, maxItems],
+		[isActivityEvent, mapEventToActivity, maxItems],
 	);
 
 	useEffect(() => {

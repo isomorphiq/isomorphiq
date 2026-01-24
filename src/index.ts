@@ -1,27 +1,38 @@
 import path from "node:path";
+import { z } from "zod";
 import { Effect } from "effect";
 import { Level } from "level";
-import { ACPConnectionManager } from "./acp-connection.ts";
+import { ACPConnectionManager, startAcpSession, type AcpSession } from "@isomorphiq/acp";
 import {
-	type ACPProfile,
-	ProfileManager,
-	type ProfileMetrics,
-	type ProfileState,
-} from "./acp-profiles.ts";
-import { startAcpSession, type AcpSession } from "./acp-session.ts";
-import { AutomationRuleEngine } from "./automation-rule-engine.ts";
-import { acpCleanupEffect } from "./effects/acp-cleanup.ts";
-import { acpTurnEffect } from "./effects/acp-turn.ts";
+    type ACPProfile,
+    ProfileManager,
+    type ProfileMetrics,
+    type ProfileState,
+} from "@isomorphiq/user-profile";
+import { AutomationRuleEngine } from "@isomorphiq/tasks";
+import { acpCleanupEffect } from "@isomorphiq/acp";
+import { acpTurnEffect } from "@isomorphiq/acp";
 import { gitCommitIfChanges } from "./git-utils.ts";
 import { runLintAndTests } from "./run-tests.ts";
-import { TemplateManager } from "./template-manager.ts";
-import type { CreateTaskFromTemplateInput, Task, SavedSearch } from "./types.ts";
-import type { TaskStatus, TaskType, WebSocketEventType } from "./types.ts";
-import { buildWorkflowWithEffects } from "./workflow.ts";
-import { advanceToken, createToken } from "./workflow-engine.ts";
-import type { WebSocketManager } from "./websocket-server.ts";
-import { optimizedPriorityService } from "./services/priority-update-manager.ts";
+import { TemplateManager, optimizedPriorityService } from "@isomorphiq/tasks";
+import {
+	TaskPrioritySchema,
+	TaskSchema,
+	TaskStatusSchema,
+	TaskStruct,
+	TaskTypeSchema,
+	type CreateTaskFromTemplateInput,
+	type SavedSearch,
+	type Task,
+    type TaskStatus,
+    type TaskType,
+    type WebSocketEventType,
+} from "./types.ts";
+import { buildWorkflowWithEffects } from "@isomorphiq/workflow";
+import { advanceToken, createToken } from "@isomorphiq/workflow";
+import type { WebSocketManager } from "@isomorphiq/realtime";
 import { ArchiveService } from "./services/archive-service.ts";
+import { IntegrationService } from "@isomorphiq/integrations";
 
 // Initialize LevelDB
 const dbPath = path.join(process.cwd(), "db");
@@ -30,6 +41,136 @@ const db = new Level<string, Task>(dbPath, { valueEncoding: "json" });
 // Initialize separate database for saved searches
 const savedSearchesDbPath = path.join(process.cwd(), "saved-searches-db");
 const savedSearchesDb = new Level<string, SavedSearch>(savedSearchesDbPath, { valueEncoding: "json" });
+
+const automationTaskCreatedSchema = z.object({
+    title: z.string(),
+    description: z.string(),
+    priority: TaskPrioritySchema.optional(),
+    dependencies: z.array(z.string()).optional(),
+    createdBy: z.string().optional(),
+    assignedTo: z.string().optional(),
+    collaborators: z.array(z.string()).optional(),
+    watchers: z.array(z.string()).optional(),
+});
+
+const automationTaskUpdatedSchema = z.object({
+    taskId: z.string(),
+    updates: z.record(z.unknown()),
+});
+
+const automationPriorityChangeSchema = z.object({
+    taskId: z.string(),
+    newPriority: TaskPrioritySchema.optional(),
+    priority: TaskPrioritySchema.optional(),
+});
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null;
+
+const readStringArray = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
+const readDate = (value: unknown): Date | undefined => {
+    if (value instanceof Date) {
+        return value;
+    }
+    if (typeof value === "string" || typeof value === "number") {
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+    }
+    return undefined;
+};
+
+const normalizeTask = (value: unknown): Task | null => {
+    const parsed = TaskSchema.safeParse(value);
+    if (parsed.success) {
+        return TaskStruct.from(parsed.data);
+    }
+
+    if (!isRecord(value)) {
+        return null;
+    }
+
+    const priorityResult = TaskPrioritySchema.safeParse(value.priority);
+    const statusResult = TaskStatusSchema.safeParse(value.status);
+    const typeResult = TaskTypeSchema.safeParse(value.type);
+
+    const normalized = {
+        id: typeof value.id === "string" ? value.id : "",
+        title: typeof value.title === "string" ? value.title : "",
+        description: typeof value.description === "string" ? value.description : "",
+        status: statusResult.success ? statusResult.data : "todo",
+        priority: priorityResult.success ? priorityResult.data : "medium",
+        type: typeResult.success ? typeResult.data : "task",
+        dependencies: readStringArray(value.dependencies),
+        createdBy: typeof value.createdBy === "string" ? value.createdBy : "system",
+        assignedTo: typeof value.assignedTo === "string" ? value.assignedTo : undefined,
+        collaborators: readStringArray(value.collaborators),
+        watchers: readStringArray(value.watchers),
+        createdAt: readDate(value.createdAt) ?? new Date(),
+        updatedAt: readDate(value.updatedAt) ?? new Date(),
+    };
+
+    const normalizedResult = TaskSchema.safeParse(normalized);
+    return normalizedResult.success ? TaskStruct.from(normalizedResult.data) : null;
+};
+
+const getContextTaskId = (context: Record<string, unknown>): string | undefined => {
+    const taskValue = context.task;
+    if (isRecord(taskValue) && typeof taskValue.id === "string") {
+        return taskValue.id;
+    }
+    if (typeof context.taskId === "string") {
+        return context.taskId;
+    }
+    return undefined;
+};
+
+const getErrorMessage = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
+const getLastTestResult = (
+    value: unknown,
+): { output?: string; passed?: boolean } | undefined => {
+    if (!isRecord(value)) {
+        return undefined;
+    }
+    const output = typeof value.output === "string" ? value.output : undefined;
+    const passed = typeof value.passed === "boolean" ? value.passed : undefined;
+    if (output === undefined && passed === undefined) {
+        return undefined;
+    }
+    return { output, passed };
+};
+
+const getLastTestResultFromToken = (
+    tokenValue: unknown,
+): { output?: string; passed?: boolean } | undefined => {
+    if (!isRecord(tokenValue)) {
+        return undefined;
+    }
+    const contextValue = tokenValue.context;
+    return isRecord(contextValue) ? getLastTestResult(contextValue.lastTestResult) : undefined;
+};
+
+const getLastTestResultFromPayload = (
+    payload: unknown,
+): { output?: string; passed?: boolean } | undefined => {
+    if (!isRecord(payload)) {
+        return undefined;
+    }
+    return getLastTestResultFromToken(payload.token);
+};
+
+const getErrorCode = (error: unknown): string | undefined => {
+    if (!isRecord(error)) {
+        return undefined;
+    }
+    const code = typeof error.code === "string" ? error.code : undefined;
+    const cause = isRecord(error.cause) ? error.cause : undefined;
+    const causeCode = cause && typeof cause.code === "string" ? cause.code : undefined;
+    return code ?? causeCode;
+};
 
 // Product Manager class to handle task operations
 export class ProductManager {
@@ -40,6 +181,8 @@ export class ProductManager {
 	private wsManager: WebSocketManager | null = null;
 	private priorityService = optimizedPriorityService;
 	private archiveService: ArchiveService;
+	private integrationService: IntegrationService;
+	private integrationDb: Level<string, unknown>;
 
 	private async ensureDbOpen(): Promise<void> {
 		if (this.dbReady) return;
@@ -47,6 +190,9 @@ export class ProductManager {
 			await db.open();
 			this.dbReady = true;
 			console.log("[DB] Database opened successfully");
+			await this.integrationDb.open();
+			await this.integrationService.initialize();
+			console.log("[INTEGRATIONS] Integration service initialized");
 		} catch (error) {
 			console.error("[DB] Failed to open database:", error);
 			// Crash fast so supervisor restarts us; avoids running without persistence
@@ -59,6 +205,8 @@ export class ProductManager {
 		this.templateManager = new TemplateManager();
 		this.automationEngine = new AutomationRuleEngine();
 		this.archiveService = new ArchiveService();
+		this.integrationDb = new Level(path.join(dbPath, "integrations"), { valueEncoding: "json" });
+		this.integrationService = new IntegrationService(this.integrationDb);
 		this.setupAutomationEngine();
 		// Database will be opened on first use
 	}
@@ -72,42 +220,61 @@ export class ProductManager {
 		return this.wsManager;
 	}
 
+	getIntegrationService(): IntegrationService {
+		return this.integrationService;
+	}
+
 	// Setup automation engine with event handlers
 	private setupAutomationEngine(): void {
 		// Register event handlers for automation
 		this.automationEngine.onTaskEvent(
-			async (eventType: WebSocketEventType, data: Record<string, unknown>) => {
+			async (eventType: WebSocketEventType, data: unknown) => {
 				console.log(`[AUTOMATION] Received task event: ${eventType}`);
 
 				switch (eventType) {
-					case "task_created":
-						if (data.title && data.description) {
-							await this.createTask(
-								data.title as string,
-								data.description as string,
-								(data.priority as "low" | "medium" | "high") || "medium",
-								(data.dependencies as string[]) || [],
-								data.createdBy as string | undefined,
-								data.assignedTo as string | undefined,
-							);
+					case "task_created": {
+						const created = automationTaskCreatedSchema.safeParse(data);
+						if (!created.success) {
+							console.log("[AUTOMATION] Invalid task_created payload");
+							break;
 						}
+						const payload = created.data;
+						await this.createTask(
+							payload.title,
+							payload.description,
+							payload.priority ?? "medium",
+							payload.dependencies ?? [],
+							payload.createdBy,
+							payload.assignedTo,
+							payload.collaborators,
+							payload.watchers,
+						);
 						break;
-					case "task_updated":
-						if (data.taskId && data.updates) {
-							await this.handleTaskUpdate(
-								data.taskId as string,
-								data.updates as Record<string, unknown>,
-							);
+					}
+					case "task_updated": {
+						const updated = automationTaskUpdatedSchema.safeParse(data);
+						if (!updated.success) {
+							console.log("[AUTOMATION] Invalid task_updated payload");
+							break;
 						}
+						await this.handleTaskUpdate(updated.data.taskId, updated.data.updates);
 						break;
-					case "task_priority_changed":
-						if (data.taskId && data.newPriority) {
-							await this.updateTaskPriority(
-								data.taskId as string,
-								data.newPriority as "low" | "medium" | "high",
-							);
+					}
+					case "task_priority_changed": {
+						const priorityChange = automationPriorityChangeSchema.safeParse(data);
+						if (!priorityChange.success) {
+							console.log("[AUTOMATION] Invalid task_priority_changed payload");
+							break;
 						}
+						const newPriority =
+							priorityChange.data.newPriority ?? priorityChange.data.priority;
+						if (!newPriority) {
+							console.log("[AUTOMATION] Missing priority in task_priority_changed payload");
+							break;
+						}
+						await this.updateTaskPriority(priorityChange.data.taskId, newPriority);
 						break;
+					}
 				}
 			},
 		);
@@ -269,34 +436,22 @@ export class ProductManager {
 		await this.ensureDbOpen();
 
 		const tasks: Task[] = [];
-		let iterator:
-			| (AsyncIterableIterator<[string, Task]> & { close: () => Promise<void> })
-			| undefined;
+		const iterator = db.iterator();
 		try {
-			iterator = db.iterator() as unknown as AsyncIterableIterator<[string, Task]> & {
-				close: () => Promise<void>;
-			};
 			for await (const [, value] of iterator) {
-				// Normalize missing fields (legacy tasks may lack dependencies)
-				const raw = value as Partial<Task>;
-				tasks.push({
-					...(raw as Task),
-					dependencies: Array.isArray(raw.dependencies) ? raw.dependencies : [],
-					priority: raw.priority || "medium",
-					status: raw.status || "todo",
-					type: raw.type || "task",
-				});
+				const normalized = normalizeTask(value);
+				if (normalized) {
+					tasks.push(normalized);
+				}
 			}
 		} catch (error) {
 			console.error("[DB] Error reading tasks:", error);
 			throw error;
 		} finally {
-			if (iterator) {
-				try {
-					await iterator.close();
-				} catch (closeError) {
-					console.error("[DB] Error closing iterator:", closeError);
-				}
+			try {
+				await iterator.close();
+			} catch (closeError) {
+				console.error("[DB] Error closing iterator:", closeError);
 			}
 		}
 		return tasks;
@@ -601,8 +756,7 @@ export class ProductManager {
 			};
 		}
 
-		const taskContext = context.task as { id?: string } | undefined;
-		const currentTaskId = taskContext?.id ?? (context.taskId as string | undefined) ?? "n/a";
+		const currentTaskId = getContextTaskId(context) ?? "n/a";
 		const prompt = `${profile.systemPrompt}\n\n${profile.getTaskPrompt(context)}`;
 		console.log(`[ACP] Starting ${profile.role} profile communication (taskId=${currentTaskId})`);
 
@@ -616,7 +770,7 @@ export class ProductManager {
 			console.error(
 				`[ACP] ${profile.role} profile communication error (taskId=${currentTaskId}): ${error}`,
 			);
-			const errorMsg = `Task execution failed: ACP connection failed: ${(error as Error).message}`;
+			const errorMsg = `Task execution failed: ACP connection failed: ${getErrorMessage(error)}`;
 			return { output: "", errorOutput: errorMsg };
 		}
 	}
@@ -638,7 +792,7 @@ export class ProductManager {
 			console.error(`[ACP] ACP communication error (taskId=${taggedTask}): ${error}`);
 
 			// Fail with error - no fallbacks
-			const errorMsg = `Task execution failed: ACP connection failed: ${(error as Error).message}`;
+			const errorMsg = `Task execution failed: ACP connection failed: ${getErrorMessage(error)}`;
 			return { output: "", errorOutput: errorMsg };
 		}
 	}
@@ -841,10 +995,7 @@ export class ProductManager {
 					}),
 				"tests-failed": (payload) =>
 					(() => {
-						const ctxPayload = payload as { token?: typeof token } | undefined;
-						const lastOutput = (
-							ctxPayload?.token?.context?.lastTestResult as { output?: string } | undefined
-						)?.output;
+						const lastOutput = getLastTestResultFromPayload(payload)?.output;
 						return acpEffect(
 							"qa-specialist",
 							`Tests failed. Here is the output:\n${lastOutput ?? "No output"}\nPropose fixes and plan next steps.`,
@@ -884,7 +1035,7 @@ export class ProductManager {
 				let transition = decider ? decider(tasks) : undefined;
 
 				if (token.state === "tests-completed") {
-					const lastResult = token.context?.lastTestResult as { passed?: boolean } | undefined;
+					const lastResult = getLastTestResultFromToken(token);
 					const passed = lastResult?.passed === true;
 					transition = passed ? "tests-passing" : "tests-failed";
 				}
@@ -905,8 +1056,7 @@ export class ProductManager {
 			} catch (error) {
 				console.error("[WORKFLOW] Error in loop:", error);
 				// Crash fast if DB is locked/unavailable so supervisor can restart cleanly
-				const errObj = error as { code?: string; cause?: { code?: string } };
-				const code = errObj.code || errObj.cause?.code;
+				const code = getErrorCode(error);
 				if (code === "LEVEL_DATABASE_NOT_OPEN" || code === "LEVEL_LOCKED") {
 					throw error;
 				}
@@ -1606,13 +1756,9 @@ export class ProductManager {
 		await this.ensureSavedSearchesDbOpen();
 
 		const searches: import("./types.ts").SavedSearch[] = [];
-		let iterator: (AsyncIterableIterator<[string, import("./types.ts").SavedSearch]> & { close: () => Promise<void> }) | undefined;
+		const iterator = savedSearchesDb.iterator();
 
 		try {
-			iterator = savedSearchesDb.iterator() as unknown as AsyncIterableIterator<[string, import("./types.ts").SavedSearch]> & {
-				close: () => Promise<void>;
-			};
-
 			for await (const [, value] of iterator) {
 				// Include public searches or user's own searches
 				if (value.isPublic || (userId && value.createdBy === userId)) {
@@ -1623,12 +1769,10 @@ export class ProductManager {
 			console.error("[SAVED_SEARCHES_DB] Error reading saved searches:", error);
 			throw error;
 		} finally {
-			if (iterator) {
-				try {
-					await iterator.close();
-				} catch (closeError) {
-					console.error("[SAVED_SEARCHES_DB] Error closing iterator:", closeError);
-				}
+			try {
+				await iterator.close();
+			} catch (closeError) {
+				console.error("[SAVED_SEARCHES_DB] Error closing iterator:", closeError);
 			}
 		}
 

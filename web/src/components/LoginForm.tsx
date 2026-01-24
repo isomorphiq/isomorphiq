@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import type { User } from "../../../src/types.ts";
 
 interface LoginFormData {
 	username: string;
@@ -7,7 +8,7 @@ interface LoginFormData {
 }
 
 interface LoginFormProps {
-	onSuccess?: (user: { id: string; username: string; email: string }, token: string) => void;
+	onSuccess?: (user: User, token: string) => void;
 	onError?: (error: string) => void;
 }
 

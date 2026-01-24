@@ -1,6 +1,9 @@
 import { ProductManager } from "./index.ts";
 import type { TaskType } from "./types.ts";
 
+const getErrorMessage = (error: unknown): string =>
+	error instanceof Error ? error.message : String(error);
+
 // Test assertions
 function assert(condition: boolean, message: string): void {
 	if (!condition) {
@@ -22,9 +25,10 @@ async function assertThrowsAsync(
 		await fn();
 		throw new Error("Expected function to throw, but it resolved successfully");
 	} catch (error) {
-		if (expectedMessage && !(error as Error).message.includes(expectedMessage)) {
+		const message = getErrorMessage(error);
+		if (expectedMessage && !message.includes(expectedMessage)) {
 			throw new Error(
-				`Expected error message to contain "${expectedMessage}", got "${(error as Error).message}"`,
+				`Expected error message to contain "${expectedMessage}", got "${message}"`,
 			);
 		}
 	}
@@ -49,7 +53,7 @@ class TestSuite {
 			console.log(`[TEST] ✅ ${name} (${duration}ms)`);
 		} catch (error) {
 			const duration = Date.now() - startTime;
-			const errorMessage = (error as Error).message;
+			const errorMessage = getErrorMessage(error);
 			this.testResults.push({ name, passed: false, error: errorMessage, duration });
 			console.log(`[TEST] ❌ ${name} (${duration}ms): ${errorMessage}`);
 		}

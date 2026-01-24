@@ -1,0 +1,32 @@
+{
+    "name": "@isomorphiq/daemon",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "start": "node --experimental-strip-types src/daemon.ts",
+        "lint": "echo \"Lint not configured yet for @isomorphiq/daemon\"",
+        "test": "echo \"Tests not configured yet for @isomorphiq/daemon\""
+    },
+    "dependencies": {
+        "@isomorphiq/auth": "workspace:*",
+        "@isomorphiq/core": "workspace:*",
+        "@isomorphiq/http-api": "workspace:*",
+        "@isomorphiq/mcp": "workspace:*",
+        "@isomorphiq/realtime": "workspace:*",
+        "@isomorphiq/scheduling": "workspace:*",
+        "@isomorphiq/tasks": "workspace:*",
+        "@isomorphiq/workflow": "workspace:*",
+        "node-cron": "^3.0.3"
+    }
+}

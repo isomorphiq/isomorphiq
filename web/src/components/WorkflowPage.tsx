@@ -73,7 +73,7 @@ const groupColor = d3
 	.domain(["research", "ux", "planning", "refinement", "dev", "testing", "done"])
 	.range(["#38bdf8", "#a855f7", "#f59e0b", "#22c55e", "#3b82f6", "#ec4899", "#9ca3af"]);
 
-export function WorkflowPage(): JSX.Element {
+export function WorkflowPage() {
 	const svgRef = useRef<SVGSVGElement | null>(null);
 	const svgSelectionRef = useRef<d3.Selection<SVGSVGElement, unknown, null, undefined> | null>(null);
 	const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
@@ -94,7 +94,10 @@ export function WorkflowPage(): JSX.Element {
 
 		// Offset only genuine bidirectional pairs so their curves don’t overlap (our “Pauli exclusion”).
 		const grouped = new Map<string, LinkDatum[]>();
-		const normKey = (a: string, b: string) => [a, b].sort().join("__");
+		const toNodeId = (value: string | NodeDatum) => (typeof value === "string" ? value : value.id);
+		const normKey = (a: string | NodeDatum, b: string | NodeDatum) => {
+			return [toNodeId(a), toNodeId(b)].sort().join("__");
+		};
 		links.forEach((l) => {
 			const key = normKey(l.source, l.target);
 			if (!grouped.has(key)) grouped.set(key, []);
@@ -104,7 +107,9 @@ export function WorkflowPage(): JSX.Element {
 			if (arr.length === 2) {
 				const offset = 46;
 				for (const lnk of arr) {
-					const isLower = lnk.source < lnk.target;
+					const sourceId = toNodeId(lnk.source);
+					const targetId = toNodeId(lnk.target);
+					const isLower = sourceId < targetId;
 					lnk.offset = isLower ? offset : -offset;
 				}
 			} else {

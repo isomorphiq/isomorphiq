@@ -1,0 +1,27 @@
+{
+    "name": "@isomorphiq/time-tracking",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "lint": "echo \"Lint not configured yet for @isomorphiq/time-tracking\"",
+        "test": "echo \"Tests not configured yet for @isomorphiq/time-tracking\""
+    },
+    "dependencies": {
+        "@isomorphiq/core": "workspace:*",
+        "@tsimpl/core": "0.1.1",
+        "@tsimpl/runtime": "0.1.1",
+        "@tsimpl/validation": "0.1.1",
+        "zod": "^3.24.2"
+    }
+}

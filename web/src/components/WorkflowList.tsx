@@ -1,6 +1,6 @@
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
-import type { WorkflowDefinition, WorkflowStatistics } from "../../../src/types/workflow-types.ts";
+import type { WorkflowDefinition, WorkflowStatistics } from "../../../src/types.ts";
 import { WorkflowEditor } from "./WorkflowEditor.tsx";
 
 type WorkflowListProps = Record<string, never>;

@@ -1,12 +1,12 @@
 import * as d3 from "d3";
 import { useEffect, useRef, useState } from "react";
 import {
-	type CriticalPathResult,
-	CriticalPathService,
-	type DependencyLink,
-	type TaskNode,
-} from "../../../src/services/critical-path-service.ts";
-import type { Task } from "../../../src/types.ts";
+    type CriticalPathResult,
+    CriticalPathService,
+    type DependencyLink,
+    type TaskNode,
+} from "@isomorphiq/service-critical-path";
+import type { Task } from "@isomorphiq/tasks";
 
 interface DependencyVisualizationProps {
 	tasks: Task[];

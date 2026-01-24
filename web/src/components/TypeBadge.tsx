@@ -9,8 +9,8 @@ const colors: Record<Task["type"] | "unknown", { bg: string; text: string }> = {
 	unknown: { bg: "#e5e7eb", text: "#374151" },
 };
 
-export function TypeBadge({ type }: { type: Task["type"] | undefined }) {
-	const palette = colors[type ?? "unknown"] ?? colors.unknown;
+export function TypeBadge({ type }: { type: string | undefined }) {
+	const palette = colors[type as Task["type"]] ?? colors.unknown;
 	return (
 		<span
 			style={{

@@ -7,19 +7,19 @@ This project now has a complete TypeScript build and testing infrastructure that
 ## Build Scripts
 
 ### Development Scripts
-- `npm run build` - Compiles TypeScript to JavaScript in `dist/` directory
-- `npm run build:watch` - Watches for changes and recompiles automatically
-- `npm run typecheck` - Runs TypeScript type checking without emitting files
-- `npm run test` - Runs the test suite using tsx for TypeScript execution
-- `npm run test:dev` - Alternative test runner for development
+- `yarn run build` - Compiles TypeScript to JavaScript in `dist/` directory
+- `yarn run build:watch` - Watches for changes and recompiles automatically
+- `yarn run typecheck` - Runs TypeScript type checking without emitting files
+- `yarn run test` - Runs the test suite using tsx for TypeScript execution
+- `yarn run test:dev` - Alternative test runner for development
 
 ### Production Scripts
-- `npm run daemon:prod` - Runs the compiled daemon from `dist/daemon.js`
-- `npm run mcp-server:prod` - Runs the compiled MCP server from `dist/mcp-server.js`
+- `yarn run daemon:prod` - Runs the compiled daemon from `dist/daemon.js`
+- `yarn run mcp-server:prod` - Runs the compiled MCP server from `dist/mcp-server.js`
 
 ### Utility Scripts
-- `npm run clean` - Removes the `dist/` directory
-- `npm run lint` - Placeholder for linting (currently shows message)
+- `yarn run clean` - Removes the `dist/` directory
+- `yarn run lint` - Placeholder for linting (currently shows message)
 
 ## TypeScript Configuration
 
@@ -46,7 +46,7 @@ The project uses two TypeScript configurations:
 
 ### Development Testing
 ```bash
-npm run test
+yarn run test
 ```
 - Uses tsx to run TypeScript directly
 - Full source maps and debugging support
@@ -54,7 +54,7 @@ npm run test
 
 ### Production Testing
 ```bash
-npm run build && npm run test:prod
+yarn run build && yarn run test:prod
 ```
 - Tests compiled JavaScript output
 - Ensures production builds work correctly
@@ -79,17 +79,17 @@ The build system ensures:
 
 ## Development Workflow
 
-1. **Development**: Use `npm run daemon` for hot reloading
-2. **Testing**: Use `npm run test` for immediate feedback
-3. **Building**: Use `npm run build` for production compilation
-4. **Production**: Use `npm run daemon:prod` for deployment
+1. **Development**: Use `yarn run daemon` for hot reloading
+2. **Testing**: Use `yarn run test` for immediate feedback
+3. **Building**: Use `yarn run build` for production compilation
+4. **Production**: Use `yarn run daemon:prod` for deployment
 
 ## Troubleshooting
 
 ### Build Issues
-- Clear `dist/` directory: `npm run clean`
-- Check TypeScript configuration: `npm run typecheck`
-- Verify dependencies: `npm install`
+- Clear `dist/` directory: `yarn run clean`
+- Check TypeScript configuration: `yarn run typecheck`
+- Verify dependencies: `yarn install`
 
 ### Import Errors
 - The build process automatically fixes import extensions

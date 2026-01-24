@@ -90,6 +90,12 @@ export function ProfileAnalytics() {
 	const avgErrorRate =
 		profileNames.reduce((sum, name) => sum + analytics[name].errorRate, 0) / profileNames.length;
 
+	const timeRanges = [
+		{ id: "1h", label: "1 Hour" },
+		{ id: "24h", label: "24 Hours" },
+		{ id: "7d", label: "7 Days" },
+	] as const;
+
 	return (
 		<div style={{ display: "grid", gap: "16px" }}>
 			{/* Time Range Selector */}
@@ -101,11 +107,7 @@ export function ProfileAnalytics() {
 						marginBottom: "16px",
 					}}
 				>
-					{[
-						{ id: "1h", label: "1 Hour" },
-						{ id: "24h", label: "24 Hours" },
-						{ id: "7d", label: "7 Days" },
-					].map((range) => (
+					{timeRanges.map((range) => (
 						<button
 							key={range.id}
 							type="button"

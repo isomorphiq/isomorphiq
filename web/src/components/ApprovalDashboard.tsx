@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ApprovalStats, TaskApproval } from "../../../src/core/approval-workflow.ts";
+import type { ApprovalStats, TaskApproval } from "@isomorphiq/workflow";
 
-interface ApprovalDashboardProps {
-	userId: string;
-}
+type ApprovalDashboardProps = {
+    userId: string;
+};
 
 export function ApprovalDashboard({ userId }: ApprovalDashboardProps) {
 	const [pendingApprovals, setPendingApprovals] = useState<TaskApproval[]>([]);

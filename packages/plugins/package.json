@@ -1,0 +1,24 @@
+{
+    "name": "@isomorphiq/plugins",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "lint": "echo \"Lint not configured yet for @isomorphiq/plugins\"",
+        "test": "echo \"Tests not configured yet for @isomorphiq/plugins\""
+    },
+    "dependencies": {
+        "@isomorphiq/core": "workspace:*",
+        "@isomorphiq/user-profile": "workspace:*"
+    }
+}

@@ -1,7 +1,8 @@
 import { atom } from "jotai";
+import type { User } from "../../src/types.ts";
 
 export const authAtom = atom<{
-	user: { id: string; username: string; email: string } | null;
+	user: User | null;
 	token: string | null;
 	isAuthenticated: boolean;
 	isLoading: boolean;

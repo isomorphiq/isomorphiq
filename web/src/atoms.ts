@@ -1,11 +1,15 @@
-import { atom } from "jotai";
-import type { TaskFilters, TaskSort, WebSocketEvent } from "../../src/types.ts";
+import { atom, type Atom } from "jotai";
+import type { Task, TaskFilters, TaskSort, WebSocketEvent } from "../../src/types.ts";
 import { trpc } from "./trpc.ts";
 export * from "./atoms/themeAtoms.ts";
 
 // Base atoms powered by tRPC (auto fetch)
-const baseTasksAtom = trpc.tasks.atomWithQuery(() => undefined);
-const baseQueueAtom = trpc.queue.atomWithQuery(() => undefined);
+const baseTasksAtom = (trpc.tasks as {
+	atomWithQuery: (getInput: () => undefined) => Atom<Promise<Task[] | undefined>>;
+}).atomWithQuery(() => undefined);
+const baseQueueAtom = (trpc.queue as {
+	atomWithQuery: (getInput: () => undefined) => Atom<Promise<Task[] | undefined>>;
+}).atomWithQuery(() => undefined);
 
 // Refresh counter to trigger refetch on events
 export const refreshAtom = atom(0);

@@ -20,19 +20,19 @@ The application follows this workflow:
 ## Requirements
 
 - opencode CLI installed and available in PATH
-- Node.js 14+ with TypeScript support
+- Node.js 24+ (uses native TypeScript type stripping)
 
 ## Usage
 
 ```bash
 # Install dependencies
-npm install
+yarn install
 
 # Build the application
-npm run build
+yarn run build
 
 # Run the application
-npm start
+yarn start
 ```
 
 ## Implementation Details
@@ -52,10 +52,10 @@ The application includes an MCP (Model Context Protocol) server that allows Isom
 ### Starting the MCP Server
 ```bash
 # Build the project first
-npm run build
+yarn run build
 
 # Start MCP server with helpful output
-npm run start-mcp
+yarn run start-mcp
 ```
 
 ### Configuring OpenCode to Use MCP
@@ -63,12 +63,12 @@ npm run start-mcp
 # Option 1: Global configuration
 opencode config set mcp.servers.task-manager '{
   "command": "node",
-  "args": ["src/mcp-server.ts"],
+  "args": ["packages/mcp/src/mcp-server.ts"],
   "env": {}
 }'
 
 # Option 2: Inline configuration
-opencode run --mcp-server '{"name": "task-manager", "command": "node", "args": ["src/mcp-server.ts"]}' "Your prompt here"
+opencode run --mcp-server '{"name": "task-manager", "command": "node", "args": ["packages/mcp/src/mcp-server.ts"]}' "Your prompt here"
 ```
 
 ### MCP Tools Available
@@ -96,22 +96,22 @@ The Isomorphiq Task Manager MCP app is now **launch-ready** with full MCP server
 
 1. **Install dependencies:**
    ```bash
-   npm install
+   yarn install
    ```
 
 2. **Start the MCP server:**
    ```bash
-   npm run start-mcp
+   yarn run start-mcp
    ```
 
 3. **Start the task daemon:**
    ```bash
-   npm run daemon
+   yarn run daemon
    ```
 
 4. **Test MCP tools:**
    ```bash
-   npm run test-mcp
+   yarn run test-mcp
    ```
 
 ### MCP Tools Available
@@ -139,11 +139,11 @@ The Isomorphiq Task Manager MCP app is now **launch-ready** with full MCP server
 
 ```bash
 # Build for production
-npm run build
+yarn run build
 
 # Start services
-npm run start-mcp &
-npm run daemon &
+yarn run start-mcp &
+yarn run daemon &
 
 # Monitor logs
 tail -f mcp-server.log daemon.log

@@ -1,11 +1,12 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Task } from "../../../src/types.ts";
+import type { OfflineTask } from "../hooks/useOfflineSync.ts";
 import { PriorityBadge } from "./PriorityBadge.tsx";
 import { TypeBadge } from "./TypeBadge.tsx";
 
 interface TaskCardProps {
-    task: Task;
+    task: Task | OfflineTask;
     highlight?: boolean;
     showIndex?: number;
     onStatusChange?: (taskId: string, newStatus: Task["status"]) => void;
@@ -69,6 +70,8 @@ export function TaskCard({
         "in-progress": "#f59e0b",
         done: "#10b981",
     };
+    const createdAt = new Date(task.createdAt);
+    const updatedAt = new Date(task.updatedAt);
 
     return (
         <article
@@ -279,8 +282,8 @@ export function TaskCard({
                     gap: "8px",
                 }}
             >
-                <span>Created: {new Date(task.createdAt).toLocaleDateString()}</span>
-                <span>Updated: {new Date(task.updatedAt).toLocaleDateString()}</span>
+                <span>Created: {createdAt.toLocaleDateString()}</span>
+                <span>Updated: {updatedAt.toLocaleDateString()}</span>
                 <span style={{ fontFamily: "monospace", wordBreak: "break-all" }}>ID: {task.id}</span>
             </div>
         </article>
@@ -288,7 +291,7 @@ export function TaskCard({
 }
 
 interface TaskListProps {
-    tasks: Task[];
+    tasks: Array<Task | OfflineTask>;
     empty: string;
     onStatusChange?: (taskId: string, newStatus: Task["status"]) => void;
     onPriorityChange?: (taskId: string, newPriority: Task["priority"]) => void;
@@ -325,7 +328,7 @@ export function TaskList({
 }
 
 interface QueueListProps {
-    tasks: Task[];
+    tasks: Array<Task | OfflineTask>;
     onStatusChange?: (taskId: string, newStatus: Task["status"]) => void;
     onPriorityChange?: (taskId: string, newPriority: Task["priority"]) => void;
     onDelete?: (taskId: string) => void;

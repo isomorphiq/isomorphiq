@@ -1,4 +1,4 @@
-import { ProductManager } from "./product-manager.ts";
+import { ProductManager } from "@isomorphiq/tasks";
 import path from "node:path";
 
 async function runTests() {
