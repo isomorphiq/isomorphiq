@@ -1,12 +1,14 @@
-import { logTransition, noopEffect } from "./transition-effects.ts";
-import type { Task } from "@isomorphiq/tasks";
+import { logTransition } from "./transition-effects.ts";
 import {
 	assembleWorkflow,
 	createTransition,
+	type TransitionDefinition,
 	type RuntimeState,
 	type StateDefinition,
 	type TransitionEffect,
+	type WorkflowTask,
 } from "./workflow-factory.ts";
+import { workflowLinks } from "./workflow-graph.ts";
 
 export type WorkflowStateName =
 	| "new-feature-proposed"
@@ -19,22 +21,37 @@ export type WorkflowStateName =
 	| "task-completed"
 	| "tests-completed";
 
+const transitionEffects: Partial<
+	Record<WorkflowStateName, Partial<Record<string, TransitionEffect>>>
+> = {
+	"task-completed": {
+		"pick-up-next-task": () => logTransition("tasks-prepared"),
+	},
+};
+
+const buildTransitionsFor = (stateName: WorkflowStateName): TransitionDefinition[] => {
+	const effectsForState = transitionEffects[stateName] ?? {};
+	return workflowLinks
+		.filter((link) => link.source === stateName)
+		.map((link) =>
+			createTransition(link.label, link.target, effectsForState[link.label]),
+		);
+};
+
 // Canonical workflow assembled via factories.
 const baseStateDefs: Array<StateDefinition> = [
 	{
 		name: "new-feature-proposed",
 		description: "Backlog is empty of net-new features; time to propose one.",
-		profile: "product-research",
+		profile: "product-manager",
 		targetType: "feature",
 		promptHint:
 			"Produce exactly one feature: title, rich description, user value, acceptance criteria, priority.",
-		transitions: [
-			createTransition("retry-product-research", "new-feature-proposed"),
-			createTransition("prioritize-features", "features-prioritized"),
-		],
-		decider: (tasks) => {
+		defaultTransition: "retry-product-research",
+		transitions: buildTransitionsFor("new-feature-proposed"),
+		decider: (tasks: WorkflowTask[]) => {
 			// Treat obvious feature-shaped records as features, even if type was mis-labeled as task.
-			const isFeatureLike = (t: Task) =>
+			const isFeatureLike = (t: WorkflowTask) =>
 				(t.type === "feature" ||
 					(t.type === "task" &&
 						(/feature/i.test(t.title ?? "") || /feature/i.test(t.description ?? "")))) &&
@@ -53,14 +70,11 @@ const baseStateDefs: Array<StateDefinition> = [
 	{
 		name: "features-prioritized",
 		description: "Feature ideas exist and are prioritized.",
-		profile: "roadmapping",
+		profile: "product-manager",
 		targetType: "feature",
 		promptHint: "Return reordered/prioritized feature list (IDs + priority).",
-		transitions: [
-			createTransition("do-ux-research", "stories-created"),
-			createTransition("prioritize-stories", "stories-prioritized"),
-		],
-		decider: (tasks) => {
+		transitions: buildTransitionsFor("features-prioritized"),
+		decider: (tasks: WorkflowTask[]) => {
 			const hasStories = tasks.some((t) => t.type === "story" && t.status === "todo");
 			// Prefer to consume existing stories before generating more.
 			if (hasStories) return "prioritize-stories";
@@ -70,14 +84,11 @@ const baseStateDefs: Array<StateDefinition> = [
 	{
 		name: "stories-created",
 		description: "Stories have been drafted from a feature.",
-		profile: "ux-research",
+		profile: "project-manager",
 		targetType: "story",
 		promptHint: "Produce 3-5 stories with AC for the selected feature.",
-		transitions: [
-			createTransition("prioritize-stories", "stories-prioritized"),
-			createTransition("request-feature", "new-feature-proposed"),
-		],
-		decider: (tasks) => {
+		transitions: buildTransitionsFor("stories-created"),
+		decider: (tasks: WorkflowTask[]) => {
 			const hasStories = tasks.some((t) => t.type === "story" && t.status === "todo");
 			if (hasStories) return "prioritize-stories";
 			// If stories somehow vanished, ask for a feature to restart the pipeline.
@@ -88,23 +99,20 @@ const baseStateDefs: Array<StateDefinition> = [
 	{
 		name: "stories-prioritized",
 		description: "Stories ordered for execution.",
-		profile: "planning",
+		profile: "project-manager",
 		targetType: "story",
 		promptHint: "Return ordered story IDs (highest priority first).",
-		transitions: [createTransition("refine-into-tasks", "tasks-prepared")],
+		transitions: buildTransitionsFor("stories-prioritized"),
 		decider: () => "refine-into-tasks",
 	},
 	{
 		name: "tasks-prepared",
 		description: "Tasks exist and are ready for implementation.",
-		profile: "refinement",
+		profile: "principal-architect",
 		targetType: "task",
 		promptHint: "Produce 3-7 tasks with AC and priority for the story.",
-		transitions: [
-			createTransition("begin-implementation", "task-in-progress"),
-			createTransition("need-more-tasks", "stories-prioritized"),
-		],
-		decider: (tasks) => {
+		transitions: buildTransitionsFor("tasks-prepared"),
+		decider: (tasks: WorkflowTask[]) => {
 			const hasTasks = tasks.some((t) => t.type === "task" && t.status === "todo");
 			if (hasTasks) return "begin-implementation";
 			return "need-more-tasks";
@@ -113,55 +121,50 @@ const baseStateDefs: Array<StateDefinition> = [
 	{
 		name: "task-in-progress",
 		description: "Implement Task tickets with TDD: write tests, implement, rerun until green.",
-		profile: "development",
+		profile: "senior-developer",
 		targetType: "task",
 		promptHint:
 			"Write tests first; then code to make them pass. Report failing output if not green.",
-		transitions: [
-			createTransition("run-tests", "tests-completed"),
-			createTransition("refine-task", "tasks-prepared"),
-		],
-		decider: (tasks) => {
-			const hasTask = tasks.some((t) => t.type === "task" && t.status === "todo");
+		transitions: buildTransitionsFor("task-in-progress"),
+		decider: (tasks: WorkflowTask[]) => {
+			const hasInProgressTask = tasks.some(
+				(t) => t.type === "task" && t.status === "in-progress",
+			);
+			if (hasInProgressTask) return "run-tests";
+
+			const hasTodoTask = tasks.some((t) => t.type === "task" && t.status === "todo");
 			// If nothing to work on, go upstream to request refinement; otherwise keep the test loop moving.
-			return hasTask ? "run-tests" : "refine-task";
+			return hasTodoTask ? "additional-implementation" : "refine-task";
 		},
 	},
 	{
 		name: "tests-completed",
 		description: "Run unit + integration/regression tests for the completed task.",
-		profile: "integration-testing",
+		profile: "qa-specialist",
 		targetType: "integration",
 		promptHint:
 			"Run unit + integration suite; suggest fixes. Up to 3 attempts; if failures shrink, continue.",
-		transitions: [
-			createTransition("tests-passing", "task-completed"),
-			createTransition("tests-failed", "task-in-progress"),
-		],
+		transitions: buildTransitionsFor("tests-completed"),
 		// Runtime code overrides this using actual test results; keep default deterministic.
 		decider: () => "tests-passing",
 	},
 	{
 		name: "task-completed",
 		description: "Task closed; notify and pick up another.",
-		profile: "development",
+		profile: "senior-developer",
 		promptHint: "Trigger follow-up actions such as notifications/closure.",
-		transitions: [
-			createTransition("pick-up-next-task", "tasks-prepared", () =>
-				logTransition("tasks-prepared"),
-			),
-			createTransition("research-new-features", "new-feature-proposed", noopEffect),
-			createTransition("prioritize-features", "features-prioritized", noopEffect),
-			createTransition("prioritize-stories", "stories-prioritized", noopEffect),
-		],
-		decider: (tasks) => {
+		transitions: buildTransitionsFor("task-completed"),
+		decider: (tasks: WorkflowTask[]) => {
 			const hasTasksReady = tasks.some((t) => t.type === "task" && t.status === "todo");
 			if (hasTasksReady) return "pick-up-next-task";
 
 			const hasStories = tasks.some((t) => t.type === "story" && t.status === "todo");
 			if (hasStories) return "prioritize-stories";
 
-			// No tasks and no stories to feed refinement; go back to product research.
+			const hasFeatures = tasks.some((t) => t.type === "feature" && t.status === "todo");
+			if (hasFeatures) return "prioritize-features";
+
+			// No tasks, stories, or features to feed refinement; go back to product research.
 			return "research-new-features";
 		},
 	},

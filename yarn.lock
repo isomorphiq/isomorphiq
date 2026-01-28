@@ -523,6 +523,8 @@ __metadata:
     "@isomorphiq/scheduling": "workspace:*"
     "@isomorphiq/tasks": "workspace:*"
     "@isomorphiq/workflow": "workspace:*"
+    node-cron: "npm:^3.0.3"
+    ws: "npm:^8.14.2"
   languageName: unknown
   linkType: soft
 
@@ -534,6 +536,7 @@ __metadata:
     "@isomorphiq/http-server": "workspace:*"
     "@isomorphiq/realtime": "workspace:*"
     "@isomorphiq/tasks": "workspace:*"
+    typescript: "npm:^5.9.3"
   languageName: unknown
   linkType: soft
 
@@ -555,6 +558,7 @@ __metadata:
     "@trpc/server": "npm:^11.7.2"
     cors: "npm:^2.8.5"
     express: "npm:^5.2.1"
+    typescript: "npm:^5.9.3"
     ws: "npm:^8.18.3"
   languageName: unknown
   linkType: soft
@@ -573,6 +577,7 @@ __metadata:
     "@trpc/server": "npm:^11.7.2"
     cors: "npm:^2.8.5"
     express: "npm:^5.2.1"
+    typescript: "npm:^5.9.3"
     ws: "npm:^8.18.3"
   languageName: unknown
   linkType: soft
@@ -697,6 +702,7 @@ __metadata:
   dependencies:
     "@isomorphiq/core": "workspace:*"
     "@isomorphiq/tasks": "workspace:*"
+    typescript: "npm:^5.9.3"
   languageName: unknown
   linkType: soft
 
@@ -706,6 +712,7 @@ __metadata:
   dependencies:
     "@isomorphiq/auth": "workspace:*"
     "@isomorphiq/core": "workspace:*"
+    typescript: "npm:^5.9.3"
   languageName: unknown
   linkType: soft
 
@@ -715,6 +722,7 @@ __metadata:
   dependencies:
     "@isomorphiq/core": "workspace:*"
     "@isomorphiq/tasks": "workspace:*"
+    typescript: "npm:^5.9.3"
   languageName: unknown
   linkType: soft
 
@@ -761,12 +769,14 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@isomorphiq/tasks@workspace:packages/tasks"
   dependencies:
+    "@isomorphiq/acp": "workspace:*"
     "@isomorphiq/core": "workspace:*"
     "@isomorphiq/integrations": "workspace:*"
     "@isomorphiq/persistence-level": "workspace:*"
     "@isomorphiq/realtime": "workspace:*"
     "@isomorphiq/search": "workspace:*"
     "@isomorphiq/user-profile": "workspace:*"
+    "@isomorphiq/workflow": "workspace:*"
     "@tsimpl/core": "npm:0.1.1"
     "@tsimpl/runtime": "npm:0.1.1"
     "@tsimpl/validation": "npm:0.1.1"
@@ -800,7 +810,6 @@ __metadata:
   resolution: "@isomorphiq/workflow@workspace:packages/workflow"
   dependencies:
     "@isomorphiq/core": "workspace:*"
-    "@isomorphiq/tasks": "workspace:*"
     "@tsimpl/core": "npm:0.1.1"
     "@tsimpl/runtime": "npm:0.1.1"
     "@tsimpl/validation": "npm:0.1.1"
@@ -815,6 +824,7 @@ __metadata:
     "@isomorphiq/core": "workspace:*"
     "@isomorphiq/tasks": "workspace:*"
     "@isomorphiq/workflow": "workspace:*"
+    typescript: "npm:^5.9.3"
   languageName: unknown
   linkType: soft
 
@@ -3709,6 +3719,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"node-cron@npm:^3.0.3":
+  version: 3.0.3
+  resolution: "node-cron@npm:3.0.3"
+  dependencies:
+    uuid: "npm:8.3.2"
+  checksum: 10c0/e6e817c5bf28cca69f256ecc1a2cb737cf895cb0fe22f8ec58ce614cb74dcc22e93f495984a26ece51322473238ccc0ef53b4f373035697017b8c28bddacb9b9
+  languageName: node
+  linkType: hard
+
 "node-domexception@npm:^1.0.0":
   version: 1.0.0
   resolution: "node-domexception@npm:1.0.0"
@@ -4536,6 +4555,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"uuid@npm:8.3.2":
+  version: 8.3.2
+  resolution: "uuid@npm:8.3.2"
+  bin:
+    uuid: dist/bin/uuid
+  checksum: 10c0/bcbb807a917d374a49f475fae2e87fdca7da5e5530820ef53f65ba1d12131bd81a92ecf259cc7ce317cbe0f289e7d79fdfebcef9bfa3087c8c8a2fa304c9be54
+  languageName: node
+  linkType: hard
+
 "uuid@npm:^13.0.0":
   version: 13.0.0
   resolution: "uuid@npm:13.0.0"
@@ -4602,7 +4630,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ws@npm:^8.18.3":
+"ws@npm:^8.14.2, ws@npm:^8.18.3":
   version: 8.19.0
   resolution: "ws@npm:8.19.0"
   peerDependencies:

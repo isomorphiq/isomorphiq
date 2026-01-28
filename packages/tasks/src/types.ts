@@ -47,6 +47,24 @@ export const TaskIdentitySchema = z.object({
 export const TaskIdentityStruct = struct.name("TaskIdentity")<z.output<typeof TaskIdentitySchema>, z.input<typeof TaskIdentitySchema>>(TaskIdentitySchema);
 export type TaskIdentity = StructSelf<typeof TaskIdentityStruct>;
 
+export const TaskActionLogSchema = z.object({
+    id: z.string(),
+    summary: z.string(),
+    profile: z.string(),
+    durationMs: z.number(),
+    createdAt: z.date(),
+    success: z.boolean(),
+    transition: z.string().optional(),
+    prompt: z.string().optional(),
+    modelName: z.string().optional(),
+}).passthrough();
+
+export const TaskActionLogStruct = struct.name("TaskActionLog")<
+    z.output<typeof TaskActionLogSchema>,
+    z.input<typeof TaskActionLogSchema>
+>(TaskActionLogSchema);
+export type TaskActionLog = StructSelf<typeof TaskActionLogStruct>;
+
 export const TaskSchema = TaskIdentitySchema.extend({
     title: z.string(),
     description: z.string(),
@@ -58,6 +76,7 @@ export const TaskSchema = TaskIdentitySchema.extend({
     assignedTo: z.string().optional(),
     collaborators: z.array(z.string()).optional(),
     watchers: z.array(z.string()).optional(),
+    actionLog: z.array(TaskActionLogSchema).optional(),
 }).passthrough();
 
 export const TaskStruct = struct.name("Task")<z.output<typeof TaskSchema>, z.input<typeof TaskSchema>>(TaskSchema);
@@ -85,6 +104,7 @@ export const UpdateTaskInputSchema = z.object({
     assignedTo: z.string().optional(),
     collaborators: z.array(z.string()).optional(),
     watchers: z.array(z.string()).optional(),
+    actionLog: z.array(TaskActionLogSchema).optional(),
 });
 
 export const UpdateTaskInputStruct = struct.name("UpdateTaskInput")<z.output<typeof UpdateTaskInputSchema>, z.input<typeof UpdateTaskInputSchema>>(UpdateTaskInputSchema);

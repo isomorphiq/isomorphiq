@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
+import { expect } from "../../../test-utils/expect.ts";
 import {
     getSecurityService,
     getEnhancedRbacService,

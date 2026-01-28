@@ -58,21 +58,21 @@ const blocking = CriticalPathService.getBlockingTasks(tasks);
 
 ### Frontend Components
 
-#### DependencyVisualization (`web/src/components/DependencyVisualization.tsx`)
+#### DependencyVisualization (`packages/appshell/src/components/DependencyVisualization.tsx`)
 Interactive D3.js visualization component:
 - Zoom and pan functionality
 - Task node interaction (click, hover)
 - Critical path highlighting
 - Real-time statistics display
 
-#### ImpactAnalysis (`web/src/components/ImpactAnalysis.tsx`)
+#### ImpactAnalysis (`packages/appshell/src/components/ImpactAnalysis.tsx`)
 Impact analysis interface:
 - Delay duration input
 - Affected tasks listing
 - Timeline impact visualization
 - Recommendations display
 
-#### DependencyAnalysisPage (`web/src/components/DependencyAnalysisPage.tsx`)
+#### DependencyAnalysisPage (`packages/appshell/src/components/DependencyAnalysisPage.tsx`)
 Main analysis dashboard:
 - Tabbed interface (Visualization vs. Impact Analysis)
 - Project statistics overview

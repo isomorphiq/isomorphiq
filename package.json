@@ -15,7 +15,7 @@
 		"services/workflows",
 		"packages/supervisor",
 		"apps/*",
-		"web"
+		"packages/appshell"
 	],
 	"scripts": {
 		"build": "rsbuild build",

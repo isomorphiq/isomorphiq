@@ -7,6 +7,8 @@ export { setupWorkflowRoutes, setupWorkflowRoutes as createWorkflowRoutes } from
 export { createApprovalWorkflowRoutes } from "./approval-workflow-routes.ts";
 export { createApprovalWorkflowRoutes as createApprovalWorkflowRoutesLegacy } from "./approval-workflow-routes.ts";
 export { WorkflowExecutionEngine } from "./workflow-execution-engine.ts";
+export { workflowGraph, workflowLinks, workflowNodes } from "./workflow-graph.ts";
+export * from "./agent-runner.ts";
 export {
     ApprovalWorkflowService,
     type IApprovalWorkflowRepository,

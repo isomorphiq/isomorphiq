@@ -35,7 +35,7 @@ This implementation provides a fully mobile-responsive task management interface
 ## 📁 File Structure
 
 ```
-web/src/
+packages/appshell/src/
 ├── components/
 │   ├── MobileLayout.tsx          # Mobile-responsive layout component
 │   ├── MobileTaskCard.tsx       # Touch-friendly task cards

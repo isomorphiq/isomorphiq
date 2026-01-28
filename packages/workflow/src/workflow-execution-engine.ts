@@ -1,5 +1,4 @@
 import { v4 as uuidv4 } from "uuid";
-import type { Task } from "@isomorphiq/tasks";
 import type {
     WorkflowDefinition,
     WorkflowExecution,
@@ -577,7 +576,7 @@ export class TaskCreateNodeExecutor implements WorkflowNodeExecutor {
 		const data = toRecord(node.data);
 		const title = toStringOr(data.title, "Untitled task");
 		const description = toStringOr(data.description, "No description provided");
-		const priority = toStringOr(data.priority, "medium") as Task["priority"];
+		const priority = toStringOr(data.priority, "medium");
 		const assignedTo = typeof data.assignedTo === "string" ? data.assignedTo : undefined;
 
 		console.log(`[WORKFLOW] Task create node ${node.id} creating task: ${title}`);
@@ -597,7 +596,7 @@ export class TaskCreateNodeExecutor implements WorkflowNodeExecutor {
 		// Add to context for reference
 		context.tasks.push({
 			id: task.id,
-			status: task.status as string,
+			status: task.status,
 			data: task,
 		});
 

@@ -13,4 +13,12 @@ export type { TaskServiceApi } from "./task-service.ts";
 export { TaskService } from "./task-service.ts";
 export * from "./task-domain.ts";
 export * from "./dependency-validator.ts";
+export * from "./critical-path.ts";
 export * from "./types.ts";
+export type {
+    ProductManagerOptions,
+    TaskExecutionResult,
+    TaskExecutor,
+    TaskSeedProvider,
+    TaskSeedSpec,
+} from "./product-manager.ts";

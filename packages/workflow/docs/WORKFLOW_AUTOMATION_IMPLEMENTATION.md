@@ -11,20 +11,20 @@ Successfully implemented a comprehensive Task Workflow Automation Builder featur
 - **Workflow Service** (`src/services/workflow-service.ts`): Service layer for workflow CRUD operations, templates, and execution tracking
 
 ### 2. Visual Workflow Builder
-- **WorkflowBuilder Component** (`web/src/components/WorkflowBuilder.tsx`): 
+- **WorkflowBuilder Component** (`packages/appshell/src/components/WorkflowBuilder.tsx`): 
   - Drag-and-drop interface for creating workflows
   - Visual node editor with connections
   - Zoom and pan controls
   - Real-time node manipulation
   - Connection validation
 
-- **WorkflowEditor Component** (`web/src/components/WorkflowEditor.tsx`):
+- **WorkflowEditor Component** (`packages/appshell/src/components/WorkflowEditor.tsx`):
   - Complete workflow editor with tabs for builder, settings, and variables
   - Form-based workflow configuration
   - Variable management system
   - Template-based workflow creation
 
-- **WorkflowList Component** (`web/src/components/WorkflowList.tsx`):
+- **WorkflowList Component** (`packages/appshell/src/components/WorkflowList.tsx`):
   - Workflow management interface
   - Search and filtering capabilities
   - Execution statistics display
@@ -210,7 +210,7 @@ src/
 └── routes/
     └── workflow-routes.ts          # REST API endpoints
 
-web/src/components/
+packages/appshell/src/components/
 ├── WorkflowBuilder.tsx             # Visual drag-and-drop builder
 ├── WorkflowEditor.tsx             # Complete workflow editor
 ├── WorkflowList.tsx               # Management interface

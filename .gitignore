@@ -8,3 +8,7 @@ test-db/
 .npm-cache/
 .npm-cache-local/
 .playwright-browsers/
+packages/**/db/
+packages/**/saved-searches-db/
+**/test-*-db-*/
+**/test-*-db*

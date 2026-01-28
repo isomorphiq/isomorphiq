@@ -65,14 +65,14 @@ RESTful API endpoints for scheduling functionality:
 
 #### 4. Frontend Components
 
-**SchedulingDashboard (`web/src/components/SchedulingDashboard.tsx`):**
+**SchedulingDashboard (`packages/appshell/src/components/SchedulingDashboard.tsx`):**
 - Overview with key metrics (total tasks, assigned, unassigned, utilization)
 - Team workload table with utilization indicators
 - Conflict management interface
 - Auto-assignment and optimization controls
 - Tabbed interface for different views
 
-**AssignmentRecommendations (`web/src/components/AssignmentRecommendations.tsx`):**
+**AssignmentRecommendations (`packages/appshell/src/components/AssignmentRecommendations.tsx`):**
 - Detailed assignment recommendations with confidence scores
 - Conflict warnings and resolution suggestions
 - User skill matching analysis

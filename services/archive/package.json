@@ -18,5 +18,8 @@
     "dependencies": {
         "@isomorphiq/core": "workspace:*",
         "@isomorphiq/tasks": "workspace:*"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
     }
 }

@@ -9,6 +9,22 @@
         ".": {
             "import": "./src/index.ts",
             "types": "./src/index.ts"
+        },
+        "./approval-types": {
+            "import": "./src/approval-types.ts",
+            "types": "./src/approval-types.ts"
+        },
+        "./types": {
+            "import": "./src/types.ts",
+            "types": "./src/types.ts"
+        },
+        "./workflow-graph": {
+            "import": "./src/workflow-graph.ts",
+            "types": "./src/workflow-graph.ts"
+        },
+        "./agent-runner": {
+            "import": "./src/agent-runner.ts",
+            "types": "./src/agent-runner.ts"
         }
     },
     "scripts": {
@@ -18,8 +34,9 @@
         "test": "echo \"Tests not configured yet for @isomorphiq/workflow\""
     },
     "dependencies": {
+        "@isomorphiq/acp": "workspace:*",
         "@isomorphiq/core": "workspace:*",
-        "@isomorphiq/tasks": "workspace:*",
+        "@isomorphiq/user-profile": "workspace:*",
         "@tsimpl/core": "0.1.1",
         "@tsimpl/runtime": "0.1.1",
         "@tsimpl/validation": "0.1.1",

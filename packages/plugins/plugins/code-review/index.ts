@@ -47,6 +47,7 @@ export default class CodeReviewPlugin extends BaseProfilePlugin {
         return {
             name: this.metadata.name,
             role: "Code Reviewer",
+            principalType: "agent",
             capabilities: [
                 "code-review",
                 "static-analysis", 

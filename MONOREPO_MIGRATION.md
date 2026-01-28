@@ -19,7 +19,7 @@
 ## Current state snapshot
 - Single package rooted at `package.json` with many entry points: `packages/daemon/src/daemon.ts`, `packages/http-api/src/http-api-server.ts`, `packages/mcp/src/mcp-server.ts`, `packages/cli/src/cli-client.ts`, and numerous test scripts under `scripts/`.
 - Domain code is mostly flat under `src/`: auth (`src/auth-service.ts`, `src/user-manager.ts`, `src/permission-service.ts`), tasks (`src/index.ts`, `src/task-service.ts`, `src/template-manager.ts`, `src/automation-rule-engine.ts`, `src/services/*`), workflow (`src/workflow-engine.ts`, `src/workflow.ts`, `src/workflow-factory.ts`, `src/routes/workflow-routes.ts`), integrations (`src/integrations/*`), plugin tooling (`src/plugin-*.ts`), HTTP/TRPC routes (`src/http/**`, `src/routes/**`), and real-time (`src/websocket-server.ts`); ACP connectors now live under `packages/acp`.
-- Frontend React app in `web/` using rsbuild.
+- Frontend React app in `packages/appshell/` using rsbuild.
 - Data directories live at repository root (`db/`, `saved-searches-db/`, `test-db*/`).
 - Tooling: TypeScript, ESLint, Biome formatter, tsx runner, LevelDB persistence, Playwright, @trpc, Effect, Express, WebSocket, React.
 
@@ -41,7 +41,7 @@
 - `packages/realtime`: websocket management (`src/websocket-server.ts`, `src/websocket-event-bridge.ts`, `src/services/process-manager.ts` if tied to socket orchestration).
 - `packages/daemon`: long-running processor (`packages/daemon/src/daemon.ts`, `packages/daemon/src/daemon-enhanced.ts`, daemon scripts, data bootstrap `src/init.ts`, CLI controls like `daemon-handoff*.js`, `daemon-unlock*.ts`).
 - `packages/cli`: command-line utilities (`packages/cli/src/cli-client.ts`, root `assign-*.js`, `claim-*.js`, `handoff-*.js`, `unlock-accounts.ts`, `scripts/test-runner.js` where appropriate).
-- `apps/web`: React frontend currently in `web/` (can live under `packages/web-app` or `apps/web` with rsbuild config).
+- `packages/appshell`: React frontend currently in `packages/appshell/` (can live under `packages/appshell` or `apps/web` with rsbuild config).
 
 Notes:
 - Some files will shift between proposed packages once dependency analysis is finished (for example, `src/product-manager.ts` likely belongs to `packages/tasks` while CLI launchers live in `packages/cli`).
@@ -75,7 +75,7 @@ Notes:
 6. Testing and verification
     - Update test scripts to use workspace run commands (`yarn workspaces foreach -ptA run test` or `yarn workspace @isomorphiq/tasks run test`).
     - Verify automation scripts and dashboards under `scripts/` point to package-local entrypoints.
-    - Run format/lint/typecheck across the workspace; use `rg 'from "./' src web/src | rg -v '\\.ts\"'` after moves to catch missing extensions.
+    - Run format/lint/typecheck across the workspace; use `rg 'from "./' src packages/appshell/src | rg -v '\\.ts\"'` after moves to catch missing extensions.
 7. Cleanup and documentation
     - Remove obsolete scripts or aliases replaced by package-level commands.
     - Update README and domain docs (auth, automation, scheduling, plugin system) to reflect new package locations.
@@ -84,13 +84,13 @@ Notes:
 ## Package responsibilities and file mapping (first pass)
 - Core: `src/core/**`, `src/types.ts`, `src/types/**`, `src/logger.ts`, `src/logging/logger.ts`, `src/config/config.ts`, `src/git-utils.ts`, `src/process-spawner.ts`, `src/dependency-validator.ts`, `src/result.ts`.
 - Auth: `src/auth-service.ts`, `src/user-manager.ts`, `src/permission-service.ts`, `src/security-service.ts`, `src/services/enhanced-rbac-service.ts`, `src/repositories/authentication-repository.ts`, `src/repositories/auth-schema-manager.ts`, security routes in `src/http/routes/auth-routes.ts` and `src/routes/security-routes.ts`, related tests in `scripts/test-auth-*.ts`.
-- User-profile: `packages/user-profile/src/acp-profiles.ts`, `src/enhanced-profile-manager.ts`, profile routes (`src/http/routes/profile-routes.ts`), profile analytics pages in `web/src/pages/ProfileAnalyticsPage.tsx`.
+- User-profile: `packages/user-profile/src/acp-profiles.ts`, `src/enhanced-profile-manager.ts`, profile routes (`src/http/routes/profile-routes.ts`), profile analytics pages in `packages/appshell/src/pages/ProfileAnalyticsPage.tsx`.
 - Tasks: `src/index.ts`, `src/product-manager.ts`, `src/task-service.ts`, `src/services/enhanced-task-service.ts`, `src/services/task-3-implementation.ts`, `src/services/archive-service.ts`, `src/services/priority-update-manager.ts`, `src/task-priority-enhancer.ts`, `src/core/task.ts`, `src/core/event-store.ts`, task routes (`src/http/routes/task-routes.ts`), and associated tests (`scripts/test-rest-api*.ts`, `scripts/test-data-consistency.ts`, `test-advanced-search.ts`).
 - Current moves: `@isomorphiq/tasks` now exports ProductManager with saved search persistence, integration service wiring, and stubbed profile accessors for HTTP routes.
 - Workflow: `src/workflow-engine.ts`, `src/workflow.ts`, `src/workflow-factory.ts`, `src/services/workflow-service.ts`, `src/services/workflow-templates.ts`, `src/core/approval-workflow.ts`, `src/routes/workflow-routes.ts`, `src/routes/approval-workflow-routes.ts`, tests like `scripts/test-workflow-automation.ts`.
 - Scheduling: `src/services/scheduling-service.ts`, `src/routes/scheduling-routes.ts`, `src/services/resource-management-service.ts`, `src/core/time-tracking.ts`, `src/services/time-tracking-service.ts`, `scripts/test-scheduling-system.ts`.
 - Current moves: SchedulingService now lives in `packages/scheduling/src/scheduling-service.ts` and HTTP routes are mounted from `packages/http-api`.
-- Analytics: `src/http/routes/metrics-routes.ts`, analytics logic inside scheduling/time-tracking services, dashboard scripts (`scripts/test-analytics-*.ts`, `scripts/test-dashboard-*.ts`, `scripts/test-report-generation.ts`), web analytics pages (`web/src/pages/AnalyticsPage.tsx`).
+- Analytics: `src/http/routes/metrics-routes.ts`, analytics logic inside scheduling/time-tracking services, dashboard scripts (`scripts/test-analytics-*.ts`, `scripts/test-dashboard-*.ts`, `scripts/test-report-generation.ts`), web analytics pages (`packages/appshell/src/pages/AnalyticsPage.tsx`).
 - Integrations: `src/integrations/*`, `src/routes/integration-routes.ts`, `src/services/collaboration-service.ts`, `src/services/automation-rule-engine.ts` hooks for external services.
 - Plugins: `src/plugin-system.ts`, `src/plugin-loader.ts`, `src/plugin-manager.ts`, `src/plugin-sandbox.ts`, plus documentation (`PLUGIN_SYSTEM_GUIDE.md`).
 - ACP: `packages/acp/src/acp-client.ts`, `packages/acp/src/acp-connection.ts`, `packages/acp/src/acp-session.ts`, `packages/acp/src/effects/acp-cleanup.ts`, `packages/acp/src/effects/acp-turn.ts`.
@@ -100,7 +100,7 @@ Notes:
 - Realtime: `src/websocket-server.ts`, `src/services/enhanced-websocket-server.ts`, `src/websocket-event-bridge.ts`, websocket client in `src/test-websocket-client.ts`.
 - Daemon: `packages/daemon/src/daemon.ts`, `packages/daemon/src/daemon-enhanced.ts`, runtime helpers in `daemon-*.js` scripts, `src/init.ts`.
 - CLI: `packages/cli/src/cli-client.ts`, operational scripts at repo root (`assign-*.js`, `claim-*.js`, `handoff-*.js`, `unlock-accounts.ts`, `check-*.js`, etc.), test runner `scripts/test-runner.js`.
-- Web app: everything under `web/`, rsbuild configs (`rsbuild.config.*`), front-end atoms/components/pages.
+- Web app: everything under `packages/appshell/`, rsbuild configs (`rsbuild.config.*`), front-end atoms/components/pages.
 
 ## Yarn-specific steps
 - Replace npm usage in docs and scripts with Yarn equivalents (`yarn install`, `yarn run daemon`, `yarn workspace @isomorphiq/mcp run start`).

@@ -99,6 +99,7 @@ export class EnhancedProfileManager extends ProfileManager {
 			this.registerProfile({
 				name: profile.name,
 				role: profile.role,
+				principalType: profile.principalType,
 				capabilities: profile.capabilities,
 				maxConcurrentTasks: profile.maxConcurrentTasks,
 				priority: profile.priority,
@@ -150,6 +151,7 @@ export class EnhancedProfileManager extends ProfileManager {
 		return Array.from(this.pluginProfiles.values()).map((profile) => ({
 			name: profile.name,
 			role: profile.role,
+			principalType: profile.principalType,
 			capabilities: profile.capabilities,
 			maxConcurrentTasks: profile.maxConcurrentTasks,
 			priority: profile.priority,
@@ -167,6 +169,7 @@ export class EnhancedProfileManager extends ProfileManager {
 			? {
 					name: profile.name,
 					role: profile.role,
+					principalType: profile.principalType,
 					capabilities: profile.capabilities,
 					maxConcurrentTasks: profile.maxConcurrentTasks,
 					priority: profile.priority,

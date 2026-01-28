@@ -1,11 +1,19 @@
 import { ProductManager } from "@isomorphiq/tasks";
+import { ProfileManager } from "@isomorphiq/user-profile";
+import { createWorkflowAgentRunner } from "@isomorphiq/workflow/agent-runner";
 import { WORKFLOW, advanceToken, createToken, runFlow } from "@isomorphiq/workflow";
 
 /**
  * Workflows service: runs workflow deciders and agent Effects isolated from the HTTP gateway.
  */
 export async function startWorkflowsService(): Promise<void> {
-    const pm = new ProductManager();
+    const profileManager = new ProfileManager();
+    const workflowRunner = createWorkflowAgentRunner({ profileManager });
+    const pm = new ProductManager(undefined, {
+        profileManager,
+        taskExecutor: workflowRunner.executeTask,
+        taskSeedProvider: workflowRunner.seedTask,
+    });
     await pm.initialize();
 
     console.log("[WORKFLOWS] Starting workflow engine");

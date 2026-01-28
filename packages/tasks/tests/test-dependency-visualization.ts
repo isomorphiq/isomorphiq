@@ -1,5 +1,5 @@
-import { CriticalPathService, type TaskNode } from "@isomorphiq/service-critical-path";
-import type { Task } from "./src/types.ts";
+import { CriticalPathService, type TaskNode } from "@isomorphiq/tasks/critical-path";
+import type { Task } from "../src/types.ts";
 
 // Test with realistic project data
 const projectTasks: Task[] = [

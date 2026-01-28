@@ -66,3 +66,6 @@ Watch for these log patterns:
 
 ## ⚠️ Module Resolution (Critical)
 - Runtime is Node ESM without transpilation. Always include the `.ts` extension on local TypeScript imports, e.g., `import { foo } from "./foo.ts"`. Missing extensions will crash the daemon/webapp; double-check imports before finishing.
+
+## 🛑 Daemon Safety (Critical)
+- Do not kill or restart the daemon process directly (no `pkill`, `kill`, or signals). Use the `restart_daemon` MCP tool when a restart is required.

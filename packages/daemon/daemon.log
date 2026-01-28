@@ -1,0 +1,27 @@
+[DAEMON] Starting Isomorphiq Task Manager Daemon
+[AUTOMATION] Automation rule engine initialized
+[INTEGRATION-MANAGER] Registered adapter: GitHub (github)
+[INTEGRATION-MANAGER] Registered adapter: Slack (slack)
+[INTEGRATION-MANAGER] Registered adapter: Google Calendar (calendar)
+[INTEGRATION-SERVICE] Registered built-in adapters: github, slack, calendar
+[DAEMON] Initialized ProductManager, UserManager, and TaskMonitor with WebSocket support
+[PRODUCT-MANAGER] Initialization failed: NotOpenError: Database failed to open
+    at /home/localadmin/isomorphiq/node_modules/abstract-level/abstract-level.js:174:17
+    at async ClassicLevel.open (/home/localadmin/isomorphiq/node_modules/abstract-level/abstract-level.js:222:9)
+    at async ProductManager.initialize (file:///home/localadmin/isomorphiq/packages/tasks/src/product-manager.ts:223:13)
+    at async main (file:///home/localadmin/isomorphiq/packages/daemon/src/daemon.ts:26:5) {
+  code: 'LEVEL_DATABASE_NOT_OPEN',
+  cause: [Error: IO error: lock /home/localadmin/isomorphiq/db/LOCK: Resource temporarily unavailable] {
+    code: 'LEVEL_LOCKED'
+  }
+}
+NotOpenError: Database failed to open
+    at /home/localadmin/isomorphiq/node_modules/abstract-level/abstract-level.js:174:17
+    at async ClassicLevel.open (/home/localadmin/isomorphiq/node_modules/abstract-level/abstract-level.js:222:9)
+    at async ProductManager.initialize (file:///home/localadmin/isomorphiq/packages/tasks/src/product-manager.ts:223:13)
+    at async main (file:///home/localadmin/isomorphiq/packages/daemon/src/daemon.ts:26:5) {
+  code: 'LEVEL_DATABASE_NOT_OPEN',
+  cause: [Error: IO error: lock /home/localadmin/isomorphiq/db/LOCK: Resource temporarily unavailable] {
+    code: 'LEVEL_LOCKED'
+  }
+}

@@ -45,6 +45,7 @@ export default class DocumentationPlugin extends BaseProfilePlugin {
         return {
             name: this.metadata.name,
             role: "Documentation Specialist",
+            principalType: "agent",
             capabilities: [
                 "documentation-generation",
                 "api-documentation",

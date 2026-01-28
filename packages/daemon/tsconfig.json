@@ -4,10 +4,11 @@
         "outDir": "./dist"
     },
     "include": [
-        "src/**/*"
+        "src/**/*.ts"
     ],
     "exclude": [
         "dist",
-        "node_modules"
+        "node_modules",
+        "src/**/*.spec.ts"
     ]
 }

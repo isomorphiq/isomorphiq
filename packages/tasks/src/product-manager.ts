@@ -1,6 +1,6 @@
-import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import path from "node:path";
-import { z } from "zod";
 import { Level } from "level";
 import { AutomationRuleEngine } from "./automation-rule-engine.ts";
 import { globalEventBus } from "@isomorphiq/core";
@@ -14,13 +14,13 @@ import {
     type SavedSearch,
     type SearchQuery,
     type Task,
+    type TaskActionLog,
     type TaskPriority,
-    TaskPrioritySchema,
+    TaskActionLogStruct,
     type TaskSearchOptions,
     type TaskStatus,
     type TaskType,
     TaskSchema,
-    TaskTypeSchema,
     type UpdateSavedSearchInput,
 } from "./types.ts";
 import type {
@@ -39,115 +39,70 @@ import { LevelDbTaskRepository } from "./persistence/leveldb-task-repository.ts"
 import { EnhancedTaskService } from "./enhanced-task-service.ts";
 import { TemplateManager } from "./template-manager.ts";
 import { IntegrationService } from "@isomorphiq/integrations";
-import { cleanupConnection, createConnection, sendPrompt, waitForTaskCompletion } from "@isomorphiq/acp";
+import { advanceToken, createToken, WORKFLOW } from "@isomorphiq/workflow";
+import type { RuntimeState } from "@isomorphiq/workflow";
 
 type TaskWebSocketManager = RealtimeWebSocketManager;
 
-type BootstrapTaskSpec = {
+export type TaskSeedSpec = {
     title: string;
     description: string;
     priority: TaskPriority;
     type: TaskType;
     assignedTo?: string;
+    createdBy?: string;
+    dependencies?: string[];
 };
 
-type ParseResult<T> = { success: true; value: T } | { success: false; error: string };
-type TaskExecutionResult = { success: boolean; output: string; error: string };
-type PackageSummary = {
-    name: string;
-    dir: string;
-    testScript: string | null;
-    typecheckScript: string | null;
+export type TaskExecutionResult = {
+    success: boolean;
+    output: string;
+    error: string;
+    profileName: string;
+    prompt?: string;
+    summary?: string;
+    modelName?: string;
 };
 
-const BootstrapTaskSpecSchema = z.object({
-    title: z.string().min(1),
-    description: z.string().min(1),
-    priority: TaskPrioritySchema,
-    type: TaskTypeSchema,
-    assignedTo: z.string().min(1).optional(),
-});
+export type TaskExecutor = (context: {
+    task: Task;
+    workflowState: RuntimeState | null;
+}) => Promise<TaskExecutionResult>;
 
-const extractJsonObject = (text: string): string | null => {
-    const trimmed = text.trim();
-    if (!trimmed) {
-        return null;
-    }
-    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-        return trimmed;
-    }
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start < 0 || end < 0 || end <= start) {
-        return null;
-    }
-    return trimmed.slice(start, end + 1);
+export type TaskSeedProvider = (context: {
+    workflowState: RuntimeState | null;
+    tasks: Task[];
+}) => Promise<TaskSeedSpec | null>;
+
+export type ProductManagerOptions = {
+    taskExecutor?: TaskExecutor;
+    taskSeedProvider?: TaskSeedProvider;
+    profileManager?: ProfileManager;
 };
 
-const parseJson = (text: string): ParseResult<unknown> => {
-    try {
-        return { success: true, value: JSON.parse(text) };
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return { success: false, error: message };
-    }
+const defaultTaskExecutor: TaskExecutor = async ({ task }) => {
+    const profileName = task.assignedTo ?? "system";
+    return {
+        success: true,
+        output: `No workflow executor configured; marked task ${task.id} as complete.`,
+        error: "",
+        profileName,
+        summary: "Marked task complete without an external executor.",
+        modelName: "system",
+    };
 };
 
-const parseBootstrapTaskSpec = (text: string): ParseResult<BootstrapTaskSpec> => {
-    const jsonText = extractJsonObject(text);
-    if (!jsonText) {
-        return { success: false, error: "No JSON object found in ACP output." };
+const findWorkspaceRoot = (startDir: string): string => {
+    const hasPrompts = existsSync(path.join(startDir, "prompts"));
+    const hasPackageJson = existsSync(path.join(startDir, "package.json"));
+    if (hasPrompts && hasPackageJson) {
+        return startDir;
     }
-    const parsedJson = parseJson(jsonText);
-    if (!parsedJson.success) {
-        return { success: false, error: parsedJson.error };
+    const parentDir = path.dirname(startDir);
+    if (parentDir === startDir) {
+        return startDir;
     }
-    const validated = BootstrapTaskSpecSchema.safeParse(parsedJson.value);
-    if (!validated.success) {
-        return { success: false, error: validated.error.message };
-    }
-    return { success: true, value: validated.data };
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> => {
-    if (!value || typeof value !== "object") {
-        return false;
-    }
-    return !Array.isArray(value);
-};
-
-const toStringOrNull = (value: unknown): string | null =>
-    typeof value === "string" ? value : null;
-
-const readJsonFile = async (filePath: string): Promise<Record<string, unknown> | null> => {
-    try {
-        const content = await fs.readFile(filePath, "utf-8");
-        const parsed = JSON.parse(content);
-        return isRecord(parsed) ? parsed : null;
-    } catch (error) {
-        void error;
-        return null;
-    }
-};
-
-const readDirEntries = async (dirPath: string): Promise<string[]> => {
-    try {
-        const entries = await fs.readdir(dirPath, { withFileTypes: true });
-        return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-    } catch (error) {
-        void error;
-        return [];
-    }
-};
-
-const readFileEntries = async (dirPath: string): Promise<string[]> => {
-    try {
-        const entries = await fs.readdir(dirPath, { withFileTypes: true });
-        return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
-    } catch (error) {
-        void error;
-        return [];
-    }
+    return findWorkspaceRoot(parentDir);
 };
 
 /**
@@ -170,14 +125,18 @@ export class ProductManager {
     private integrationDb: Level<string, unknown>;
     private integrationService: IntegrationService;
     private profileManager: ProfileManager;
+    private taskExecutor: TaskExecutor;
+    private taskSeedProvider: TaskSeedProvider | null;
+    private workflowToken = createToken<Record<string, unknown>>("new-feature-proposed");
+    private lastWorkflowTransition: string | null = null;
     private activeTaskIds = new Set<string>();
     private processLoopStartedAt = 0;
     private isInitialized = false;
     private wsManager: TaskWebSocketManager | null = null;
 
-    constructor(dbPath?: string) {
+    constructor(dbPath?: string, options: ProductManagerOptions = {}) {
         // Initialize LevelDB
-        const workspaceRoot = process.env.INIT_CWD ?? process.cwd();
+        const workspaceRoot = findWorkspaceRoot(process.env.INIT_CWD ?? process.cwd());
         const envDbPath = process.env.DB_PATH;
         const resolvedEnvPath = envDbPath
             ? (path.isAbsolute(envDbPath) ? envDbPath : path.join(workspaceRoot, envDbPath))
@@ -202,7 +161,9 @@ export class ProductManager {
         this.templateManager = new TemplateManager(databasePath);
         this.automationEngine = new AutomationRuleEngine();
         this.integrationService = new IntegrationService(this.integrationDb);
-        this.profileManager = new ProfileManager();
+        this.profileManager = options.profileManager ?? new ProfileManager();
+        this.taskExecutor = options.taskExecutor ?? defaultTaskExecutor;
+        this.taskSeedProvider = options.taskSeedProvider ?? null;
 
         // Setup event handlers
         this.setupEventHandlers();
@@ -349,6 +310,7 @@ export class ProductManager {
             collaborators: string[];
             watchers: string[];
             dependencies: string[];
+            actionLog: TaskActionLog[];
         }>,
         updatedBy?: string,
     ): Promise<Task> {
@@ -1083,9 +1045,34 @@ export class ProductManager {
 		while (true) {
 			try {
 				// Get tasks ready for processing (todo status, dependencies satisfied)
-				const readyTasks = await this.getReadyTasks();
+                const allTasks = await this.getAllTasks();
+                const workflowStep = await this.advanceWorkflow(allTasks);
+                let workflowState = workflowStep.state;
+                const readyTasks = this.getReadyTasksFrom(allTasks);
+                const inProgressTasks = this.getInProgressTasksFrom(allTasks);
+                if (
+                    inProgressTasks.length > 0 &&
+                    workflowState?.name !== "tests-completed" &&
+                    this.lastWorkflowTransition !== "tests-failed"
+                ) {
+                    this.workflowToken = { ...this.workflowToken, state: "tests-completed" };
+                    workflowState = WORKFLOW["tests-completed"] ?? workflowState;
+                }
+                const useInProgressTasks =
+                    workflowState?.name === "tests-completed" ||
+                    workflowStep.transition === "additional-implementation";
+                let candidateTasks = useInProgressTasks ? inProgressTasks : readyTasks;
 
-				if (readyTasks.length === 0) {
+				if (candidateTasks.length === 0) {
+                    if (useInProgressTasks && readyTasks.length > 0) {
+                        console.log(
+                            "[PRODUCT-MANAGER] No in-progress tasks; falling back to ready tasks.",
+                        );
+                        candidateTasks = readyTasks;
+                    }
+                }
+
+                if (candidateTasks.length === 0) {
                     const recovered = await this.recoverStaleInProgressTasks();
                     if (recovered > 0) {
                         console.log(
@@ -1093,21 +1080,29 @@ export class ProductManager {
                         );
                         continue;
                     }
-					const seeded = await this.ensureBootstrapTask();
-					if (seeded) {
-						continue;
-					}
+                    const seeded = await this.seedTasksFromWorkflow(workflowState, allTasks);
+                    if (seeded) {
+                        continue;
+                    }
 					console.log("[PRODUCT-MANAGER] No tasks ready for processing. Waiting 10 seconds...");
 					await new Promise((resolve) => setTimeout(resolve, 10000));
 					continue;
 				}
 
-				console.log(`[PRODUCT-MANAGER] Processing ${readyTasks.length} ready tasks`);
+				console.log(`[PRODUCT-MANAGER] Processing ${candidateTasks.length} ready tasks`);
+                const workflowTask = workflowState
+                    ? this.selectReadyTaskForState(candidateTasks, workflowState)
+                    : null;
+                const task = workflowTask ?? candidateTasks[0];
+
+                if (!task) {
+                    console.log("[PRODUCT-MANAGER] No tasks selected after workflow evaluation.");
+                    await new Promise((resolve) => setTimeout(resolve, 10000));
+                    continue;
+                }
 
 				// Process tasks one by one (could be made parallel)
-				for (const task of readyTasks) {
-					await this.processTask(task);
-				}
+                await this.processTask(task, workflowState, workflowStep.transition);
 
 				// Brief pause between processing cycles
 				await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -1119,36 +1114,40 @@ export class ProductManager {
 		}
 	}
 
-	private async ensureBootstrapTask(): Promise<boolean> {
-		const existingTasks = await this.getAllTasks();
-        const activeTasks = existingTasks.filter((task) => task.status !== "done");
-		if (activeTasks.length > 0) {
-			return false;
-		}
-
-        console.log("[PRODUCT-MANAGER] No active tasks found, generating bootstrap task via ACP...");
-        const seed = await this.generateBootstrapTaskSpec();
-        if (!seed) {
-            console.log("[PRODUCT-MANAGER] Bootstrap task generation failed; waiting for next cycle.");
+    private async seedTasksFromWorkflow(
+        workflowState: RuntimeState | null,
+        tasks: Task[],
+    ): Promise<boolean> {
+        const activeTasks = tasks.filter((task) => task.status !== "done");
+        if (activeTasks.length > 0) {
+            return false;
+        }
+        if (!this.taskSeedProvider) {
             return false;
         }
 
-        const assignedTo = seed.assignedTo ?? "development";
+        const seed = await this.taskSeedProvider({ workflowState, tasks });
+        if (!seed) {
+            return false;
+        }
+
+        const createdBy = seed.createdBy ?? "workflow";
+        const dependencies = seed.dependencies ?? [];
         const task = await this.createTask(
             seed.title,
             seed.description,
             seed.priority,
-            [],
-            "product-manager",
-            assignedTo,
+            dependencies,
+            createdBy,
+            seed.assignedTo,
             undefined,
             undefined,
             seed.type,
         );
 
-        console.log(`[PRODUCT-MANAGER] Seeded bootstrap task: ${task.id}`);
+        console.log(`[PRODUCT-MANAGER] Seeded workflow task: ${task.id}`);
         return true;
-	}
+    }
 
     private async recoverStaleInProgressTasks(): Promise<number> {
         const inProgressTasks = await this.getTasksByStatus("in-progress");
@@ -1198,325 +1197,267 @@ export class ProductManager {
         return recovered;
     }
 
-    private async buildBootstrapPrompt(): Promise<string> {
-        const repositoryContext = await this.collectRepositoryContext();
-        const profile = this.profileManager.getProfile("product-manager");
-        const baseSystemPrompt =
-            profile?.systemPrompt?.trim() ??
-            "You are a Product Manager AI assistant focused on product gaps and feature discovery.";
-        const baseTaskPrompt =
-            profile?.getTaskPrompt({}) ??
-            "Analyze the repository and propose a single feature ticket that is high leverage.";
-        return [
-            baseSystemPrompt,
-            "",
-            baseTaskPrompt,
-            "",
-            "Before proposing a feature, orient yourself in the repo:",
-            "- Read AGENTS.md and follow the workflow rules.",
-            "- Read root package.json scripts to understand how the app runs.",
-            "- Skim README.md and any relevant docs in docs/ and packages/**/docs.",
-            "- Survey existing packages to avoid duplicating implemented features.",
-            "If you lack permission to read files, return a research task that documents what needs review.",
-            "",
-            "Repository context (use this as a starting point):",
-            repositoryContext,
-            "",
-            "Do repository research and pick one scoped feature or fix that is missing, stale, or incomplete.",
-            "Treat the repository context above as your research findings.",
-            "Prioritize gaps in functionality, missing test coverage, or UI flows backed by mock data.",
-            "Pick a single feature task that fits current stack and can be implemented in one dev cycle.",
-            "Do not propose tasks that already exist; include evidence of the files you checked.",
-            "Respect repo conventions in AGENTS.md: 4-space indentation, double quotes, .ts extensions, no interfaces or casts, struct/trait/impl pattern.",
-            "Return only JSON with this exact shape:",
-            "{",
-            "  \"title\": \"...\",",
-            "  \"description\": \"...\",",
-            "  \"priority\": \"low|medium|high\",",
-            "  \"type\": \"feature|story|task|integration|research\",",
-            "  \"assignedTo\": \"development\"",
-            "}",
-            "Description should include: problem, requirements/acceptance criteria, evidence (file paths reviewed), impacted packages/files, and testing notes.",
-            "Do not include markdown fences or extra text.",
-        ].join("\n");
-    }
-
-    private async generateBootstrapTaskSpec(): Promise<BootstrapTaskSpec | null> {
-        const prompt = await this.buildBootstrapPrompt();
-        try {
-            const session = await createConnection({
-                fs: {
-                    readTextFile: true,
-                    writeTextFile: false,
-                },
-            });
-            try {
-                await sendPrompt(session.connection, session.sessionId, prompt, session.taskClient);
-                const completion = await waitForTaskCompletion(
-                    session.taskClient,
-                    60000,
-                    "product-manager",
-                );
-                if (completion.error) {
-                    console.error("[PRODUCT-MANAGER] ACP bootstrap prompt failed:", completion.error);
-                    return null;
-                }
-                const output = completion.output.trim();
-                if (!output) {
-                    console.error("[PRODUCT-MANAGER] ACP bootstrap prompt returned empty output.");
-                    return null;
-                }
-                const parsed = parseBootstrapTaskSpec(output);
-                if (!parsed.success) {
-                    console.error("[PRODUCT-MANAGER] ACP bootstrap output invalid:", parsed.error);
-                    return null;
-                }
-                return parsed.value;
-            } finally {
-                await cleanupConnection(session.connection, session.processResult);
-            }
-        } catch (error) {
-            console.error("[PRODUCT-MANAGER] ACP bootstrap prompt failed:", error);
-            return null;
-        }
-    }
-
-    private async collectRepositoryContext(): Promise<string> {
-        const root = process.cwd();
-        const packagesRoot = path.join(root, "packages");
-        const servicesRoot = path.join(root, "services");
-        const webPagesRoot = path.join(root, "web", "src", "pages");
-        const webComponentsRoot = path.join(root, "web", "src", "components");
-
-        const [packages, services, webPages, demoPages, backupFiles] = await Promise.all([
-            this.collectPackageSummaries(packagesRoot),
-            this.collectPackageSummaries(servicesRoot),
-            readFileEntries(webPagesRoot),
-            this.collectDemoPages(webPagesRoot),
-            this.collectBackupFiles([webComponentsRoot, packagesRoot]),
-        ]);
-
-        const packageNames = packages.map((entry) => entry.name);
-        const serviceNames = services.map((entry) => entry.name);
-        const packagesMissingTests = packages
-            .filter((entry) => !this.isScriptConfigured(entry.testScript))
-            .map((entry) => entry.name);
-
-        const lines = [
-            packageNames.length > 0
-                ? `Packages (${packageNames.length}): ${packageNames.join(", ")}`
-                : "Packages: none found",
-            serviceNames.length > 0
-                ? `Services (${serviceNames.length}): ${serviceNames.join(", ")}`
-                : "Services: none found",
-            webPages.length > 0
-                ? `Web pages (${webPages.length}): ${webPages.slice(0, 15).join(", ")}`
-                : "Web pages: none found",
-            demoPages.length > 0 ? `Demo pages: ${demoPages.join(", ")}` : "",
-            backupFiles.length > 0 ? `Backup/vestigial files: ${backupFiles.join(", ")}` : "",
-            packagesMissingTests.length > 0
-                ? `Packages missing tests: ${packagesMissingTests.join(", ")}`
-                : "",
-        ];
-
-        return lines.filter((line) => line.length > 0).join("\n");
-    }
-
-    private async collectPackageSummaries(rootDir: string): Promise<PackageSummary[]> {
-        const dirNames = await readDirEntries(rootDir);
-        const summaries = await Promise.all(
-            dirNames.map(async (dirName) => {
-                const packagePath = path.join(rootDir, dirName, "package.json");
-                const packageJson = await readJsonFile(packagePath);
-                if (!packageJson) {
-                    return null;
-                }
-                const name = toStringOrNull(packageJson.name);
-                if (!name) {
-                    return null;
-                }
-                const scripts = isRecord(packageJson.scripts) ? packageJson.scripts : null;
-                const testScript = scripts ? toStringOrNull(scripts.test) : null;
-                const typecheckScript = scripts ? toStringOrNull(scripts.typecheck) : null;
-                return { name, dir: dirName, testScript, typecheckScript };
-            }),
-        );
-        return summaries.filter((entry): entry is PackageSummary => entry !== null);
-    }
-
-    private async collectDemoPages(pagesDir: string): Promise<string[]> {
-        const pages = await readFileEntries(pagesDir);
-        return pages.filter((page) => page.toLowerCase().includes("demo")).slice(0, 10);
-    }
-
-    private async collectBackupFiles(roots: string[]): Promise<string[]> {
-        const results = await Promise.all(
-            roots.map((root) => this.walkForMatchingFiles(root, 3)),
-        );
-        return results
-            .flat()
-            .filter((filePath) => filePath.toLowerCase().endsWith(".bak"))
-            .map((filePath) => path.relative(process.cwd(), filePath))
-            .slice(0, 10);
-    }
-
-    private async walkForMatchingFiles(root: string, depth: number): Promise<string[]> {
-        if (depth < 0) {
-            return [];
-        }
-        const entries = await this.readDirectoryWithTypes(root);
-        const files = entries
-            .filter((entry) => entry.type === "file")
-            .map((entry) => entry.path);
-        const subdirs = entries.filter((entry) => entry.type === "dir").map((entry) => entry.path);
-        const nested = await Promise.all(
-            subdirs.map((dir) => this.walkForMatchingFiles(dir, depth - 1)),
-        );
-        return files.concat(...nested);
-    }
-
-    private async readDirectoryWithTypes(
-        dirPath: string,
-    ): Promise<Array<{ path: string; type: "file" | "dir" }>> {
-        try {
-            const entries = await fs.readdir(dirPath, { withFileTypes: true });
-            return entries
-                .filter((entry) => entry.isFile() || entry.isDirectory())
-                .map((entry) => ({
-                    path: path.join(dirPath, entry.name),
-                    type: entry.isDirectory() ? "dir" : "file",
-                }));
-        } catch (error) {
-            void error;
-            return [];
-        }
-    }
-
-    private isScriptConfigured(script: string | null): boolean {
-        if (!script) {
-            return false;
-        }
-        const normalized = script.toLowerCase();
-        if (normalized.includes("not configured")) {
-            return false;
-        }
-        if (normalized.startsWith("echo ")) {
-            return false;
-        }
-        return true;
-    }
-
 	/**
 	 * Get tasks that are ready for processing
 	 */
 	private async getReadyTasks(): Promise<Task[]> {
 		const allTasks = await this.getAllTasks();
-		const todoTasks = allTasks.filter((task) => task.status === "todo");
-
-		// Sort by dependencies and priority
-		const sortedTasks = TaskDomainRules.sortTasksByPriorityAndDependencies(
-			todoTasks.map((task) => this.convertTaskToTaskEntity(task)),
-		);
-
-		// Filter tasks whose dependencies are all completed
-		const readyTasks = sortedTasks.filter((task) => {
-			return task.dependencies.every((depId: string) => {
-				const depTask = allTasks.find((t) => t.id === depId);
-				return !depTask || depTask.status === "done";
-			});
-		});
-
-		return readyTasks.map((task) => this.convertTaskEntityToTask(task));
+		return this.getReadyTasksFrom(allTasks);
 	}
 
-	/**
-	 * Process a single task
-	 */
-	private async processTask(task: Task): Promise<void> {
-		console.log(`[PRODUCT-MANAGER] Processing task: ${task.title} (id: ${task.id})`);
+    private getReadyTasksFrom(allTasks: Task[]): Task[] {
+        const todoTasks = allTasks.filter((task) => task.status === "todo");
 
-		try {
-			// Mark as in-progress
-			await this.updateTaskStatus(task.id, "in-progress");
+        // Sort by dependencies and priority
+        const sortedTasks = TaskDomainRules.sortTasksByPriorityAndDependencies(
+            todoTasks.map((task) => this.convertTaskToTaskEntity(task)),
+        );
+
+        // Filter tasks whose dependencies are all completed
+        const readyTasks = sortedTasks.filter((task) => {
+            return task.dependencies.every((depId: string) => {
+                const depTask = allTasks.find((t) => t.id === depId);
+                return !depTask || depTask.status === "done";
+            });
+        });
+
+        return readyTasks.map((task) => this.convertTaskEntityToTask(task));
+    }
+
+    private getWorkflowState(): RuntimeState | null {
+        const state = WORKFLOW[this.workflowToken.state];
+        return state ?? null;
+    }
+
+    private getWorkflowTransition(state: RuntimeState, tasks: Task[]): string | null {
+        if (state.name === "task-in-progress" && this.lastWorkflowTransition === "tests-failed") {
+            return "additional-implementation";
+        }
+        if (state.decider) {
+            const decided = state.decider(tasks);
+            if (decided) {
+                return decided;
+            }
+        }
+        if (state.defaultTransition) {
+            return state.defaultTransition;
+        }
+        const transitions = Object.keys(state.transitions);
+        return transitions.length > 0 ? transitions[0] : null;
+    }
+
+    private async advanceWorkflow(allTasks: Task[]): Promise<{
+        state: RuntimeState | null;
+        transition: string | null;
+    }> {
+        const currentState = this.getWorkflowState();
+        if (!currentState) {
+            return { state: null, transition: null };
+        }
+        if (currentState.name === "tests-completed") {
+            return { state: currentState, transition: null };
+        }
+        const transition = this.getWorkflowTransition(currentState, allTasks);
+        if (!transition) {
+            return { state: currentState, transition: null };
+        }
+        try {
+            const nextToken = await advanceToken(this.workflowToken, transition, WORKFLOW, {
+                tasks: allTasks,
+            });
+            const previousState = this.workflowToken.state;
+            this.workflowToken = nextToken;
+            if (previousState !== nextToken.state) {
+                console.log(
+                    `[WORKFLOW] Transitioned ${previousState} -> ${nextToken.state} via ${transition}`,
+                );
+            }
+            this.lastWorkflowTransition = transition;
+            return { state: WORKFLOW[nextToken.state] ?? null, transition };
+        } catch (error) {
+            console.warn("[WORKFLOW] Failed to advance workflow state:", error);
+            return { state: currentState, transition: null };
+        }
+    }
+
+    private matchesWorkflowTarget(task: Task, targetType: string): boolean {
+        if (task.type === targetType) {
+            return true;
+        }
+        if (targetType === "feature" && task.type === "task") {
+            const text = `${task.title} ${task.description}`.toLowerCase();
+            return text.includes("feature");
+        }
+        return false;
+    }
+
+    private selectReadyTaskForState(readyTasks: Task[], state: RuntimeState): Task | null {
+        if (!state.targetType) {
+            return readyTasks[0] ?? null;
+        }
+        const match = readyTasks.find((task) =>
+            this.matchesWorkflowTarget(task, state.targetType),
+        );
+        return match ?? null;
+    }
+
+    private getInProgressTasksFrom(allTasks: Task[]): Task[] {
+        const inProgressTasks = allTasks.filter((task) => task.status === "in-progress");
+        if (inProgressTasks.length === 0) {
+            return [];
+        }
+        const sortedTasks = TaskDomainRules.sortTasksByPriorityAndDependencies(
+            inProgressTasks.map((task) => this.convertTaskToTaskEntity(task)),
+        );
+        const readyTasks = sortedTasks.filter((task) => {
+            return task.dependencies.every((depId: string) => {
+                const depTask = allTasks.find((t) => t.id === depId);
+                return !depTask || depTask.status === "done";
+            });
+        });
+        return readyTasks.map((task) => this.convertTaskEntityToTask(task));
+    }
+
+    /**
+     * Process a single task
+     */
+    private async processTask(
+        task: Task,
+        workflowState: RuntimeState | null,
+        workflowTransition: string | null,
+    ): Promise<void> {
+        let modelName = "unknown-model";
+        console.log(
+            `[PRODUCT-MANAGER][${modelName}] Processing task: ${task.title} (id: ${task.id})`,
+        );
+
+        try {
+            // Mark as in-progress
+            await this.updateTaskStatus(task.id, "in-progress");
             this.activeTaskIds.add(task.id);
 
-            const profile =
-                this.getBestProfileForTask(task) ?? this.profileManager.getProfile("development");
-            if (!profile) {
-                throw new Error("No ACP profile available to process task.");
-            }
-
-            this.profileManager.startTaskProcessing(profile.name);
             const startTime = Date.now();
-            const execution = await this.executeTaskWithProfile(task, profile);
+            const execution = await this.taskExecutor({ task, workflowState });
             const duration = Date.now() - startTime;
-            this.profileManager.endTaskProcessing(profile.name);
-            this.profileManager.recordTaskProcessing(profile.name, duration, execution.success);
+
+            const qaTransition =
+                workflowState?.name === "tests-completed"
+                    ? execution.success
+                        ? "tests-passing"
+                        : "tests-failed"
+                    : null;
+            const logTransition = qaTransition ?? workflowTransition;
+            modelName = execution.modelName ?? modelName;
+            const actorName = execution.profileName || task.assignedTo || "system";
+            const actionLogEntry = this.createActionLogEntry(
+                actorName,
+                duration,
+                execution,
+                logTransition,
+            );
+            await this.appendActionLogEntry(task.id, actionLogEntry, task.actionLog);
 
             if (!execution.success) {
                 throw new Error(execution.error);
             }
 
-			// Mark as completed
-			await this.updateTaskStatus(task.id, "done");
-
-			console.log(`[PRODUCT-MANAGER] Completed task: ${task.title} (id: ${task.id})`);
-		} catch (error) {
-			console.error(
-				`[PRODUCT-MANAGER] Failed to process task: ${task.title} (id: ${task.id})`,
-				error,
-			);
-
-			// Mark as todo again for retry
-			await this.updateTaskStatus(task.id, "todo");
-        } finally {
-            this.activeTaskIds.delete(task.id);
-		}
-	}
-
-    private buildProfilePrompt(profile: ACPProfile, task: Task): string {
-        const instructions = [
-            profile.systemPrompt.trim(),
-            "",
-            "Before acting, orient yourself in the repo:",
-            "- Read AGENTS.md and follow the workflow rules.",
-            "- Review root package.json scripts to understand how services are started.",
-            "- Skim README.md and any relevant docs in docs/ and packages/**/docs.",
-            "- Survey existing packages to avoid duplicating implemented features.",
-            "If you discover the task is already implemented, say so and propose a better-scoped follow-up.",
-            "If you lack permission to read files, say so and proceed with the task using the context available.",
-            "",
-            profile.getTaskPrompt({ task }),
-        ];
-        return instructions.join("\n");
-    }
-
-    private async executeTaskWithProfile(
-        task: Task,
-        profile: ACPProfile,
-    ): Promise<TaskExecutionResult> {
-        const prompt = this.buildProfilePrompt(profile, task);
-        try {
-            const session = await createConnection();
-            try {
-                await sendPrompt(session.connection, session.sessionId, prompt, session.taskClient);
-                const completion = await waitForTaskCompletion(
-                    session.taskClient,
-                    600000,
-                    profile.name,
+            if (workflowState?.name === "tests-completed") {
+                const transition = qaTransition ?? "tests-passing";
+                const nextToken = await advanceToken(this.workflowToken, transition, WORKFLOW);
+                this.workflowToken = nextToken;
+                this.lastWorkflowTransition = transition;
+                await this.updateTaskStatus(task.id, "done");
+                console.log(
+                    `[PRODUCT-MANAGER][${modelName}] QA approved task: ${task.title} (id: ${task.id})`,
                 );
-                if (completion.error) {
-                    console.error(`[PRODUCT-MANAGER] ACP execution failed for ${task.id}:`, completion.error);
-                    return { success: false, output: completion.output, error: completion.error };
-                }
-                return { success: true, output: completion.output, error: "" };
-            } finally {
-                await cleanupConnection(session.connection, session.processResult);
+            } else {
+                this.workflowToken = { ...this.workflowToken, state: "tests-completed" };
+                this.lastWorkflowTransition = "run-tests";
+                console.log(
+                    `[PRODUCT-MANAGER][${modelName}] Task work completed; awaiting QA: ${task.title} (id: ${task.id})`,
+                );
             }
         } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            console.error(`[PRODUCT-MANAGER] ACP execution error for ${task.id}:`, message);
-            return { success: false, output: "", error: message };
+            console.error(
+                `[PRODUCT-MANAGER][${modelName}] Failed to process task: ${task.title} (id: ${task.id})`,
+                error,
+            );
+
+            if (workflowState?.name === "tests-completed") {
+                const nextToken = await advanceToken(this.workflowToken, "tests-failed", WORKFLOW);
+                this.workflowToken = nextToken;
+                this.lastWorkflowTransition = "tests-failed";
+                await this.updateTaskStatus(task.id, "in-progress");
+            } else {
+                // Mark as todo again for retry
+                await this.updateTaskStatus(task.id, "todo");
+            }
+        } finally {
+            this.activeTaskIds.delete(task.id);
+        }
+    }
+
+    private formatExecutionLine(text: string, fallback: string): string {
+        const line = text
+            .split("\n")
+            .map((part) => part.trim())
+            .find((part) => part.length > 0);
+        if (!line) {
+            return fallback;
+        }
+        const compact = line.replace(/\s+/g, " ");
+        const maxLength = 180;
+        const clipped =
+            compact.length > maxLength ? `${compact.slice(0, maxLength - 3)}...` : compact;
+        const trimmed = clipped.replace(/[.!?]+$/, "");
+        return trimmed.length > 0 ? trimmed : fallback;
+    }
+
+    private formatExecutionSummary(output: string): string {
+        const line = this.formatExecutionLine(output, "No output was returned");
+        return `Completed: ${line}.`;
+    }
+
+    private formatExecutionError(error: string): string {
+        const line = this.formatExecutionLine(error, "No error message was returned");
+        return `Failed: ${line}.`;
+    }
+
+    private createActionLogEntry(
+        profileName: string,
+        durationMs: number,
+        execution: TaskExecutionResult,
+        workflowTransition: string | null,
+    ): TaskActionLog {
+        const summary = execution.summary
+            ? execution.summary
+            : execution.success
+              ? this.formatExecutionSummary(execution.output)
+              : this.formatExecutionError(execution.error);
+        return TaskActionLogStruct.from({
+            id: `action-${randomUUID()}`,
+            summary,
+            profile: profileName,
+            durationMs,
+            createdAt: new Date(),
+            success: execution.success,
+            transition: workflowTransition ?? undefined,
+            prompt: execution.prompt,
+            modelName: execution.modelName,
+        });
+    }
+
+    private async appendActionLogEntry(
+        taskId: string,
+        entry: TaskActionLog,
+        fallbackLog?: TaskActionLog[],
+    ): Promise<void> {
+        try {
+            const currentTask = await this.getTask(taskId);
+            const currentLog = currentTask?.actionLog ?? fallbackLog ?? [];
+            await this.updateTask(taskId, { actionLog: [...currentLog, entry] }, "system");
+        } catch (error) {
+            console.warn(`[PRODUCT-MANAGER] Failed to append action log for ${taskId}:`, error);
         }
     }
 
@@ -1662,6 +1603,7 @@ export class ProductManager {
 			createdBy: entity.createdBy,
 			createdAt: entity.createdAt,
 			updatedAt: entity.updatedAt,
+            actionLog: entity.actionLog ?? [],
 		};
 
 		// Only add optional fields if they exist
@@ -1693,6 +1635,7 @@ export class ProductManager {
 			createdBy: task.createdBy,
 			createdAt: task.createdAt,
 			updatedAt: task.updatedAt,
+            actionLog: task.actionLog ?? [],
 		};
 
 		// Only add optional fields if they exist

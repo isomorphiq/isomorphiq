@@ -1,4 +1,5 @@
 import { createConnection } from "node:net";
+import { WebSocket } from "ws";
 import type { Result } from "@isomorphiq/core";
 
 	export interface Task {
@@ -50,6 +51,7 @@ export interface TaskStatusUpdate {
 export class DaemonTcpClient {
 	private port: number;
 	private host: string;
+	private wsConnection: WebSocket | null = null;
 
 	constructor(port: number = 3001, host: string = "localhost") {
 		this.port = port;
@@ -208,5 +210,118 @@ export class DaemonTcpClient {
 
 	async closeMonitoringSession(sessionId: string): Promise<Result<boolean>> {
 		return this.sendCommand("close_monitoring_session", { sessionId });
+	}
+
+	// WebSocket integration for real-time updates
+	async connectWebSocket(dashboardPort: number = 3005): Promise<WebSocket> {
+		const wsUrl = `ws://localhost:${dashboardPort}/dashboard-ws`;
+		
+		return new Promise((resolve, reject) => {
+			this.wsConnection = new WebSocket(wsUrl);
+			
+			this.wsConnection.on("open", () => {
+				console.log("[TCP-CLIENT] WebSocket connected for real-time updates");
+				resolve(this.wsConnection!);
+			});
+			
+			this.wsConnection.on("message", (data) => {
+				try {
+					const message = JSON.parse(data.toString());
+					this.handleWebSocketMessage(message);
+				} catch (error) {
+					console.error("[TCP-CLIENT] Error parsing WebSocket message:", error);
+				}
+			});
+			
+			this.wsConnection.on("error", (error) => {
+				console.error("[TCP-CLIENT] WebSocket error:", error);
+				reject(error);
+			});
+			
+			this.wsConnection.on("close", () => {
+				console.log("[TCP-CLIENT] WebSocket disconnected");
+				this.wsConnection = null;
+			});
+		});
+	}
+
+	private handleWebSocketMessage(message: any): void {
+		switch (message.type) {
+			case "task_created":
+				console.log("[TCP-CLIENT] Task created:", message.data.title);
+				break;
+			case "task_status_changed":
+				console.log("[TCP-CLIENT] Task status changed:", message.data.taskId, "to", message.data.newStatus);
+				break;
+			case "task_priority_changed":
+				console.log("[TCP-CLIENT] Task priority changed:", message.data.taskId, "to", message.data.newPriority);
+				break;
+			case "task_deleted":
+				console.log("[TCP-CLIENT] Task deleted:", message.data.taskId);
+				break;
+			case "metrics_update":
+				// Handle real-time metrics updates
+				break;
+			default:
+				console.log("[TCP-CLIENT] Unknown WebSocket message type:", message.type);
+		}
+	}
+
+	async subscribeToRealTimeUpdates(taskIds?: string[]): Promise<Result<{sessionId: string; subscribedTasks: string[]}>> {
+		const subscriptionData = {
+			sessionId: `tcp_client_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+			taskIds: taskIds || [],
+			includeTcpResponse: true
+		};
+
+		const result = await this.subscribeToTaskNotifications(subscriptionData);
+		return result;
+	}
+
+	disconnectWebSocket(): void {
+		if (this.wsConnection && this.wsConnection.readyState === WebSocket.OPEN) {
+			this.wsConnection.close();
+		}
+	}
+
+	isWebSocketConnected(): boolean {
+		return this.wsConnection !== null && this.wsConnection.readyState === WebSocket.OPEN;
+	}
+
+	getWebSocketConnection(): WebSocket | null {
+		return this.wsConnection;
+	}
+
+	// Notification methods
+	async setNotificationPreferences(preferences: any): Promise<Result<{message: string}>> {
+		return this.sendCommand("set_notification_preferences", preferences);
+	}
+
+	async getNotificationPreferences(userId: string): Promise<Result<any>> {
+		return this.sendCommand("get_notification_preferences", { userId });
+	}
+
+	async sendNotification(notification: any): Promise<Result<string>> {
+		return this.sendCommand("send_notification", notification);
+	}
+
+	async getNotificationHistory(userId?: string, limit?: number): Promise<Result<any[]>> {
+		return this.sendCommand("get_notification_history", { userId, limit });
+	}
+
+	async markNotificationAsRead(notificationId: string, userId: string): Promise<Result<{marked: boolean}>> {
+		return this.sendCommand("mark_notification_read", { notificationId, userId });
+	}
+
+	async getNotificationStats(userId?: string): Promise<Result<any>> {
+		return this.sendCommand("get_notification_stats", { userId });
+	}
+
+	async sendDailyDigest(userId: string, tasks: any[]): Promise<Result<string>> {
+		return this.sendCommand("send_daily_digest", { userId, tasks });
+	}
+
+	async sendWeeklyDigest(userId: string, tasks: any[]): Promise<Result<string>> {
+		return this.sendCommand("send_weekly_digest", { userId, tasks });
 	}
 }

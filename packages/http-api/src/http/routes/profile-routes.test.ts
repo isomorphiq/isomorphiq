@@ -21,6 +21,7 @@ class StubProfileManager implements Pick<
 	private profile: ACPProfile = {
 		name: "alpha",
 		role: "Test profile",
+		principalType: "agent",
 		systemPrompt: "Test",
 		getTaskPrompt: () => "test",
 	};

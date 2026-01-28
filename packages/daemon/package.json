@@ -16,7 +16,7 @@
         "typecheck": "tsc --noEmit -p tsconfig.json",
         "start": "node --experimental-strip-types src/daemon.ts",
         "lint": "echo \"Lint not configured yet for @isomorphiq/daemon\"",
-        "test": "echo \"Tests not configured yet for @isomorphiq/daemon\""
+        "test": "node --experimental-strip-types --test src/**/*.spec.ts"
     },
     "dependencies": {
         "@isomorphiq/auth": "workspace:*",
@@ -27,6 +27,7 @@
         "@isomorphiq/scheduling": "workspace:*",
         "@isomorphiq/tasks": "workspace:*",
         "@isomorphiq/workflow": "workspace:*",
-        "node-cron": "^3.0.3"
+        "node-cron": "^3.0.3",
+        "ws": "^8.14.2"
     }
 }

@@ -75,7 +75,7 @@ src/
 
 ### Frontend Components
 ```
-web/src/
+packages/appshell/src/
 ├── components/
 │   ├── AdvancedSearch.tsx      # Main search interface
 │   ├── SearchResults.tsx       # Results display with highlighting

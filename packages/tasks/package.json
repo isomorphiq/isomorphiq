@@ -9,6 +9,14 @@
         ".": {
             "import": "./src/index.ts",
             "types": "./src/index.ts"
+        },
+        "./critical-path": {
+            "import": "./src/critical-path.ts",
+            "types": "./src/critical-path.ts"
+        },
+        "./types": {
+            "import": "./src/types.ts",
+            "types": "./src/types.ts"
         }
     },
     "scripts": {
@@ -18,13 +26,13 @@
         "test": "echo \"Tests not configured yet for @isomorphiq/tasks\""
     },
     "dependencies": {
-        "@isomorphiq/acp": "workspace:*",
         "@isomorphiq/core": "workspace:*",
         "@isomorphiq/integrations": "workspace:*",
         "@isomorphiq/persistence-level": "workspace:*",
         "@isomorphiq/realtime": "workspace:*",
         "@isomorphiq/search": "workspace:*",
         "@isomorphiq/user-profile": "workspace:*",
+        "@isomorphiq/workflow": "workspace:*",
         "@tsimpl/core": "0.1.1",
         "@tsimpl/runtime": "0.1.1",
         "@tsimpl/validation": "0.1.1",

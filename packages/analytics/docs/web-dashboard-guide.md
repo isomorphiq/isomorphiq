@@ -190,8 +190,8 @@ Main application component that:
 
 ### Adding New Features
 
-1. **Create Component**: Add new component in `web/src/components/`
-2. **Update State**: Add new atoms in `web/src/atoms.ts` if needed
+1. **Create Component**: Add new component in `packages/appshell/src/components/`
+2. **Update State**: Add new atoms in `packages/appshell/src/atoms.ts` if needed
 3. **API Integration**: Add tRPC procedures in `src/http-api-server.ts`
 4. **Styling**: Use inline styles or create CSS modules
 

@@ -5,11 +5,11 @@ export default defineConfig({
     plugins: [pluginReact()],
     source: {
         entry: {
-            index: "./web/src/index.tsx",
+            index: "../appshell/src/index.tsx",
         },
     },
     html: {
-        template: "./web/index.html",
+        template: "../appshell/index.html",
         title: "Isomorphiq - Command Flow",
     },
     output: {

@@ -284,6 +284,7 @@ export const TaskFactory = {
             assignedTo: input.assignedTo,
             collaborators: input.collaborators,
             watchers: input.watchers,
+            actionLog: [],
             createdAt: now,
             updatedAt: now,
         };

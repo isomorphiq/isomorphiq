@@ -2,8 +2,20 @@ import path from "node:path";
 import type { Result } from "@isomorphiq/core";
 import { LevelKeyValueAdapter } from "@isomorphiq/persistence-level";
 import { TaskEntitySchema, TaskEntityStruct, type TaskEntity } from "../task-domain.ts";
-import type { TaskFilters, TaskPriority, TaskSearchOptions, TaskStatus } from "../types.ts";
-import { TaskPrioritySchema, TaskStatusSchema, TaskTypeSchema } from "../types.ts";
+import type {
+    TaskActionLog,
+    TaskFilters,
+    TaskPriority,
+    TaskSearchOptions,
+    TaskStatus,
+} from "../types.ts";
+import {
+    TaskActionLogSchema,
+    TaskActionLogStruct,
+    TaskPrioritySchema,
+    TaskStatusSchema,
+    TaskTypeSchema,
+} from "../types.ts";
 import type { TaskRepository } from "../task-repository.ts";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -34,6 +46,55 @@ const readDate = (record: Record<string, unknown>, key: string): Date | undefine
     return undefined;
 };
 
+const readNumber = (record: Record<string, unknown>, key: string): number | undefined => {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === "string") {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+};
+
+const normalizeActionLogEntry = (
+    value: unknown,
+    fallbackTaskId: string,
+    index: number,
+): TaskActionLog | null => {
+    if (!isRecord(value)) {
+        return null;
+    }
+    const normalized = {
+        id: readString(value, "id") ?? `log-${fallbackTaskId}-${index}`,
+        summary: readString(value, "summary") ?? "",
+        profile: readString(value, "profile") ?? "unknown",
+        durationMs: readNumber(value, "durationMs") ?? 0,
+        createdAt: readDate(value, "createdAt") ?? new Date(),
+        success: typeof value.success === "boolean" ? value.success : true,
+        transition: readString(value, "transition"),
+        prompt: readString(value, "prompt"),
+        modelName: readString(value, "modelName"),
+    };
+    const parsed = TaskActionLogSchema.safeParse(normalized);
+    return parsed.success ? TaskActionLogStruct.from(parsed.data) : null;
+};
+
+const readActionLog = (
+    record: Record<string, unknown>,
+    fallbackTaskId: string,
+): TaskActionLog[] | undefined => {
+    const value = record.actionLog;
+    if (!Array.isArray(value)) {
+        return undefined;
+    }
+    const normalized = value
+        .map((entry, index) => normalizeActionLogEntry(entry, fallbackTaskId, index))
+        .filter((entry): entry is TaskActionLog => entry !== null);
+    return normalized.length > 0 ? normalized : [];
+};
+
 const normalizeTaskEntity = (value: unknown, key?: string): TaskEntity | null => {
     const parsed = TaskEntitySchema.safeParse(value);
     if (parsed.success) {
@@ -61,6 +122,7 @@ const normalizeTaskEntity = (value: unknown, key?: string): TaskEntity | null =>
         assignedTo: readString(value, "assignedTo"),
         collaborators: readStringArray(value, "collaborators"),
         watchers: readStringArray(value, "watchers"),
+        actionLog: readActionLog(value, fallbackId) ?? [],
         createdAt: readDate(value, "createdAt") ?? new Date(),
         updatedAt: readDate(value, "updatedAt") ?? new Date(),
     };

@@ -4,6 +4,8 @@ import type { Server as HttpServer } from "node:http";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
 import { startHttpServer } from "@isomorphiq/http-server";
 import { ProductManager } from "@isomorphiq/tasks";
+import { ProfileManager } from "@isomorphiq/user-profile";
+import { createWorkflowAgentRunner } from "@isomorphiq/workflow/agent-runner";
 import { WebSocketManager } from "@isomorphiq/realtime";
 import type { Task } from "@isomorphiq/tasks";
 
@@ -68,7 +70,13 @@ export class ProcessManager extends EventEmitter {
 		console.log("[PROCESS-MANAGER] Initializing process manager...");
 
 		// Initialize core services
-		this.productManager = new ProductManager();
+        const profileManager = new ProfileManager();
+        const workflowRunner = createWorkflowAgentRunner({ profileManager });
+		this.productManager = new ProductManager(undefined, {
+            profileManager,
+            taskExecutor: workflowRunner.executeTask,
+            taskSeedProvider: workflowRunner.seedTask,
+        });
 		this.webSocketManager = new WebSocketManager({ path: "/ws" });
 		this.productManager.setWebSocketManager(this.webSocketManager);
 
@@ -525,10 +533,10 @@ export class ProcessManager extends EventEmitter {
 						.getAllTasks()
 						.then((t) => t.find((task) => task.id === command.data.id));
 					const oldStatusCancel = oldTaskCancel?.status || "todo";
-					const cancelledTask = await this.productManager.updateTaskStatus(
-						command.data.id,
-						"cancelled",
-					);
+							const cancelledTask = await this.productManager.updateTaskStatus(
+								command.data.id,
+								"cancelled" as any,
+							);
 					result = cancelledTask;
 					if (this.webSocketManager) {
 						this.webSocketManager.broadcastTaskStatusChanged(

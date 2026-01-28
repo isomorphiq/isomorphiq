@@ -35,7 +35,7 @@ If you need to intervene with task processing, use the MCP tools to update task 
 This application runs directly in node with no transpilation, so relative imports of typescript files must use the full path to the file, including extension.
 Since most source files for this application are ts, that means `import * as Something from "./things/something.ts"`
 
-If you ever add or edit imports, always include the `.ts` extension on local modules. Missing extensions break runtime resolution (ESM) and will crash the daemon/webapp. Do a quick `rg 'from "./' src web/src packages services | rg -v '\\.ts\"'` before finishing to catch mistakes.
+If you ever add or edit imports, always include the `.ts` extension on local modules. Missing extensions break runtime resolution (ESM) and will crash the daemon/webapp. Do a quick `rg 'from "./' src packages/appshell/src packages services | rg -v '\\.ts\"'` before finishing to catch mistakes.
 
 Use functional programming style that avoids mutation of data.
 

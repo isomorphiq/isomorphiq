@@ -29,6 +29,7 @@ class TestPlugin extends BaseProfilePlugin {
         return {
             name: this.metadata.name,
             role: "Test Profile",
+            principalType: "agent",
             capabilities: ["testing"],
             maxConcurrentTasks: 1,
             priority: 50,
@@ -282,6 +283,7 @@ export default class DiscoveryTestPlugin extends BaseProfilePlugin {
         return {
             name: "discovery-test",
             role: "Test",
+            principalType: "agent",
             capabilities: ["test"],
             maxConcurrentTasks: 1,
             priority: 50,

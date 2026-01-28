@@ -43,7 +43,7 @@ The advanced security system provides:
 - **Policy Management**: CRUD operations for security policies
 - **Audit & Alert Management**: Log retrieval and alert handling
 
-#### 5. Security Dashboard (`web/src/components/SecurityDashboard.tsx`)
+#### 5. Security Dashboard (`packages/appshell/src/components/SecurityDashboard.tsx`)
 - **Real-time Monitoring**: Live security status and metrics
 - **Alert Management**: Create and manage security alerts
 - **Audit Log Viewing**: Filterable audit log interface

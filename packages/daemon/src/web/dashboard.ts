@@ -222,631 +222,469 @@ export class DashboardServer {
 	// Broadcast message to all connected dashboard clients
 	private broadcastToDashboard(message: any): void {
 		const messageStr = JSON.stringify(message);
-		
-		this.activeConnections.forEach((ws) => {
-			if (ws.readyState === WebSocket.OPEN) {
-				try {
-					ws.send(messageStr);
-				} catch (error) {
-					console.error("[DASHBOARD] Error broadcasting to WebSocket client:", error);
-					this.activeConnections.delete(ws);
-				}
-			} else {
-				// Remove closed connections
-				this.activeConnections.delete(ws);
+		this.activeConnections.forEach(ws => {
+			if (ws.readyState === 1) { // WebSocket.OPEN
+				ws.send(messageStr);
 			}
 		});
 	}
 
-	// Set up periodic metrics broadcast for real-time updates
+	// Set up periodic metrics broadcast
 	private setupPeriodicMetricsBroadcast(): void {
-		// Broadcast metrics every 2 seconds as required
+		// Broadcast metrics every 30 seconds
 		setInterval(async () => {
-			if (this.activeConnections.size > 0) {
-				try {
+			try {
+				if (this.activeConnections.size > 0) {
 					const metrics = await this.getMetrics();
 					this.broadcastToDashboard({
 						type: "metrics_update",
 						data: metrics
 					});
-				} catch (error) {
-					console.error("[DASHBOARD] Error broadcasting metrics:", error);
 				}
+			} catch (error) {
+				console.error("[DASHBOARD] Error broadcasting metrics:", error);
 			}
-		}, 2000);
+		}, 30000);
 	}
 
-	// Get connection count for dashboard
-	getDashboardConnectionCount(): number {
-		return this.activeConnections.size;
-	}
-
+	// Main request handler
 	async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		const url = new URL(req.url || "", `http://${req.headers.host}`);
-		
 		try {
-			switch (url.pathname) {
-				case "/":
-				case "/dashboard":
-					await this.serveDashboard(req, res);
-					break;
-				case "/api/metrics":
-					await this.serveMetrics(req, res);
-					break;
-                case "/api/tasks":
-                    if (req.method === "GET") {
-                        await this.serveTasks(req, res);
-                    } else if (req.method === "POST") {
-                        await this.createTask(req, res);
-                    } else {
-                        this.serve404(res);
-                    }
-                    break;
-                case "/api/tasks/search":
-                    if (req.method === "GET") {
-                        await this.searchTasks(req, res);
-                    } else {
-                        this.serve404(res);
-                    }
-                    break;
-				case "/api/tasks/create":
-					await this.createTask(req, res);
-					break;
-				case "/api/tasks/update":
-					if (req.method === "PUT" || req.method === "PATCH") {
-						await this.updateTask(req, res);
-					} else {
-						this.serve404(res);
-					}
-					break;
-				case "/api/tasks/delete":
-					if (req.method === "DELETE") {
-						await this.deleteTask(req, res);
-					} else {
-						this.serve404(res);
-					}
-					break;
-				case "/api/tasks/cancel":
-					if (req.method === "POST") {
-						await this.cancelTask(req, res);
-					} else {
-						this.serve404(res);
-					}
-					break;
-				case "/api/tasks/retry":
-					if (req.method === "POST") {
-						await this.retryTask(req, res);
-					} else {
-						this.serve404(res);
-					}
-					break;
-				case "/api/queue/status":
-					await this.serveQueueStatus(req, res);
-					break;
-				case "/api/health":
-					await this.serveHealth(req, res);
-					break;
-				case "/api/logs":
-					await this.serveLogs(req, res);
-					break;
-				case "/api/status":
-					await this.serveSystemStatus(req, res);
-					break;
-				case "/api/performance":
-					await this.servePerformanceMetrics(req, res);
-					break;
-				default:
-					this.serve404(res);
-					break;
+			const url = new URL(req.url || "", `http://${req.headers.host}`);
+			const pathname = url.pathname;
+
+			// Serve main dashboard page
+			if (pathname === "/") {
+				res.writeHead(200, { "Content-Type": "text/html" });
+				res.end(this.getDashboardHTML());
+				return;
 			}
+
+			// Serve API endpoints
+			if (pathname === "/api/metrics") {
+				const metrics = await this.getMetrics();
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify(metrics));
+				return;
+			}
+
+			// Serve tasks API endpoints
+			if (pathname.startsWith("/api/tasks")) {
+				await this.serveTasksAPI(req, res);
+				return;
+			}
+
+			// Serve queue status endpoint
+			if (pathname === "/api/queue/status") {
+				await this.serveQueueStatus(req, res);
+				return;
+			}
+
+			// Serve activity logs endpoint
+			if (pathname === "/api/logs") {
+				await this.serveActivityLogs(req, res);
+				return;
+			}
+
+			// Serve audit history endpoint
+			if (pathname === "/api/audit/history") {
+				await this.serveAuditHistory(req, res);
+				return;
+			}
+
+			// Serve audit summary endpoint
+			if (pathname === "/api/audit/summary") {
+				await this.serveAuditSummary(req, res);
+				return;
+			}
+
+			// Serve audit statistics endpoint
+			if (pathname === "/api/audit/statistics") {
+				await this.serveAuditStatistics(req, res);
+				return;
+			}
+
+			// Serve audit history JavaScript file
+			if (pathname === "/audit-history.js") {
+				res.writeHead(200, { "Content-Type": "application/javascript" });
+				res.end(this.getAuditHistoryJS());
+				return;
+			}
+
+			this.serve404(res);
 		} catch (error) {
-			console.error("[DASHBOARD] Error handling request:", error);
 			this.serveError(res, error);
 		}
 	}
 
-	private async serveDashboard(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		const html = this.getDashboardHTML();
-		res.writeHead(200, { "Content-Type": "text/html" });
-		res.end(html);
+	// Get audit history JavaScript code
+	private getAuditHistoryJS(): string {
+		return `
+// Audit History Management Module
+(function() {
+    let currentHistoryData = [];
+    let currentFilters = {};
+
+    // Load audit history from server
+    window.loadAuditHistory = async function() {
+        try {
+            const taskId = document.getElementById('historyTaskId')?.value;
+            const eventType = document.getElementById('historyEventType')?.value;
+            const changedBy = document.getElementById('historyChangedBy')?.value;
+            const fromDate = document.getElementById('historyFromDate')?.value;
+            const toDate = document.getElementById('historyToDate')?.value;
+            const limit = document.getElementById('historyLimit')?.value || '100';
+
+            const params = new URLSearchParams();
+            if (taskId) params.append('taskId', taskId);
+            if (eventType) params.append('eventType', eventType);
+            if (changedBy) params.append('changedBy', changedBy);
+            if (fromDate) params.append('fromDate', fromDate);
+            if (toDate) params.append('toDate', toDate);
+            if (limit) params.append('limit', limit);
+
+            const response = await fetch('/api/audit/history?' + params.toString());
+            const data = await response.json();
+
+            if (Array.isArray(data)) {
+                currentHistoryData = data;
+                renderAuditHistory(data);
+                updateTaskSummaryIfNeeded(taskId);
+            } else {
+                console.error('Invalid audit history data:', data);
+                showError('Failed to load audit history');
+            }
+        } catch (error) {
+            console.error('Error loading audit history:', error);
+            showError('Failed to load audit history: ' + error.message);
+        }
+    };
+
+    // Load task summary
+    window.loadTaskSummary = async function(taskId) {
+        if (!taskId) return;
+        
+        try {
+            const response = await fetch('/api/audit/summary?taskId=' + encodeURIComponent(taskId));
+            const data = await response.json();
+
+            if (data) {
+                renderTaskSummary(data);
+                document.getElementById('taskSummarySection').style.display = 'block';
+            } else {
+                document.getElementById('taskSummarySection').style.display = 'none';
+            }
+        } catch (error) {
+            console.error('Error loading task summary:', error);
+        }
+    };
+
+    // Load audit statistics
+    window.loadAuditStatistics = async function() {
+        try {
+            const fromDate = document.getElementById('historyFromDate')?.value;
+            const toDate = document.getElementById('historyToDate')?.value;
+
+            const params = new URLSearchParams();
+            if (fromDate) params.append('fromDate', fromDate);
+            if (toDate) params.append('toDate', toDate);
+
+            const response = await fetch('/api/audit/statistics?' + params.toString());
+            const data = await response.json();
+
+            if (data) {
+                renderAuditStatistics(data);
+            } else {
+                showError('Failed to load audit statistics');
+            }
+        } catch (error) {
+            console.error('Error loading audit statistics:', error);
+            showError('Failed to load audit statistics: ' + error.message);
+        }
+    };
+
+    // Apply history filters
+    window.applyHistoryFilters = function() {
+        loadAuditHistory();
+    };
+
+    // Clear history filters
+    window.clearHistoryFilters = function() {
+        document.getElementById('historyTaskId').value = '';
+        document.getElementById('historyEventType').value = '';
+        document.getElementById('historyChangedBy').value = '';
+        document.getElementById('historyFromDate').value = '';
+        document.getElementById('historyToDate').value = '';
+        document.getElementById('historyLimit').value = '100';
+        document.getElementById('taskSummarySection').style.display = 'none';
+        
+        loadAuditHistory();
+    };
+
+    // Render audit history
+    function renderAuditHistory(events) {
+        const container = document.getElementById('auditHistoryList');
+        
+        if (!events || events.length === 0) {
+            container.innerHTML = '<div class="loading">No audit events found</div>';
+            return;
+        }
+
+        const html = events.map(event => {
+            const eventTime = new Date(event.timestamp);
+            const eventIcon = getEventIcon(event.eventType);
+            const eventDetails = getEventDetails(event);
+
+            return \`
+                <div class="audit-event">
+                    <div class="event-header">
+                        <span class="event-icon">\${eventIcon}</span>
+                        <span class="event-type">\${event.eventType}</span>
+                        <span class="event-time">\${eventTime.toLocaleString()}</span>
+                    </div>
+                    <div class="event-content">
+                        <div class="event-task">Task: \${event.taskTitle || 'Unknown'}</div>
+                        <div class="event-details">\${eventDetails}</div>
+                        <div class="event-changed-by">Changed by: \${event.changedBy || 'System'}</div>
+                        \${event.error ? \`<div class="event-error">Error: \${event.error}</div>\` : ''}
+                    </div>
+                </div>
+            \`;
+        }).join('');
+
+        container.innerHTML = html;
+    }
+
+    // Render task summary
+    function renderTaskSummary(summary) {
+        const container = document.getElementById('taskSummaryContent');
+        
+        const totalChanges = summary.totalEvents || 0;
+        const statusChanges = summary.eventsByType?.status_changed || 0;
+        const priorityChanges = summary.eventsByType?.priority_changed || 0;
+        const assignments = summary.eventsByType?.assigned || 0;
+
+        const html = \`
+            <div class="summary-grid">
+                <div class="summary-item">
+                    <div class="summary-label">Total Changes</div>
+                    <div class="summary-value">\${totalChanges}</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-label">Status Changes</div>
+                    <div class="summary-value">\${statusChanges}</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-label">Priority Changes</div>
+                    <div class="summary-value">\${priorityChanges}</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-label">Assignments</div>
+                    <div class="summary-value">\${assignments}</div>
+                </div>
+            </div>
+            <div class="summary-timeline">
+                <div>Created: \${summary.createdAt ? new Date(summary.createdAt).toLocaleString() : 'Unknown'}</div>
+                <div>Last Updated: \${summary.lastUpdated ? new Date(summary.lastUpdated).toLocaleString() : 'Unknown'}</div>
+            </div>
+        \`;
+
+        container.innerHTML = html;
+    }
+
+    // Render audit statistics
+    function renderAuditStatistics(stats) {
+        // Create a modal or expand the statistics section
+        const statsHtml = \`
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">Total Events</div>
+                    <div class="stat-value">\${stats.totalEvents || 0}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Unique Tasks</div>
+                    <div class="stat-value">\${stats.uniqueTasks || 0}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Active Users</div>
+                    <div class="stat-value">\${stats.activeUsers || 0}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Error Rate</div>
+                    <div class="stat-value">\${stats.errorRate || '0%'}</div>
+                </div>
+            </div>
+            <div class="events-by-type">
+                <h3>Events by Type</h3>
+                \${Object.entries(stats.eventsByType || {}).map(([type, count]) => \`
+                    <div class="event-type-stat">
+                        <span class="event-type-name">\${type}</span>
+                        <span class="event-type-count">\${count}</span>
+                    </div>
+                \`).join('')}
+            </div>
+            <div class="most-active-tasks">
+                <h3>Most Active Tasks</h3>
+                \${(stats.mostActiveTasks || []).slice(0, 10).map(task => \`
+                    <div class="active-task">
+                        <span class="task-id">\${task.taskId}</span>
+                        <span class="event-count">\${task.eventCount} events</span>
+                    </div>
+                \`).join('')}
+            </div>
+        \`;
+
+        // Show in modal or update existing section
+        const container = document.getElementById('auditHistoryList');
+        container.innerHTML = statsHtml;
+    }
+
+    // Get event icon based on type
+    function getEventIcon(eventType) {
+        const icons = {
+            'created': '📝',
+            'status_changed': '🔄',
+            'priority_changed': '⚡',
+            'assigned': '👤',
+            'updated': '✏️',
+            'deleted': '🗑️'
+        };
+        return icons[eventType] || '📋';
+    }
+
+    // Get event details based on type
+    function getEventDetails(event) {
+        switch (event.eventType) {
+            case 'status_changed':
+                return \`Status changed from \${event.oldValue} to \${event.newValue}\`;
+            case 'priority_changed':
+                return \`Priority changed from \${event.oldValue} to \${event.newValue}\`;
+            case 'assigned':
+                return \`Assigned to \${event.newValue}\`;
+            case 'created':
+                return \`Task created with priority: \${event.newValue}\`;
+            case 'deleted':
+                return 'Task was deleted';
+            default:
+                return event.details || 'Event occurred';
+        }
+    }
+
+    // Update task summary if needed
+    function updateTaskSummaryIfNeeded(taskId) {
+        if (taskId) {
+            loadTaskSummary(taskId);
+        } else {
+            document.getElementById('taskSummarySection').style.display = 'none';
+        }
+    }
+
+    // Utility functions
+    function showError(message) {
+        if (typeof window.showError === 'function') {
+            window.showError(message);
+        } else {
+            console.error(message);
+        }
+    }
+})();
+		`;
 	}
 
-	private async serveMetrics(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		const metrics = await this.getMetrics();
-		res.writeHead(200, { "Content-Type": "application/json" });
-		res.end(JSON.stringify(metrics));
-	}
-
-	private async serveTasks(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		const url = new URL(req.url || "", `http://${req.headers.host}`);
-		const status = url.searchParams.get("status");
-		const priority = url.searchParams.get("priority");
-		
-		const coreTasks = await this.productManager.getAllTasks();
-		const tasks = coreTasks.map(task => ({
-			...task,
-			status: (task.status as Task["status"]) || "todo",
-			priority: (task.priority as Task["priority"]) || "medium"
-		}));
-		let filteredTasks = tasks;
-
-		if (status && status !== "all") {
-			filteredTasks = filteredTasks.filter(task => task.status === status);
-		}
-
-		if (priority && priority !== "all") {
-			filteredTasks = filteredTasks.filter(task => task.priority === priority);
-		}
-
-		res.writeHead(200, { "Content-Type": "application/json" });
-		res.end(JSON.stringify(filteredTasks));
-	}
-
-	private async searchTasks(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	private async serveAuditHistory(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		try {
 			const url = new URL(req.url || "", `http://${req.headers.host}`);
-			const query = url.searchParams.get("q") || "";
-			const status = url.searchParams.get("status");
-			const priority = url.searchParams.get("priority");
+			const taskId = url.searchParams.get("taskId");
+			const eventType = url.searchParams.get("eventType");
+			const changedBy = url.searchParams.get("changedBy");
+			const limit = parseInt(url.searchParams.get("limit") || "100");
+			const offset = parseInt(url.searchParams.get("offset") || "0");
+			const fromDate = url.searchParams.get("fromDate");
+			const toDate = url.searchParams.get("toDate");
 			
-			const coreTasks = await this.productManager.getAllTasks();
-			const allTasks = coreTasks.map(task => ({
-				...task,
-				status: (task.status as Task["status"]) || "todo",
-				priority: (task.priority as Task["priority"]) || "medium"
-			}));
-			let filteredTasks = allTasks;
-
-			// Apply text search
-			if (query.trim()) {
-				const lowerQuery = query.toLowerCase();
-				filteredTasks = filteredTasks.filter(task => 
-					task.title.toLowerCase().includes(lowerQuery) ||
-					task.description.toLowerCase().includes(lowerQuery) ||
-					(task.assignedTo && task.assignedTo.toLowerCase().includes(lowerQuery)) ||
-					(task.createdBy && task.createdBy.toLowerCase().includes(lowerQuery))
-				);
-			}
-
-			// Apply status filter
-			if (status && status !== "all") {
-				filteredTasks = filteredTasks.filter(task => task.status === status);
-			}
-
-			// Apply priority filter
-			if (priority && priority !== "all") {
-				filteredTasks = filteredTasks.filter(task => task.priority === priority);
-			}
-
-			res.writeHead(200, { "Content-Type": "application/json" });
-			res.end(JSON.stringify(filteredTasks));
-		} catch (error) {
-			res.writeHead(500, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ 
-				error: error instanceof Error ? error.message : "Search failed" 
-			}));
-		}
-	}
-
-	private async createTask(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		try {
-			const body = await this.parseRequestBody(req);
-			const taskData = JSON.parse(body);
+			const requestData: any = {};
+			if (taskId) requestData.taskId = taskId;
+			if (eventType) requestData.eventType = eventType;
+			if (changedBy) requestData.changedBy = changedBy;
+			if (limit) requestData.limit = limit;
+			if (offset) requestData.offset = offset;
+			if (fromDate) requestData.fromDate = fromDate;
+			if (toDate) requestData.toDate = toDate;
 			
-			const result = await this.tcpClient.createTask(taskData);
-			
-			if (result.success) {
-				res.writeHead(201, { "Content-Type": "application/json" });
-				res.end(JSON.stringify(result));
-			} else {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ success: false, error: result.error?.message || "Failed to create task" }));
-			}
-		} catch (error) {
-			res.writeHead(400, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ 
-				success: false, 
-				error: error instanceof Error ? error.message : "Invalid request" 
-			}));
-		}
-	}
-
-	private async updateTask(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		try {
-			const body = await this.parseRequestBody(req);
-			const { id, status, priority } = JSON.parse(body);
-			
-			if (!id) {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ success: false, error: "Task ID is required" }));
-				return;
-			}
-			
-			let result;
-			if (status) {
-				result = await this.tcpClient.updateTaskStatus(id, status);
-			} else if (priority) {
-				result = await this.tcpClient.updateTaskPriority(id, priority);
-			} else {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ success: false, error: "Status or priority is required" }));
-				return;
-			}
+			const result = await this.tcpClient.sendCommand("get_task_history", requestData);
 			
 			if (result.success) {
 				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify(result));
+				res.end(JSON.stringify(result.data));
 			} else {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ success: false, error: result.error?.message || "Failed to update task" }));
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ 
+					error: result.error?.message || "Failed to fetch audit history" 
+				}));
 			}
 		} catch (error) {
-			res.writeHead(400, { "Content-Type": "application/json" });
+			res.writeHead(500, { "Content-Type": "application/json" });
 			res.end(JSON.stringify({ 
-				success: false, 
-				error: error instanceof Error ? error.message : "Invalid request" 
+				error: error instanceof Error ? error.message : "Failed to fetch audit history" 
 			}));
 		}
 	}
 
-	private async deleteTask(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	private async serveAuditSummary(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		try {
 			const url = new URL(req.url || "", `http://${req.headers.host}`);
-			const taskId = url.searchParams.get("id");
+			const taskId = url.searchParams.get("taskId");
 			
 			if (!taskId) {
 				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ success: false, error: "Task ID is required" }));
+				res.end(JSON.stringify({ error: "Task ID is required" }));
 				return;
 			}
 			
-			const result = await this.tcpClient.deleteTask(taskId);
+			const result = await this.tcpClient.sendCommand("get_task_history_summary", { taskId });
 			
 			if (result.success) {
 				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify(result));
+				res.end(JSON.stringify(result.data));
 			} else {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ success: false, error: result.error?.message || "Failed to delete task" }));
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ 
+					error: result.error?.message || "Failed to fetch audit summary" 
+				}));
 			}
-		} catch (error) {
-			res.writeHead(400, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ 
-				success: false, 
-				error: error instanceof Error ? error.message : "Invalid request" 
-			}));
-		}
-	}
-
-	private async cancelTask(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		try {
-			const body = await this.parseRequestBody(req);
-			const { id } = JSON.parse(body);
-			
-			if (!id) {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ success: false, error: "Task ID is required" }));
-				return;
-			}
-			
-			const result = await this.tcpClient.updateTaskStatus(id, "cancelled");
-			
-			if (result.success) {
-				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify(result));
-			} else {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ success: false, error: result.error?.message || "Failed to cancel task" }));
-			}
-		} catch (error) {
-			res.writeHead(400, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ 
-				success: false, 
-				error: error instanceof Error ? error.message : "Invalid request" 
-			}));
-		}
-	}
-
-	private async retryTask(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		try {
-			const body = await this.parseRequestBody(req);
-			const { id } = JSON.parse(body);
-			
-			if (!id) {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ success: false, error: "Task ID is required" }));
-				return;
-			}
-			
-			const result = await this.tcpClient.updateTaskStatus(id, "todo");
-			
-			if (result.success) {
-				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify(result));
-			} else {
-				res.writeHead(400, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({ success: false, error: result.error?.message || "Failed to retry task" }));
-			}
-		} catch (error) {
-			res.writeHead(400, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ 
-				success: false, 
-				error: error instanceof Error ? error.message : "Invalid request" 
-			}));
-		}
-	}
-
-	private async serveQueueStatus(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		try {
-			const coreTasks = await this.productManager.getAllTasks();
-			const tasksData = coreTasks.map((task: any) => ({
-				...task,
-				status: (task.status as Task["status"]) || "todo",
-				priority: (task.priority as Task["priority"]) || "medium",
-				createdAt: task.createdAt instanceof Date ? task.createdAt.toISOString() : task.createdAt,
-				updatedAt: task.updatedAt instanceof Date ? task.updatedAt.toISOString() : task.updatedAt
-			})) as Task[];
-			
-			const queueStatus = {
-				total: tasksData.length,
-				pending: tasksData.filter(t => t.status === "todo").length,
-				inProgress: tasksData.filter(t => t.status === "in-progress").length,
-				completed: tasksData.filter(t => t.status === "done").length,
-				failed: tasksData.filter(t => t.status === "failed" || t.status === "cancelled").length,
-				highPriority: tasksData.filter(t => t.priority === "high" && (t.status === "todo" || t.status === "in-progress")).length,
-				mediumPriority: tasksData.filter(t => t.priority === "medium" && (t.status === "todo" || t.status === "in-progress")).length,
-				lowPriority: tasksData.filter(t => t.priority === "low" && (t.status === "todo" || t.status === "in-progress")).length,
-				queueByPriority: {
-					high: tasksData.filter(t => t.priority === "high" && (t.status === "todo" || t.status === "in-progress"))
-						.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
-					medium: tasksData.filter(t => t.priority === "medium" && (t.status === "todo" || t.status === "in-progress"))
-						.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
-					low: tasksData.filter(t => t.priority === "low" && (t.status === "todo" || t.status === "in-progress"))
-						.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-				},
-				failedTasks: tasksData.filter(t => t.status === "failed" || t.status === "cancelled")
-					.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-					.slice(0, 10),
-				processingTimes: {
-					averageProcessingTime: this.calculateAverageProcessingTime(tasksData),
-					fastestTask: this.getFastestTask(tasksData),
-					slowestTask: this.getSlowestTask(tasksData)
-				}
-			};
-			
-			res.writeHead(200, { "Content-Type": "application/json" });
-			res.end(JSON.stringify(queueStatus));
 		} catch (error) {
 			res.writeHead(500, { "Content-Type": "application/json" });
 			res.end(JSON.stringify({ 
-				error: error instanceof Error ? error.message : "Failed to fetch queue status" 
+				error: error instanceof Error ? error.message : "Failed to fetch audit summary" 
 			}));
 		}
 	}
 
-	private calculateAverageProcessingTime(tasks: Task[]): number {
-		const completedTasks = tasks.filter(t => t.status === "done");
-		if (completedTasks.length === 0) return 0;
-		
-		const totalTime = completedTasks.reduce((sum, task) => {
-			const created = new Date(task.createdAt).getTime();
-			const updated = new Date(task.updatedAt).getTime();
-			return sum + (updated - created);
-		}, 0);
-		
-		return Math.round(totalTime / completedTasks.length / 1000); // Return in seconds
-	}
-
-	private getFastestTask(tasks: Task[]): Task | null {
-		const completedTasks = tasks.filter(t => t.status === "done");
-		if (completedTasks.length === 0) return null;
-		
-		return completedTasks.reduce((fastest, task) => {
-			const created = new Date(task.createdAt).getTime();
-			const updated = new Date(task.updatedAt).getTime();
-			const duration = updated - created;
-			
-			const fastestCreated = new Date(fastest.createdAt).getTime();
-			const fastestUpdated = new Date(fastest.updatedAt).getTime();
-			const fastestDuration = fastestUpdated - fastestCreated;
-			
-			return duration < fastestDuration ? task : fastest;
-		});
-	}
-
-	private getSlowestTask(tasks: Task[]): Task | null {
-		const completedTasks = tasks.filter(t => t.status === "done");
-		if (completedTasks.length === 0) return null;
-		
-		return completedTasks.reduce((slowest, task) => {
-			const created = new Date(task.createdAt).getTime();
-			const updated = new Date(task.updatedAt).getTime();
-			const duration = updated - created;
-			
-			const slowestCreated = new Date(slowest.createdAt).getTime();
-			const slowestUpdated = new Date(slowest.updatedAt).getTime();
-			const slowestDuration = slowestUpdated - slowestCreated;
-			
-			return duration > slowestDuration ? task : slowest;
-		});
-	}
-
-	private async serveHealth(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		try {
-			const wsStatus = await this.tcpClient.getWebSocketStatus();
-			const memUsage = process.memoryUsage();
-			
-			const health = {
-				status: "healthy",
-				timestamp: new Date().toISOString(),
-				daemon: {
-					pid: process.pid,
-					uptime: process.uptime(),
-					memory: {
-						used: memUsage.heapUsed,
-						total: memUsage.heapTotal,
-						external: memUsage.external,
-					},
-				},
-				websocket: wsStatus.success ? wsStatus.data : { connected: false },
-			};
-			
-			res.writeHead(200, { "Content-Type": "application/json" });
-			res.end(JSON.stringify(health));
-		} catch (error) {
-			res.writeHead(500, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ 
-				status: "unhealthy", 
-				error: error instanceof Error ? error.message : "Health check failed" 
-			}));
-		}
-	}
-
-	private async serveLogs(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	private async serveAuditStatistics(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		try {
 			const url = new URL(req.url || "", `http://${req.headers.host}`);
-			const limit = parseInt(url.searchParams.get("limit") || "50");
-			const level = url.searchParams.get("level") || "all";
+			const fromDate = url.searchParams.get("fromDate");
+			const toDate = url.searchParams.get("toDate");
 			
-			// Get recent tasks as "logs" for now
-			const tasks = await this.productManager.getAllTasks();
-			const recentTasks = tasks
-				.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-				.slice(0, limit)
-				.map(task => ({
-					id: task.id,
-					type: "task_update",
-					message: `Task "${task.title}" status changed to ${task.status}`,
-					timestamp: task.updatedAt,
-					level: task.status === "done" ? "info" : task.status === "in-progress" ? "warn" : "debug",
-					data: {
-						taskId: task.id,
-						title: task.title,
-						status: task.status,
-						priority: task.priority,
-					},
+			const requestData: any = {};
+			if (fromDate) requestData.fromDate = fromDate;
+			if (toDate) requestData.toDate = toDate;
+			
+			const result = await this.tcpClient.sendCommand("get_audit_statistics", requestData);
+			
+			if (result.success) {
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify(result.data));
+			} else {
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ 
+					error: result.error?.message || "Failed to fetch audit statistics" 
 				}));
-			
-			res.writeHead(200, { "Content-Type": "application/json" });
-			res.end(JSON.stringify(recentTasks));
+			}
 		} catch (error) {
 			res.writeHead(500, { "Content-Type": "application/json" });
 			res.end(JSON.stringify({ 
-				error: error instanceof Error ? error.message : "Failed to fetch logs" 
-			}));
-		}
-	}
-
-	private async serveSystemStatus(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		try {
-			const tasksData = await this.productManager.getAllTasks();
-			const tcpConnected = await this.tcpClient.checkConnection();
-			const memUsage = process.memoryUsage();
-			
-			const systemStatus = {
-				daemon: {
-					pid: process.pid,
-					uptime: process.uptime(),
-					memory: {
-						used: memUsage.heapUsed,
-						total: memUsage.heapTotal,
-						external: memUsage.external,
-						percentage: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100)
-					},
-					status: "running"
-				},
-				tasks: {
-					total: tasksData.length,
-					pending: tasksData.filter(t => t.status === "todo").length,
-					inProgress: tasksData.filter(t => t.status === "in-progress").length,
-					completed: tasksData.filter(t => t.status === "done").length,
-					failed: tasksData.filter(t => t.status === "failed" || t.status === "cancelled").length
-				},
-				connections: {
-					websocket: this.activeConnections.size,
-					tcp: tcpConnected
-				},
-				system: {
-					nodeVersion: process.version,
-					platform: process.platform,
-					arch: process.arch,
-					totalmem: require("os").totalmem(),
-					freemem: require("os").freemem()
-				},
-				timestamp: new Date().toISOString()
-			};
-			
-			res.writeHead(200, { "Content-Type": "application/json" });
-			res.end(JSON.stringify(systemStatus));
-		} catch (error) {
-			res.writeHead(500, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ 
-				error: error instanceof Error ? error.message : "Failed to fetch system status" 
-			}));
-		}
-	}
-
-	private async servePerformanceMetrics(req: IncomingMessage, res: ServerResponse): Promise<void> {
-		try {
-			const coreTasks = await this.productManager.getAllTasks();
-			const tasksData = coreTasks.map(task => ({
-				...task,
-				status: (task.status as Task["status"]) || "todo",
-				priority: (task.priority as Task["priority"]) || "medium"
-			}));
-			const memUsage = process.memoryUsage();
-			const cpuUsage = process.cpuUsage();
-			
-			// Calculate task processing metrics
-			const completedTasks = tasksData.filter(t => t.status === "done");
-			const averageProcessingTime = completedTasks.length > 0 ? 
-				completedTasks.reduce((sum, task) => {
-					const created = new Date(task.createdAt).getTime();
-					const updated = new Date(task.updatedAt).getTime();
-					return sum + (updated - created);
-				}, 0) / completedTasks.length : 0;
-
-			const performance = {
-				memory: {
-					heap: {
-						used: memUsage.heapUsed,
-						total: memUsage.heapTotal,
-						percentage: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100)
-					},
-					external: memUsage.external,
-					rss: memUsage.rss
-				},
-				cpu: {
-					user: cpuUsage.user,
-					system: cpuUsage.system
-				},
-				tasks: {
-					throughput: {
-						completed: completedTasks.length,
-						averageProcessingTime: Math.round(averageProcessingTime / 1000), // seconds
-						tasksPerMinute: completedTasks.length > 0 ? 
-							Math.round(completedTasks.length / (process.uptime() / 60)) : 0
-					},
-					queue: {
-						pending: tasksData.filter(t => t.status === "todo").length,
-						inProgress: tasksData.filter(t => t.status === "in-progress").length,
-						failed: tasksData.filter(t => t.status === "failed" || t.status === "cancelled").length
-					}
-				},
-				daemon: {
-					uptime: process.uptime(),
-					pid: process.pid,
-					connections: this.activeConnections.size
-				},
-				timestamp: new Date().toISOString()
-			};
-			
-			res.writeHead(200, { "Content-Type": "application/json" });
-			res.end(JSON.stringify(performance));
-		} catch (error) {
-			res.writeHead(500, { "Content-Type": "application/json" });
-			res.end(JSON.stringify({ 
-				error: error instanceof Error ? error.message : "Failed to fetch performance metrics" 
+				error: error instanceof Error ? error.message : "Failed to fetch audit statistics" 
 			}));
 		}
 	}
@@ -864,6 +702,249 @@ export class DashboardServer {
 				reject(error);
 			});
 		});
+	}
+
+	private async serveTasksAPI(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		try {
+			const url = new URL(req.url || "", `http://${req.headers.host}`);
+			const pathname = url.pathname;
+
+			// Handle different task API endpoints
+			if (pathname === "/api/tasks" && req.method === "GET") {
+				// Search tasks with query parameters
+				const searchQuery = url.searchParams.get("q");
+				const statusFilter = url.searchParams.get("status");
+				const priorityFilter = url.searchParams.get("priority");
+				
+				const filters: any = {};
+				if (statusFilter && statusFilter !== "all") filters.status = statusFilter;
+				if (priorityFilter && priorityFilter !== "all") filters.priority = priorityFilter;
+				if (searchQuery) filters.search = searchQuery;
+				
+				const result = await this.tcpClient.sendCommand("list_tasks_filtered", { filters });
+				
+				if (result.success) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify(result.data));
+				} else {
+					res.writeHead(500, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: result.error?.message || "Failed to search tasks" }));
+				}
+			} else if (pathname === "/api/tasks" && req.method === "POST") {
+				// Create new task
+				const body = await this.parseRequestBody(req);
+				const taskData = JSON.parse(body);
+				
+				const result = await this.tcpClient.sendCommand("create_task", taskData);
+				
+				if (result.success) {
+					res.writeHead(201, { "Content-Type": "application/json" });
+					res.end(JSON.stringify(result.data));
+				} else {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: result.error?.message || "Failed to create task" }));
+				}
+			} else if (pathname.startsWith("/api/tasks/") && req.method === "PUT") {
+				// Update task
+				const taskId = pathname.split("/").pop();
+				const body = await this.parseRequestBody(req);
+				const updateData = JSON.parse(body);
+				
+				let result;
+				if (updateData.status !== undefined) {
+					result = await this.tcpClient.sendCommand("update_task_status", { id: taskId, status: updateData.status });
+				} else if (updateData.priority !== undefined) {
+					result = await this.tcpClient.sendCommand("update_task_priority", { id: taskId, priority: updateData.priority });
+				} else {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "No valid update fields provided" }));
+					return;
+				}
+				
+				if (result.success) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify(result.data));
+				} else {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: result.error?.message || "Failed to update task" }));
+				}
+			} else if (pathname.startsWith("/api/tasks/") && req.method === "DELETE") {
+				// Delete task
+				const taskId = pathname.split("/").pop();
+				
+				const result = await this.tcpClient.sendCommand("delete_task", { id: taskId });
+				
+				if (result.success) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ success: true }));
+				} else {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: result.error?.message || "Failed to delete task" }));
+				}
+			} else if (pathname === "/api/tasks/update" && req.method === "PUT") {
+				// Alternative update endpoint
+				const body = await this.parseRequestBody(req);
+				const updateData = JSON.parse(body);
+				
+				const result = await this.tcpClient.sendCommand("update_task_status", { 
+					id: updateData.id, 
+					status: updateData.status 
+				});
+				
+				if (result.success) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify(result.data));
+				} else {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: result.error?.message || "Failed to update task" }));
+				}
+			} else if (pathname === "/api/tasks/delete" && req.method === "DELETE") {
+				// Alternative delete endpoint
+				const url = new URL(req.url || "", `http://${req.headers.host}`);
+				const taskId = url.searchParams.get("id");
+				
+				if (!taskId) {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "Task ID is required" }));
+					return;
+				}
+				
+				const result = await this.tcpClient.sendCommand("delete_task", { id: taskId });
+				
+				if (result.success) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ success: true }));
+				} else {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: result.error?.message || "Failed to delete task" }));
+				}
+			} else if (pathname === "/api/tasks/cancel" && req.method === "POST") {
+				// Cancel task (set status to cancelled)
+				const body = await this.parseRequestBody(req);
+				const { id } = JSON.parse(body);
+				
+				const result = await this.tcpClient.sendCommand("update_task_status", { id, status: "cancelled" });
+				
+				if (result.success) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify(result.data));
+				} else {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: result.error?.message || "Failed to cancel task" }));
+				}
+			} else if (pathname === "/api/tasks/retry" && req.method === "POST") {
+				// Retry failed task (set status back to todo)
+				const body = await this.parseRequestBody(req);
+				const { id } = JSON.parse(body);
+				
+				const result = await this.tcpClient.sendCommand("update_task_status", { id, status: "todo" });
+				
+				if (result.success) {
+					res.writeHead(200, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ success: true, message: "Task queued for retry" }));
+				} else {
+					res.writeHead(400, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: result.error?.message || "Failed to retry task" }));
+				}
+			} else {
+				this.serve404(res);
+			}
+		} catch (error) {
+			console.error("[DASHBOARD] Error in tasks API:", error);
+			res.writeHead(500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: error instanceof Error ? error.message : "Internal server error" }));
+		}
+	}
+
+	private async serveQueueStatus(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		try {
+			// Get all tasks to analyze queue status
+			const tasksResult = await this.tcpClient.sendCommand("list_tasks", {});
+			
+			if (!tasksResult.success) {
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: "Failed to fetch tasks for queue analysis" }));
+				return;
+			}
+
+			const tasks = tasksResult.data as any[];
+			const todoTasks = tasks.filter(task => task.status === "todo");
+			const inProgressTasks = tasks.filter(task => task.status === "in-progress");
+			const failedTasks = tasks.filter(task => task.status === "failed");
+
+			// Calculate queue metrics
+			const queueByPriority = {
+				high: todoTasks.filter(task => task.priority === "high"),
+				medium: todoTasks.filter(task => task.priority === "medium"),
+				low: todoTasks.filter(task => task.priority === "low")
+			};
+
+			// Simulate processing times (in a real implementation, you'd track this)
+			const processingTimes = {
+				averageProcessingTime: 45, // seconds
+				totalProcessingTime: inProgressTasks.length * 45,
+				estimatedWaitTime: todoTasks.length * 30 // seconds
+			};
+
+			const queueStatus = {
+				total: todoTasks.length + inProgressTasks.length,
+				highPriority: queueByPriority.high.length,
+				processingTimes,
+				failed: failedTasks.length,
+				queueByPriority,
+				failedTasks: failedTasks.slice(0, 10), // Limit to 10 for display
+				timestamp: new Date().toISOString()
+			};
+
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify(queueStatus));
+		} catch (error) {
+			console.error("[DASHBOARD] Error serving queue status:", error);
+			res.writeHead(500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: error instanceof Error ? error.message : "Failed to fetch queue status" }));
+		}
+	}
+
+	private async serveActivityLogs(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		try {
+			const url = new URL(req.url || "", `http://${req.headers.host}`);
+			const limit = parseInt(url.searchParams.get("limit") || "50");
+
+			// Get recent tasks to simulate activity logs
+			const tasksResult = await this.tcpClient.sendCommand("list_tasks", {});
+			
+			if (!tasksResult.success) {
+				res.writeHead(500, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: "Failed to fetch tasks for activity log" }));
+				return;
+			}
+
+			const tasks = tasksResult.data as any[];
+			
+			// Create activity log entries from recent task changes
+			const logs = tasks
+				.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+				.slice(0, limit)
+				.map(task => ({
+					id: `log_${task.id}_${Date.now()}`,
+					timestamp: task.updatedAt,
+					level: task.status === "failed" ? "error" : task.status === "done" ? "success" : "info",
+					message: `Task "${task.title}" ${task.status.replace('-', ' ')}`,
+					data: {
+						taskId: task.id,
+						taskTitle: task.title,
+						status: task.status,
+						priority: task.priority
+					}
+				}));
+
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify(logs));
+		} catch (error) {
+			console.error("[DASHBOARD] Error serving activity logs:", error);
+			res.writeHead(500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: error instanceof Error ? error.message : "Failed to fetch activity logs" }));
+		}
 	}
 
 	private serve404(res: ServerResponse): void {
@@ -1587,6 +1668,204 @@ export class DashboardServer {
             }
         }
         
+        /* Audit History Styles */
+        .audit-event {
+            border-bottom: 1px solid #e5e7eb;
+            padding: 16px 0;
+            transition: background-color 0.2s;
+        }
+        
+        .audit-event:hover {
+            background: #f9fafb;
+            padding-left: 16px;
+            padding-right: 16px;
+        }
+        
+        .audit-event:last-child {
+            border-bottom: none;
+        }
+        
+        .event-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        
+        .event-icon {
+            font-size: 1.2rem;
+            width: 24px;
+            text-align: center;
+        }
+        
+        .event-type {
+            font-weight: 600;
+            color: #374151;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .event-time {
+            margin-left: auto;
+            font-size: 0.75rem;
+            color: #6b7280;
+        }
+        
+        .event-content {
+            margin-left: 36px;
+        }
+        
+        .event-task {
+            font-size: 0.875rem;
+            margin-bottom: 4px;
+        }
+        
+        .event-details {
+            font-size: 0.875rem;
+            color: #6b7280;
+            margin-bottom: 4px;
+        }
+        
+        .event-changed-by {
+            font-size: 0.75rem;
+            color: #9ca3af;
+            font-style: italic;
+        }
+        
+        .event-error {
+            font-size: 0.875rem;
+            color: #ef4444;
+            background: #fef2f2;
+            padding: 4px 8px;
+            border-radius: 4px;
+            margin-top: 4px;
+        }
+        
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        
+        .summary-item {
+            text-align: center;
+            padding: 16px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+        
+        .summary-label {
+            font-size: 0.75rem;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 8px;
+        }
+        
+        .summary-value {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: #1f2937;
+        }
+        
+        .summary-timeline {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.875rem;
+            color: #6b7280;
+            padding: 12px 0;
+            border-top: 1px solid #e5e7eb;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-item {
+            text-align: center;
+            padding: 16px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+        
+        .stat-label {
+            font-size: 0.75rem;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 8px;
+        }
+        
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1f2937;
+        }
+        
+        .events-by-type {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        
+        .event-type-stat {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: #f3f4f6;
+            border-radius: 6px;
+        }
+        
+        .event-type-name {
+            font-weight: 600;
+            color: #374151;
+            font-size: 0.875rem;
+        }
+        
+        .event-type-count {
+            font-weight: 700;
+            color: #3b82f6;
+            background: #dbeafe;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+        }
+        
+        .most-active-tasks {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .active-task {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: #f9fafb;
+            border-radius: 6px;
+            border-left: 4px solid #3b82f6;
+        }
+        
+        .task-id {
+            font-family: monospace;
+            font-size: 0.875rem;
+            color: #374151;
+        }
+        
+        .event-count {
+            font-weight: 600;
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+
         /* Print styles */
         @media print {
             body {
@@ -1628,6 +1907,7 @@ export class DashboardServer {
             <button class="tab" data-tab="queue">Queue Status</button>
             <button class="tab" data-tab="tasks">Tasks</button>
             <button class="tab" data-tab="create">Create Task</button>
+            <button class="tab" data-tab="history">Task History</button>
             <button class="tab" data-tab="health">Health</button>
             <button class="tab" data-tab="logs">Activity Log</button>
         </div>
@@ -1848,6 +2128,83 @@ export class DashboardServer {
             </div>
         </div>
 
+        <!-- Task History Tab -->
+        <div id="history-tab" class="tab-content">
+            <div class="tasks-section">
+                <div class="tasks-header">
+                    <h2>Task History & Audit Trail</h2>
+                    <div class="form-actions">
+                        <button class="btn btn-primary btn-sm" onclick="loadAuditHistory()">
+                            <span>🔄</span> Refresh
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="loadAuditStatistics()">
+                            <span>📊</span> Statistics
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- History Filters -->
+                <div class="filters">
+                    <div class="filter-group">
+                        <label for="historyTaskId">Task ID:</label>
+                        <input type="text" id="historyTaskId" placeholder="Enter task ID...">
+                    </div>
+                    <div class="filter-group">
+                        <label for="historyEventType">Event Type:</label>
+                        <select id="historyEventType">
+                            <option value="">All Events</option>
+                            <option value="created">Created</option>
+                            <option value="status_changed">Status Changed</option>
+                            <option value="priority_changed">Priority Changed</option>
+                            <option value="assigned">Assigned</option>
+                            <option value="updated">Updated</option>
+                            <option value="deleted">Deleted</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label for="historyChangedBy">Changed By:</label>
+                        <input type="text" id="historyChangedBy" placeholder="Username...">
+                    </div>
+                    <div class="filter-group">
+                        <label for="historyFromDate">From Date:</label>
+                        <input type="datetime-local" id="historyFromDate">
+                    </div>
+                    <div class="filter-group">
+                        <label for="historyToDate">To Date:</label>
+                        <input type="datetime-local" id="historyToDate">
+                    </div>
+                    <div class="filter-group">
+                        <label for="historyLimit">Limit:</label>
+                        <select id="historyLimit">
+                            <option value="50">50</option>
+                            <option value="100" selected>100</option>
+                            <option value="200">200</option>
+                            <option value="500">500</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <button class="btn btn-primary btn-sm" onclick="applyHistoryFilters()">
+                            <span>🔍</span> Apply Filters
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="clearHistoryFilters()">
+                            <span>🗑️</span> Clear
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Task Summary Section -->
+                <div id="taskSummarySection" style="margin-bottom: 24px; display: none;">
+                    <div class="metric-card">
+                        <h3>Task Summary</h3>
+                        <div id="taskSummaryContent"></div>
+                    </div>
+                </div>
+                
+                <!-- History List -->
+                <div id="auditHistoryList" class="loading">Loading audit history...</div>
+            </div>
+        </div>
+
         <!-- Activity Log Tab -->
         <div id="logs-tab" class="tab-content">
             <div class="tasks-section">
@@ -1912,6 +2269,7 @@ export class DashboardServer {
                             if (tabName === 'tasks') loadTasks();
                             if (tabName === 'health') loadHealthDetails();
                             if (tabName === 'logs') loadLogs();
+                            if (tabName === 'history') loadAuditHistory();
                         }
                     });
                 });
@@ -2610,6 +2968,42 @@ export class DashboardServer {
             });
         });
 
+        // Include external audit history script
+        function loadAuditHistory() {
+            // Function defined in audit-history.js
+            if (typeof window.loadAuditHistory === 'function') {
+                window.loadAuditHistory();
+            }
+        }
+
+        function loadTaskSummary(taskId) {
+            // Function defined in audit-history.js
+            if (typeof window.loadTaskSummary === 'function') {
+                window.loadTaskSummary(taskId);
+            }
+        }
+
+        function loadAuditStatistics() {
+            // Function defined in audit-history.js
+            if (typeof window.loadAuditStatistics === 'function') {
+                window.loadAuditStatistics();
+            }
+        }
+
+        function applyHistoryFilters() {
+            // Function defined in audit-history.js
+            if (typeof window.applyHistoryFilters === 'function') {
+                window.applyHistoryFilters();
+            }
+        }
+
+        function clearHistoryFilters() {
+            // Function defined in audit-history.js
+            if (typeof window.clearHistoryFilters === 'function') {
+                window.clearHistoryFilters();
+            }
+        }
+
         // Cleanup on page unload
         window.addEventListener('beforeunload', stopAutoRefresh);
         
@@ -2627,6 +3021,7 @@ export class DashboardServer {
             }
         });
     </script>
+    <script src="/audit-history.js"></script>
 </body>
 </html>`;
 	}

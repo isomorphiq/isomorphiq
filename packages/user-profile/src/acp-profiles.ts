@@ -1,9 +1,12 @@
 /* eslint-disable no-unused-vars, @typescript-eslint/no-unused-vars */
+export type ProfilePrincipalType = "agent" | "service" | "user";
+
 export interface ACPProfile {
     getTaskPrompt: (context: Record<string, unknown>) => string;
     name: string;
     role: string;
     systemPrompt: string;
+    principalType: ProfilePrincipalType;
     capabilities?: string[];
     maxConcurrentTasks?: number;
     priority?: number;
@@ -34,6 +37,7 @@ export interface ProfileMetrics {
 export class ProductManagerProfile implements ACPProfile {
 	name = "product-manager";
 	role = "Product Manager";
+	principalType: ProfilePrincipalType = "agent";
 	capabilities = ["analysis", "feature-identification", "user-story-creation", "prioritization"];
 	maxConcurrentTasks = 3;
 	priority = 1;
@@ -82,9 +86,43 @@ Return the feature tickets in a structured format that can be parsed and added t
 	}
 }
 
+export class ProjectManagerProfile implements ACPProfile {
+    name = "project-manager";
+    role = "Project Manager";
+    principalType: ProfilePrincipalType = "agent";
+    capabilities = ["planning", "coordination", "delivery-management", "risk-mitigation"];
+    maxConcurrentTasks = 2;
+    priority = 2;
+    color = "#0ea5e9";
+    icon = "🗂️";
+
+    systemPrompt = `You are a Project Manager focused on translating product intent into an executable delivery plan.
+
+Your goals:
+- Clarify scope, milestones, and dependencies.
+- Coordinate handoffs between roles.
+- Identify risks and sequencing issues early.
+- Provide clear, actionable guidance for execution.`;
+
+    getTaskPrompt(context: Record<string, unknown>): string {
+        const task = context?.task as { title?: string; description?: string } | undefined;
+        return `Act as a Project Manager and prepare execution-ready guidance.
+
+Task:
+${task?.title ?? "Untitled"} - ${task?.description ?? "No description provided."}
+
+Provide:
+1. A short execution plan with milestones.
+2. Key dependencies or blockers.
+3. Suggested assignees or roles for the next step.
+4. Any risks that need escalation.`;
+    }
+}
+
 export class RefinementProfile implements ACPProfile {
 	name = "refinement";
 	role = "Refinement Specialist";
+	principalType: ProfilePrincipalType = "agent";
 	capabilities = ["task-breakdown", "dependency-analysis", "estimation", "technical-planning"];
 	maxConcurrentTasks = 2;
 	priority = 2;
@@ -135,6 +173,7 @@ Return the development tasks in a structured format that can be added to the tas
 export class DevelopmentProfile implements ACPProfile {
 	name = "development";
 	role = "Developer";
+	principalType: ProfilePrincipalType = "agent";
 	capabilities = ["coding", "testing", "debugging", "documentation"];
 	maxConcurrentTasks = 1;
 	priority = 3;
@@ -193,6 +232,7 @@ Focus on writing clean, maintainable code that integrates well with the existing
 export class UXSpecialistProfile implements ACPProfile {
 	name = "ux-specialist";
 	role = "UX Specialist";
+	principalType: ProfilePrincipalType = "agent";
 	capabilities = ["user-research", "story-writing", "acceptance-criteria", "journey-mapping"];
 	maxConcurrentTasks = 2;
 	priority = 2;
@@ -227,6 +267,7 @@ Produce 3-5 stories with AC, priority, and UX notes.`;
 export class QAProfile implements ACPProfile {
 	name = "qa-specialist";
 	role = "QA Specialist";
+	principalType: ProfilePrincipalType = "agent";
 	capabilities = ["test-design", "regression", "failure-analysis"];
 	maxConcurrentTasks = 1;
 	priority = 4;
@@ -251,6 +292,73 @@ If tests passed: confirm readiness to ship.`;
 	}
 }
 
+export class SeniorDeveloperProfile implements ACPProfile {
+    name = "senior-developer";
+    role = "Senior Developer";
+    principalType: ProfilePrincipalType = "agent";
+    capabilities = ["architecture", "implementation", "refactoring", "code-review", "mentorship"];
+    maxConcurrentTasks = 1;
+    priority = 3;
+    color = "#f97316";
+    icon = "🧭";
+
+    systemPrompt = `You are a Senior Developer responsible for high-quality execution and technical leadership.
+
+Your goals:
+- Implement tasks with clean, maintainable code.
+- Choose robust architectural patterns.
+- Provide testing strategy and risk mitigation.
+- Document key decisions for other engineers.`;
+
+    getTaskPrompt(context: Record<string, unknown>): string {
+        const task = context?.task as { title?: string; description?: string; priority?: string } | undefined;
+        return `Execute this task as a Senior Developer:
+
+Title: ${task?.title ?? "Untitled"}
+Description: ${task?.description ?? "No description provided."}
+Priority: ${task?.priority ?? "unspecified"}
+
+Provide:
+1. Implementation plan with key files/modules.
+2. Tests to add or update.
+3. Risks or tradeoffs.
+4. A concise summary of changes.`;
+    }
+}
+
+export class PrincipalArchitectProfile implements ACPProfile {
+    name = "principal-architect";
+    role = "Principal Architect";
+    principalType: ProfilePrincipalType = "agent";
+    capabilities = ["system-design", "architecture", "risk-analysis", "technical-strategy"];
+    maxConcurrentTasks = 1;
+    priority = 2;
+    color = "#6366f1";
+    icon = "🏛️";
+
+    systemPrompt = `You are a Principal Architect focused on system-level decisions and technical strategy.
+
+Your goals:
+- Evaluate architectural impact of changes.
+- Identify long-term risks and opportunities.
+- Define clear interfaces and boundaries.
+- Keep the system cohesive and scalable.`;
+
+    getTaskPrompt(context: Record<string, unknown>): string {
+        const task = context?.task as { title?: string; description?: string } | undefined;
+        return `Review this task from an architecture standpoint:
+
+Title: ${task?.title ?? "Untitled"}
+Description: ${task?.description ?? "No description provided."}
+
+Provide:
+1. Architectural approach and key constraints.
+2. Interfaces or contracts to define.
+3. Risks and mitigation strategies.
+4. Suggested sequencing for downstream implementation.`;
+    }
+}
+
 export class ProfileManager {
 	private profiles: Map<string, ACPProfile> = new Map();
 	private profileStates: Map<string, ProfileState> = new Map();
@@ -262,6 +370,9 @@ export class ProfileManager {
 
 	constructor() {
 		this.registerProfile(new ProductManagerProfile());
+		this.registerProfile(new ProjectManagerProfile());
+		this.registerProfile(new PrincipalArchitectProfile());
+		this.registerProfile(new SeniorDeveloperProfile());
 		this.registerProfile(new RefinementProfile());
 		this.registerProfile(new DevelopmentProfile());
 		this.registerProfile(new UXSpecialistProfile());
@@ -302,9 +413,9 @@ export class ProfileManager {
 	getProfileSequence(): ACPProfile[] {
 		const profiles = [
 			this.getProfile("product-manager"),
-			this.getProfile("ux-specialist"),
-			this.getProfile("refinement"),
-			this.getProfile("development"),
+			this.getProfile("project-manager"),
+			this.getProfile("principal-architect"),
+			this.getProfile("senior-developer"),
 			this.getProfile("qa-specialist"),
 		];
 

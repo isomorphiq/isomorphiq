@@ -1,5 +1,13 @@
-import type { Task } from "@isomorphiq/tasks";
 import type { WorkflowStateName } from "./workflow.ts";
+
+export type WorkflowTask = {
+	id?: string;
+	title?: string;
+	description?: string;
+	type?: string;
+	status?: string;
+	priority?: string;
+};
 
 export type TransitionEffect = (payload?: unknown) => Promise<unknown> | unknown | Generator;
 
@@ -21,8 +29,9 @@ export interface StateDefinition<
 	profile: string;
 	targetType?: string;
 	promptHint?: string;
+	defaultTransition?: string;
 	transitions: TDefs;
-	decider?: (tasks: Task[]) => TDefs[number]["name"];
+	decider?: (tasks: WorkflowTask[]) => TDefs[number]["name"];
 }
 
 export interface RuntimeTransition {
@@ -42,8 +51,9 @@ export interface RuntimeState<
 	profile: string;
 	targetType?: string;
 	promptHint?: string;
+	defaultTransition?: string;
 	transitions: TransitionRecord<TNames>;
-	decider?: (tasks: Task[]) => TNames;
+	decider?: (tasks: WorkflowTask[]) => TNames;
 }
 
 export function createTransition<Name extends string, Next extends WorkflowStateName>(
@@ -71,6 +81,7 @@ export function createState<
 		profile: def.profile,
 		targetType: def.targetType,
 		promptHint: def.promptHint,
+		defaultTransition: def.defaultTransition,
 		transitions: transitions as TransitionRecord<TDefs[number]["name"]>,
 		decider: def.decider,
 	};

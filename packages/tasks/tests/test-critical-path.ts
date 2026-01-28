@@ -1,5 +1,5 @@
-import type { Task } from "./src/types.ts";
-import { CriticalPathService } from "@isomorphiq/service-critical-path";
+import { CriticalPathService } from "@isomorphiq/tasks/critical-path";
+import type { Task } from "../src/types.ts";
 
 // Create sample tasks for testing
 const sampleTasks: Task[] = [

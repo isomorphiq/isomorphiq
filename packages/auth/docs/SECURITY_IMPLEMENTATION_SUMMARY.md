@@ -104,7 +104,7 @@ Successfully implemented comprehensive enterprise-grade security and compliance 
 - Integration with existing `src/http-api-server.ts`
 
 ### Web Interface
-- `web/src/components/SecurityDashboard.tsx` - React dashboard component (400+ lines)
+- `packages/appshell/src/components/SecurityDashboard.tsx` - React dashboard component (400+ lines)
 - Responsive design with Tailwind CSS
 - Real-time updates and interactive management
 
