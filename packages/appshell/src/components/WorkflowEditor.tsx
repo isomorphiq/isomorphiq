@@ -6,7 +6,7 @@ import type {
 	WorkflowDefinition,
 	WorkflowNodeType,
 } from "@isomorphiq/workflow/types";
-import { WorkflowBuilder, type WorkflowNodeTypeConfig } from "./WorkflowBuilder.tsx";
+import { WorkflowBuilder, type WorkflowNodeTypeConfig } from "./WorkflowBuilder";
 
 interface WorkflowEditorProps {
 	workflow?: WorkflowDefinition;

@@ -2,10 +2,10 @@ import type { Task } from "@isomorphiq/tasks/types";
 import { Hero } from "../../components/Hero.tsx";
 import type { AuthState, DashboardTotals } from "../../hooks/useDashboardTasks.ts";
 import type { OfflineTask } from "../../hooks/useOfflineSync.ts";
-import { CreateTaskSection } from "./CreateTaskSection.tsx";
-import { QueueSection } from "./QueueSection.tsx";
-import { SummarySection } from "./SummarySection.tsx";
-import { TaskSection } from "./TaskSection.tsx";
+import { CreateTaskSection } from "./CreateTaskSection";
+import { QueueSection } from "./QueueSection";
+import { SummarySection } from "./SummarySection";
+import { TaskSection } from "./TaskSection";
 
 type DashboardViewProps = {
 	auth: AuthState;

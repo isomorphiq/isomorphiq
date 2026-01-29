@@ -1,7 +1,12 @@
 import express from "express";
 import type { ProductManager } from "@isomorphiq/tasks";
+import { normalizeProductManagerResolver, type ProductManagerResolver } from "./route-helpers.ts";
 
-export function registerMetricsRoutes(app: express.Application, pm: ProductManager) {
+export function registerMetricsRoutes(
+    app: express.Application,
+    pmOrResolver: ProductManager | ProductManagerResolver,
+) {
+    const resolvePm = normalizeProductManagerResolver(pmOrResolver);
     const router = express.Router();
 
     router.get("/health", (_req, res) => {
@@ -13,10 +18,11 @@ export function registerMetricsRoutes(app: express.Application, pm: ProductManag
         });
     });
 
-    router.get("/stats", async (_req, res, next) => {
+    router.get("/stats", async (req, res, next) => {
         try {
             console.log("[HTTP API] GET /api/stats - Getting task statistics");
 
+            const pm = resolvePm(req);
             const allTasks = await pm.getAllTasks();
 
             const stats = {
@@ -39,10 +45,11 @@ export function registerMetricsRoutes(app: express.Application, pm: ProductManag
         }
     });
 
-    router.get("/analytics", async (_req, res, next) => {
+    router.get("/analytics", async (req, res, next) => {
         try {
             console.log("[HTTP API] GET /api/analytics - Getting advanced analytics");
 
+            const pm = resolvePm(req);
             const allTasks = await pm.getAllTasks();
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());

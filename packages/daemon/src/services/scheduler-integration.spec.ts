@@ -21,7 +21,14 @@ class IntegrationTestProductManager implements ProductManager {
 		assignedTo?: string,
 		collaborators?: string[],
 		watchers?: string[],
-		type: "feature" | "story" | "task" | "integration" | "research" = "task"
+		type:
+			| "feature"
+			| "story"
+			| "task"
+			| "implementation"
+			| "integration"
+			| "testing"
+			| "research" = "task"
 	) {
 		const task = {
 			id: `task_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
@@ -74,7 +81,6 @@ class IntegrationTestProductManager implements ProductManager {
 	updateProfileStatus() { return {} as any; }
 	getBestProfileForTask() { return null; }
 	assignTaskToProfile() { return {} as any; }
-	processTasksLoop() { return Promise.resolve(); }
 }
 
 describe("TaskScheduler Integration Tests", () => {

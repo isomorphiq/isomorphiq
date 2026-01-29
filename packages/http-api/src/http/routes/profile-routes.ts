@@ -1,21 +1,31 @@
 import express from "express";
-import type { ProductManager } from "@isomorphiq/tasks";
+import type { ProfileManager } from "@isomorphiq/user-profile";
+import {
+    normalizeProfileManagerResolver,
+    type ProfileManagerResolver,
+} from "./route-helpers.ts";
 
-export function registerProfileRoutes(app: express.Application, pm: ProductManager) {
+export function registerProfileRoutes(
+    app: express.Application,
+    managerOrResolver: ProfileManager | ProfileManagerResolver,
+) {
+    const resolveProfiles = normalizeProfileManagerResolver(managerOrResolver);
     const router = express.Router();
 
-    router.get("/with-states", async (_req, res, next) => {
+    router.get("/with-states", async (req, res, next) => {
         try {
-            const profiles = pm.getProfilesWithStates();
+            const manager = resolveProfiles(req);
+            const profiles = manager.getProfilesWithStates();
             res.json(profiles);
         } catch (error) {
             next(error);
         }
     });
 
-    router.get("/states", async (_req, res, next) => {
+    router.get("/states", async (req, res, next) => {
         try {
-            const states = pm.getAllProfileStates();
+            const manager = resolveProfiles(req);
+            const states = manager.getAllProfileStates();
             res.json(states);
         } catch (error) {
             next(error);
@@ -24,7 +34,8 @@ export function registerProfileRoutes(app: express.Application, pm: ProductManag
 
     router.get("/:name/state", async (req, res, next) => {
         try {
-            const state = pm.getProfileState(req.params.name);
+            const manager = resolveProfiles(req);
+            const state = manager.getProfileState(req.params.name);
             if (!state) {
                 return res.status(404).json({ error: "Profile not found" });
             }
@@ -36,7 +47,8 @@ export function registerProfileRoutes(app: express.Application, pm: ProductManag
 
     router.get("/:name/metrics", async (req, res, next) => {
         try {
-            const metrics = pm.getProfileMetrics(req.params.name);
+            const manager = resolveProfiles(req);
+            const metrics = manager.getProfileMetrics(req.params.name);
             if (!metrics) {
                 return res.status(404).json({ error: "Profile not found" });
             }
@@ -46,9 +58,10 @@ export function registerProfileRoutes(app: express.Application, pm: ProductManag
         }
     });
 
-    router.get("/metrics", async (_req, res, next) => {
+    router.get("/metrics", async (req, res, next) => {
         try {
-            const metrics = Object.fromEntries(pm.getAllProfileMetrics());
+            const manager = resolveProfiles(req);
+            const metrics = Object.fromEntries(manager.getAllProfileMetrics());
             res.json(metrics);
         } catch (error) {
             next(error);
@@ -57,7 +70,8 @@ export function registerProfileRoutes(app: express.Application, pm: ProductManag
 
     router.get("/:name/queue", async (req, res, next) => {
         try {
-            const queue = pm.getProfileTaskQueue(req.params.name);
+            const manager = resolveProfiles(req);
+            const queue = manager.getTaskQueue(req.params.name);
             res.json(queue);
         } catch (error) {
             next(error);
@@ -71,10 +85,12 @@ export function registerProfileRoutes(app: express.Application, pm: ProductManag
                 return res.status(400).json({ error: "isActive must be a boolean" });
             }
 
-            const success = pm.updateProfileStatus(req.params.name, isActive);
-            if (!success) {
+            const manager = resolveProfiles(req);
+            const state = manager.getProfileState(req.params.name);
+            if (!state) {
                 return res.status(404).json({ error: "Profile not found" });
             }
+            manager.updateProfileState(req.params.name, { isActive });
 
             res.json({ success: true });
         } catch (error) {
@@ -89,10 +105,12 @@ export function registerProfileRoutes(app: express.Application, pm: ProductManag
                 return res.status(400).json({ error: "Task must have title and description" });
             }
 
-            const success = pm.assignTaskToProfile(req.params.name, task);
-            if (!success) {
+            const manager = resolveProfiles(req);
+            const profile = manager.getProfile(req.params.name);
+            if (!profile) {
                 return res.status(404).json({ error: "Profile not found" });
             }
+            manager.addToTaskQueue(req.params.name, task);
 
             res.json({ success: true });
         } catch (error) {
@@ -107,7 +125,8 @@ export function registerProfileRoutes(app: express.Application, pm: ProductManag
                 return res.status(400).json({ error: "Task must have title" });
             }
 
-            const bestProfile = pm.getBestProfileForTask(task);
+            const manager = resolveProfiles(req);
+            const bestProfile = manager.getBestProfileForTask(task);
             res.json({ bestProfile });
         } catch (error) {
             next(error);

@@ -3,7 +3,14 @@ import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { authAtom } from "../authAtoms.ts";
-import { ThemeToggle } from "./ThemeToggle.tsx";
+import type { EnvironmentConfig } from "../environment.ts";
+import {
+	fetchEnvironmentConfig,
+	getEnvironment,
+	setEnvironment,
+	setEnvironmentHeaderName,
+} from "../environment.ts";
+import { ThemeToggle } from "./ThemeToggle";
 
 type LayoutProps = {
 	children: ReactNode;
@@ -29,6 +36,8 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 		allowNonAdminWrites: false,
 	});
 	const [adminSettingsError, setAdminSettingsError] = useState<string | null>(null);
+	const [environmentConfig, setEnvironmentConfig] = useState<EnvironmentConfig | null>(null);
+	const [environment, setEnvironmentState] = useState<string>(getEnvironment());
 
 	const navItems = [
 		{ to: "/", label: "Dashboard", icon: "📊" },
@@ -56,6 +65,26 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 			setNavOpen(false);
 		}
 	}, [isMobile]);
+
+	useEffect(() => {
+		let isMounted = true;
+		const loadEnvironments = async () => {
+			const config = await fetchEnvironmentConfig();
+			if (!isMounted || !config) return;
+			setEnvironmentConfig(config);
+			setEnvironmentHeaderName(config.headerName);
+			const current = getEnvironment();
+			const resolved = config.available.includes(current) ? current : config.default;
+			if (resolved !== current) {
+				setEnvironment(resolved);
+			}
+			setEnvironmentState(resolved);
+		};
+		loadEnvironments();
+		return () => {
+			isMounted = false;
+		};
+	}, []);
 
 	const isAdminUser = auth.user?.username === "nyan";
 
@@ -105,6 +134,15 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 			console.error("Failed to update admin settings", error);
 			setAdminSettingsError("Failed to update admin settings");
 		}
+	};
+
+	const handleEnvironmentChange = (nextEnvironment: string) => {
+		if (!nextEnvironment || nextEnvironment === environment) {
+			return;
+		}
+		setEnvironment(nextEnvironment);
+		setEnvironmentState(nextEnvironment);
+		window.location.reload();
 	};
 
 	return (
@@ -226,6 +264,20 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 						justifyContent: isMobile ? "space-between" : "flex-end",
 					}}
 				>
+					<div style={environmentControl}>
+						<span style={environmentLabel}>Env</span>
+						<select
+							value={environment}
+							onChange={(event) => handleEnvironmentChange(event.target.value)}
+							style={environmentSelect}
+						>
+							{(environmentConfig?.available ?? [environment]).map((name) => (
+								<option key={name} value={name}>
+									{name}
+								</option>
+							))}
+						</select>
+					</div>
 					<ThemeToggle size="small" />
 					{auth.isAuthenticated && auth.user ? (
 					<div style={{ position: "relative" }}>
@@ -385,6 +437,35 @@ const navShell: CSSProperties = {
 	borderRadius: "12px",
 	padding: "10px 12px",
 	boxShadow: "0 10px 24px var(--color-shadow-lg)",
+};
+
+const environmentControl: CSSProperties = {
+	display: "flex",
+	alignItems: "center",
+	gap: "8px",
+	padding: "6px 10px",
+	borderRadius: "10px",
+	background: "var(--color-surface-secondary)",
+	border: "1px solid var(--color-border-primary)",
+	fontSize: "12px",
+	fontWeight: 700,
+	color: "var(--color-text-primary)",
+};
+
+const environmentLabel: CSSProperties = {
+	fontSize: "11px",
+	textTransform: "uppercase",
+	letterSpacing: "0.08em",
+	color: "var(--color-text-muted)",
+};
+
+const environmentSelect: CSSProperties = {
+	border: "none",
+	background: "transparent",
+	color: "var(--color-text-primary)",
+	fontWeight: 700,
+	fontSize: "12px",
+	cursor: "pointer",
 };
 
 const userButton: CSSProperties = {

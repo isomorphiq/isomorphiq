@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { SectionCard } from "./SectionCard.tsx";
+import { SectionCard } from "./SectionCard";
 
 interface ProfileMetrics {
 	throughput: number;

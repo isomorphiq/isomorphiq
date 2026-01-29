@@ -1,5 +1,6 @@
 import path from "node:path";
-import { Level } from "level";
+import type { KeyValueStore, KeyValueStoreFactory } from "./persistence/key-value-store.ts";
+import { createLevelStore } from "./persistence/key-value-store.ts";
 import type {
     AutomationRule,
     CreateTaskFromTemplateInput,
@@ -11,15 +12,21 @@ import type {
 } from "./types.ts";
 
 // Template Manager class to handle template operations
+export type TemplateManagerOptions = {
+    storeFactory?: KeyValueStoreFactory;
+};
+
 export class TemplateManager {
-	private templateDb!: Level<string, TaskTemplate>;
-	private ruleDb!: Level<string, AutomationRule>;
+	private templateDb!: KeyValueStore<string, TaskTemplate>;
+	private ruleDb!: KeyValueStore<string, AutomationRule>;
 	private dbReady = false;
 	private dbPath: string;
 	private initializing = false;
+    private storeFactory: KeyValueStoreFactory;
 
-	constructor(dbPath?: string) {
+	constructor(dbPath?: string, options: TemplateManagerOptions = {}) {
 		this.dbPath = dbPath || path.join(process.cwd(), "db");
+        this.storeFactory = options.storeFactory ?? createLevelStore;
 	}
 
 	// Ensure databases are open
@@ -35,14 +42,10 @@ export class TemplateManager {
 
 		this.initializing = true;
 		try {
-			this.templateDb = new Level<string, TaskTemplate>(path.join(this.dbPath, "templates"), {
-				valueEncoding: "json",
-			});
-			this.ruleDb = new Level<string, AutomationRule>(path.join(this.dbPath, "automation-rules"), {
-				valueEncoding: "json",
-			});
+			this.templateDb = this.storeFactory<string, TaskTemplate>(path.join(this.dbPath, "templates"));
+			this.ruleDb = this.storeFactory<string, AutomationRule>(path.join(this.dbPath, "automation-rules"));
 
-			await this.templateDb.open();
+            await this.templateDb.open();
 			await this.ruleDb.open();
 			this.dbReady = true;
 			console.log("[TEMPLATE] Template databases opened successfully");

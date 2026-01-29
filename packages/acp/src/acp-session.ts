@@ -20,6 +20,7 @@ export async function startAcpSession(
 	taskId?: string,
 ): Promise<AcpSession> {
 	const result = await ACPConnectionManager.createConnection();
+	result.taskClient.profileName = profile;
 	return {
 		sessionId: result.sessionId,
 		connection: result.connection,

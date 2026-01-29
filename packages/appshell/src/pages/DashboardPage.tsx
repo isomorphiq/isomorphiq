@@ -4,7 +4,7 @@ import { PWAInstallPrompt } from "../components/PWAInstallPrompt.tsx";
 import { EnhancedErrorBoundary } from "../components/UIComponents.tsx";
 import { useDashboardTasks } from "../hooks/useDashboardTasks.ts";
 import { useIsMobile } from "../hooks/useIsMobile.ts";
-import { DashboardView } from "./dashboard/DashboardView.tsx";
+import { DashboardView } from "./dashboard/DashboardView";
 
 export function DashboardPage() {
     const {

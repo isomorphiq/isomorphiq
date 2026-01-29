@@ -1,5 +1,5 @@
+import "../../../tests/test-utils/env-fetch.ts";
 import { UserManager } from "@isomorphiq/auth";
-import fetch from "node-fetch";
 
 const API_BASE = "http://localhost:3003";
 

@@ -7,6 +7,7 @@ export interface ACPProfile {
     role: string;
     systemPrompt: string;
     principalType: ProfilePrincipalType;
+    modelName?: string;
     capabilities?: string[];
     maxConcurrentTasks?: number;
     priority?: number;
@@ -38,6 +39,7 @@ export class ProductManagerProfile implements ACPProfile {
 	name = "product-manager";
 	role = "Product Manager";
 	principalType: ProfilePrincipalType = "agent";
+    modelName = "lmstudio/nvidia/nemotron-3-nano";
 	capabilities = ["analysis", "feature-identification", "user-story-creation", "prioritization"];
 	maxConcurrentTasks = 3;
 	priority = 1;
@@ -66,8 +68,49 @@ Create feature tickets with:
 Return your response as a structured list of feature tickets.`;
 
 	getTaskPrompt(context: Record<string, unknown>): string {
-		void context;
-		return `As a Product Manager, analyze this task manager system and create feature tickets.
+		const workflow = context?.workflow as { state?: string } | undefined;
+        const transition =
+            typeof context?.workflowTransition === "string"
+                ? context.workflowTransition
+                : undefined;
+        const isProductResearch =
+            transition === "retry-product-research" ||
+            transition === "research-new-features" ||
+            workflow?.state === "new-feature-proposed";
+        const isFeaturePrioritization = transition === "prioritize-features";
+        if (isFeaturePrioritization) {
+            return `As a Product Manager, prioritize existing feature tasks.
+
+You MUST use MCP tools to complete this step.
+
+Step-by-step:
+1) Call list_tasks (no arguments) to fetch all tasks.
+2) From the result, select only tasks where type is "feature" and status is "todo" or "in-progress".
+3) Decide the priority order (high > medium > low). If only one feature exists, it is already prioritized.
+4) For any feature whose priority should change, call update_task_priority once per task.
+
+Tool call format (JSON):
+- list_tasks: {}
+- update_task_priority: { "id": "<task_id>", "priority": "high|medium|low", "changedBy": "product-manager" }
+
+Do NOT create new tasks in this step.
+
+Response format (plain text):
+- Summary: <one sentence>
+- Ordered features: <id1>:<priority>, <id2>:<priority>, ...
+- Changes applied: <id>:<old>-><new> (or "none")`;
+        }
+        if (isProductResearch) {
+            return `As a Product Manager, propose product features for the backlog.
+
+Use MCP tool calls to create the features:
+- Call create_task once per feature.
+- Include type: "feature", createdBy: "product-manager", and priority: low|medium|high.
+- After creating features, call list_tasks to confirm they exist.
+
+Return a short summary of what you created.`;
+		}
+        return `As a Product Manager, analyze this task manager system and create feature tickets.
 
 Current System Overview:
 - Task manager daemon with ACP protocol execution
@@ -106,6 +149,28 @@ Your goals:
 
     getTaskPrompt(context: Record<string, unknown>): string {
         const task = context?.task as { title?: string; description?: string } | undefined;
+        const workflowContext = context?.workflow as
+            | { state?: string; transition?: string }
+            | undefined;
+        const transition =
+            workflowContext?.transition ??
+            (typeof context?.workflowTransition === "string" ? context.workflowTransition : undefined);
+        if (transition === "review-task-validity" || transition === "close-invalid-task") {
+            return `Review this ticket for implementation readiness and decide whether it should proceed or be closed as invalid.
+
+Task:
+${task?.title ?? "Untitled"} - ${task?.description ?? "No description provided."}
+
+Close as invalid if any of the following are true:
+- The title/description indicates a test, dummy, sample, placeholder, validation, or synthetic ticket (e.g., "test task", "testing", "sample", "example", "lorem ipsum").
+- It lacks a concrete problem statement, expected outcome, or acceptance criteria.
+- It is missing real user impact or production relevance.
+
+Return only:
+Decision: proceed | close
+Reason: <one concise sentence>`;
+        }
+
         return `Act as a Project Manager and prepare execution-ready guidance.
 
 Task:
@@ -151,22 +216,65 @@ Break down features into:
 Return your response as a structured list of development tasks.`;
 
 	getTaskPrompt(context: Record<string, unknown>): string {
-		const { featureTickets } = context;
-		return `As a Refinement Specialist, break down these feature tickets into actionable development tasks:
+		const story = context?.task as { title?: string; description?: string; id?: string } | undefined;
+        const transition =
+            typeof context?.workflowTransition === "string"
+                ? context.workflowTransition
+                : undefined;
+        const isRefinementPass =
+            transition === "refine-into-tasks" || transition === "need-more-tasks";
+        if (isRefinementPass) {
+            return `As a Refinement Specialist, break down the highest-priority story into actionable development tasks.
 
-Feature Tickets to Refine:
-${(featureTickets as Array<{ title: string; description: string }>)
-	.map((ticket, i: number) => `${i + 1}. ${ticket.title}: ${ticket.description}`)
-	.join("\n")}
+If a story is not provided, call list_tasks and select the highest-priority story with status todo.
 
-Please:
-1. Analyze each feature ticket for technical requirements
-2. Break down each feature into 3-7 specific development tasks
-3. Include research, implementation, testing, and documentation tasks
-4. Order tasks logically considering dependencies
-5. Assign appropriate priority levels
+Story:
+${story?.title ?? "Untitled"} - ${story?.description ?? "No description provided."}
 
-Return the development tasks in a structured format that can be added to the task system.`;
+You MUST use MCP tool calls to complete this step.
+
+Step-by-step:
+1) Call list_tasks (no arguments) to fetch all tasks.
+2) Choose the highest-priority story (type "story", status "todo" or "in-progress").
+3) Create 3-7 tasks using create_task.
+4) Use type "implementation" for build work and "testing" for test work.
+5) Include acceptance criteria in each description.
+6) Include the story id as a dependency when available.
+7) After creating tasks, call list_tasks again to confirm they exist.
+
+Tool call format (JSON):
+- list_tasks: {}
+- create_task: {
+  "title": "...",
+  "description": "...",
+  "priority": "low|medium|high",
+  "type": "implementation|testing",
+  "createdBy": "refinement",
+  "dependencies": ["<story_id>"]
+}
+
+Response format (plain text):
+- Summary: <one sentence>
+- Story used: <story_id or "none">
+- Tasks created: <id1>:<type>:<priority>, <id2>:<type>:<priority>, ...
+- Notes: <blocking issues or "none">`;
+        }
+        return `As a Refinement Specialist, break down the highest-priority story into actionable development tasks.
+
+If a story is not provided, call list_tasks and select the highest-priority story with status todo.
+
+Story:
+${story?.title ?? "Untitled"} - ${story?.description ?? "No description provided."}
+
+Use MCP tool calls:
+- Create 3-7 tasks using create_task.
+- Use type: "implementation" for build work and "testing" for test work.
+- Include acceptance criteria in the description.
+- Use createdBy: "refinement".
+- If the story has an id, include it as a dependency.
+- After creating, call list_tasks to confirm they exist.
+
+Return a short summary of what you created.`;
 	}
 }
 
@@ -225,6 +333,10 @@ Please:
 4. Document any important changes
 5. Return a summary of what was accomplished
 
+Use MCP tool calls:
+- Call update_task_status to mark the task in-progress before you start.
+- After changes and tests pass, call update_task_status to mark the task done.
+
 Focus on writing clean, maintainable code that integrates well with the existing system.`;
 	}
 }
@@ -233,6 +345,7 @@ export class UXSpecialistProfile implements ACPProfile {
 	name = "ux-specialist";
 	role = "UX Specialist";
 	principalType: ProfilePrincipalType = "agent";
+    modelName = "OpenCode Zen/Kimi K2.5 Free";
 	capabilities = ["user-research", "story-writing", "acceptance-criteria", "journey-mapping"];
 	maxConcurrentTasks = 2;
 	priority = 2;
@@ -255,19 +368,100 @@ Output:
 		const feature = (context?.feature || context?.task || {}) as {
 			title?: string;
 			description?: string;
+			id?: string;
 		};
-		return `Convert this feature into user stories with UX focus:
-Feature: ${feature.title ?? "Unnamed"}
-Description: ${feature.description ?? ""}
+        const transition =
+            typeof context?.workflowTransition === "string"
+                ? context.workflowTransition
+                : undefined;
+        const isUxResearch = transition === "do-ux-research";
+        if (isUxResearch) {
+            return `Convert the top feature into 3-5 user stories.
 
-Produce 3-5 stories with AC, priority, and UX notes.`;
+You MUST use MCP tools to create the stories.
+
+Step-by-step:
+1) Call list_tasks (no arguments) to fetch all tasks.
+2) Select the highest-priority feature (type "feature", status todo or in-progress).
+3) Create 3-5 story tasks using create_task (one tool call per story).
+4) Each story must include: title, description, acceptance criteria, UX notes, and priority.
+5) Use type "story" and createdBy "ux-specialist".
+6) If the feature has an id, include it as a dependency for each story.
+7) Call list_tasks again to confirm the stories exist.
+
+Tool call format (JSON):
+- list_tasks: {}
+- create_task: {
+  "title": "...",
+  "description": "Story: ...\\nAcceptance Criteria: ...\\nUX Notes: ...",
+  "priority": "low|medium|high",
+  "type": "story",
+  "createdBy": "ux-specialist",
+  "dependencies": ["<feature_id>"]
+}
+
+Response format (plain text):
+- Summary: <one sentence>
+- Feature used: <feature_id or "none">
+- Stories created: <id1>:<priority>, <id2>:<priority>, ...
+- Notes: <open UX risks or "none">`;
+        }
+		return `Convert the top feature into user stories with UX focus.
+
+If a feature is not provided below, call list_tasks and select the highest-priority feature with status todo.
+
+Feature:
+${feature.title ?? "Unnamed"} - ${feature.description ?? ""}
+
+Use MCP tool calls:
+- Call create_task once per story (3-5 total).
+- Each story should include title, description, acceptance criteria, UX notes, and priority.
+- Use type: "story" and createdBy: "ux-specialist".
+- If the feature has an id, include it as a dependency.
+- After creating, call list_tasks to confirm they exist.
+
+Return a short summary of what you created.`;
 	}
+}
+
+export class UXResearcherProfile implements ACPProfile {
+    name = "ux-researcher";
+    role = "UX Researcher";
+    principalType: ProfilePrincipalType = "agent";
+    modelName = "lmstudio/nvidia/nemotron-3-nano";
+    capabilities = ["user-research", "prioritization", "feature-evaluation", "journey-mapping"];
+    maxConcurrentTasks = 2;
+    priority = 2;
+    color = "#f59e0b";
+    icon = "🧪";
+
+    systemPrompt = `You are a UX Researcher focused on assessing and prioritizing features based on user value and impact.
+
+Your goals:
+- Evaluate feature proposals through a UX lens.
+- Prioritize based on user pain, reach, and effort.
+- Highlight risks, unknowns, and required validation.
+
+Output:
+- A concise prioritization of features with brief reasoning.
+- Any UX research questions to validate assumptions.`;
+
+    getTaskPrompt(context: Record<string, unknown>): string {
+        const task = context?.task as { title?: string; description?: string } | undefined;
+        return `Prioritize these features using a UX research lens.
+
+Current focus item:
+${task?.title ?? "Untitled"} - ${task?.description ?? "No description provided."}
+
+Return a prioritized list with brief rationale.`;
+    }
 }
 
 export class QAProfile implements ACPProfile {
 	name = "qa-specialist";
 	role = "QA Specialist";
 	principalType: ProfilePrincipalType = "agent";
+    modelName = "lmstudio/nvidia/nemotron-3-nano";
 	capabilities = ["test-design", "regression", "failure-analysis"];
 	maxConcurrentTasks = 1;
 	priority = 4;
@@ -288,7 +482,11 @@ Your goals:
 Test output (if any):
 ${result?.output ?? "No prior test output provided."}
 If tests failed: summarize failures and next steps.
-If tests passed: confirm readiness to ship.`;
+If tests passed: confirm readiness to ship.
+
+Use MCP tool calls:
+- If tests pass, update_task_status to mark the task done.
+- If tests fail, update_task_status to keep the task in-progress and summarize failures.`;
 	}
 }
 
@@ -296,6 +494,7 @@ export class SeniorDeveloperProfile implements ACPProfile {
     name = "senior-developer";
     role = "Senior Developer";
     principalType: ProfilePrincipalType = "agent";
+    modelName = "OpenCode Zen/Kimi K2.5 Free";
     capabilities = ["architecture", "implementation", "refactoring", "code-review", "mentorship"];
     maxConcurrentTasks = 1;
     priority = 3;
@@ -376,6 +575,7 @@ export class ProfileManager {
 		this.registerProfile(new RefinementProfile());
 		this.registerProfile(new DevelopmentProfile());
 		this.registerProfile(new UXSpecialistProfile());
+		this.registerProfile(new UXResearcherProfile());
 		this.registerProfile(new QAProfile());
 		this.initializeProfileStates();
 	}
@@ -409,6 +609,39 @@ export class ProfileManager {
 	getAllProfiles(): ACPProfile[] {
 		return Array.from(this.profiles.values());
 	}
+
+    getProfilesWithStates(): Array<{
+        profile: ACPProfile;
+        state: ProfileState;
+        metrics: ProfileMetrics;
+    }> {
+        const profiles = this.getAllProfiles();
+        return profiles.map((profile) => {
+            const state =
+                this.getProfileState(profile.name)
+                ?? ({
+                    name: profile.name,
+                    isActive: true,
+                    currentTasks: 0,
+                    completedTasks: 0,
+                    failedTasks: 0,
+                    averageProcessingTime: 0,
+                    lastActivity: new Date(),
+                    queueSize: 0,
+                    isProcessing: false,
+                } satisfies ProfileState);
+            const metrics =
+                this.getProfileMetrics(profile.name)
+                ?? ({
+                    throughput: 0,
+                    successRate: 100,
+                    averageTaskDuration: 0,
+                    queueWaitTime: 0,
+                    errorRate: 0,
+                } satisfies ProfileMetrics);
+            return { profile, state, metrics };
+        });
+    }
 
 	getProfileSequence(): ACPProfile[] {
 		const profiles = [

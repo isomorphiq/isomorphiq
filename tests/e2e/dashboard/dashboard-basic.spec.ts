@@ -1,5 +1,5 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
-import { expect } from "../../test-utils/expect.ts";
+import { expect } from "../../../test-utils/expect.ts";
 import { DashboardServer } from "@isomorphiq/daemon";
 import { WebSocketManager } from "@isomorphiq/realtime";
 import { ProductManager } from "@isomorphiq/tasks";

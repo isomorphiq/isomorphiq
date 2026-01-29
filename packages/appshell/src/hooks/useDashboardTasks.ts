@@ -4,7 +4,7 @@ import { useAtom, useSetAtom } from "jotai";
 import { useEffect, useMemo, useState } from "react";
 import { filteredTasksAtom, lastEventAtom, queueAtom, refreshAtom, tasksAtom } from "../atoms.ts";
 import { authAtom } from "../authAtoms.ts";
-import { type OfflineTask, offlineStorage, useOfflineSync } from "./useOfflineSync.ts";
+import { type OfflineTask, offlineStorage, useOfflineSync } from "./useOfflineSync";
 
 const LOG_PREFIX = "[dashboardTasks]";
 

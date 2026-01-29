@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../../../tests/test-utils/env-fetch.ts";
 
 import { ProductManager } from "@isomorphiq/tasks";
 import { UserManager } from "@isomorphiq/auth";

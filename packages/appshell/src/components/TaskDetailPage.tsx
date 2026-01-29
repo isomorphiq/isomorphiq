@@ -4,10 +4,10 @@ import { useEffect, useMemo } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { Task } from "@isomorphiq/tasks/types";
 import { queueAtom, refreshAtom, tasksAtom } from "../atoms.ts";
-import { Header, Layout } from "./Layout.tsx";
-import { PriorityBadge } from "./PriorityBadge.tsx";
-import { SectionCard } from "./SectionCard.tsx";
-import { TypeBadge } from "./TypeBadge.tsx";
+import { Header, Layout } from "./Layout";
+import { PriorityBadge } from "./PriorityBadge";
+import { SectionCard } from "./SectionCard";
+import { TypeBadge } from "./TypeBadge";
 
 const metaRowStyle: CSSProperties = {
 	display: "grid",

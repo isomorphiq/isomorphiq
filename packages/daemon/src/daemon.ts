@@ -1,13 +1,18 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
 import { createServer, type Socket } from "node:net";
-import { ProductManager } from "@isomorphiq/tasks";
+import fs from "node:fs";
+import path from "node:path";
+import { createTaskSearchService, ProductManager, type TaskSearchService } from "@isomorphiq/tasks";
 import { getUserManager } from "@isomorphiq/auth";
 import { WebSocketManager } from "@isomorphiq/realtime";
 import { startHttpServer } from "@isomorphiq/http-server";
 import type { Result } from "@isomorphiq/core";
+import { ConfigManager, resolveEnvironmentFromHeaders, resolveEnvironmentValue } from "@isomorphiq/core";
 import { ProfileManager } from "@isomorphiq/user-profile";
 import { createWorkflowAgentRunner } from "@isomorphiq/workflow/agent-runner";
+import { ProfileWorkflowRunner } from "@isomorphiq/workflow";
+import { startMcpServer } from "@isomorphiq/mcp";
 import { DashboardServer } from "./web/dashboard.ts";
 import { TaskMonitor } from "./services/task-monitor.ts";
 import { NotificationService } from "./services/notification-service.ts";
@@ -18,39 +23,418 @@ import { MockTeamsProvider } from "./services/teams-provider.ts";
 import { TaskScheduler } from "./services/scheduler.ts";
 import { DependencyGraphService } from "./services/dependency-graph.ts";
 import { TaskAuditService } from "./services/task-audit-service.ts";
+import { ProgressTrackingService } from "./services/progress-tracking-service.ts";
+import { DashboardAnalyticsService } from "./services/dashboard-analytics-service.ts";
+import { RecommendationAnalyticsService } from "./services/recommendation-analytics-service.ts";
+
+type EnvironmentServices = {
+	environment: string;
+	productManager: ProductManager;
+	workflowRunner: ProfileWorkflowRunner;
+	webSocketManager: WebSocketManager;
+	taskMonitor: TaskMonitor;
+	notificationService: NotificationService;
+	taskScheduler: TaskScheduler;
+	taskAuditService: TaskAuditService;
+	progressTrackingService: ProgressTrackingService;
+	analyticsService: DashboardAnalyticsService;
+	recommendationService: RecommendationAnalyticsService;
+	taskSearchService: TaskSearchService;
+};
+
+const extractMentions = (text: string): string[] => {
+	const mentionRegex = /@(\w+)/g;
+	const mentions: string[] = [];
+	let match: RegExpExecArray | null;
+	while ((match = mentionRegex.exec(text)) !== null) {
+		mentions.push(match[1]);
+	}
+	return mentions;
+};
+
+type DaemonLock = {
+	path: string;
+	release: () => void;
+};
+
+const isPidRunning = (pid: number): boolean => {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+};
+
+const readLockFile = (lockPath: string): { pid?: number } | null => {
+	try {
+		const content = fs.readFileSync(lockPath, "utf8");
+		const parsed = JSON.parse(content) as { pid?: number };
+		return parsed && typeof parsed === "object" ? parsed : null;
+	} catch {
+		return null;
+	}
+};
+
+const acquireDaemonLock = (lockPath: string): DaemonLock | null => {
+	try {
+		const fd = fs.openSync(lockPath, "wx");
+		const payload = JSON.stringify({
+			pid: process.pid,
+			startedAt: new Date().toISOString(),
+		});
+		fs.writeFileSync(fd, payload, "utf8");
+		fs.closeSync(fd);
+		return {
+			path: lockPath,
+			release: () => {
+				try {
+					fs.unlinkSync(lockPath);
+				} catch {
+					// Ignore cleanup failures.
+				}
+			},
+		};
+	} catch (error) {
+		if ((error as { code?: string }).code !== "EEXIST") {
+			console.error("[DAEMON] Failed to acquire daemon lock:", error);
+			return null;
+		}
+		const existing = readLockFile(lockPath);
+		const pid = existing?.pid;
+		if (pid && isPidRunning(pid)) {
+			console.warn(`[DAEMON] Another daemon is running (pid=${pid}). Exiting.`);
+			return null;
+		}
+		try {
+			fs.unlinkSync(lockPath);
+		} catch {
+			// ignore
+		}
+		return acquireDaemonLock(lockPath);
+	}
+};
+
+const isLevelLockedError = (error: unknown): boolean => {
+	if (!error || typeof error !== "object") {
+		return false;
+	}
+	const record = error as Record<string, unknown>;
+	const code = record.code;
+	if (code === "LEVEL_LOCKED") {
+		return true;
+	}
+	const cause = record.cause as Record<string, unknown> | undefined;
+	if (cause && cause.code === "LEVEL_LOCKED") {
+		return true;
+	}
+	return false;
+};
 
 // Task Manager Daemon - runs the continuous task processing loop and handles MCP requests
 async function main() {
 	console.log("[DAEMON] Starting Isomorphiq Task Manager Daemon");
 
-    const profileManager = new ProfileManager();
-    const workflowRunner = createWorkflowAgentRunner({ profileManager });
-	const pm = new ProductManager(undefined, {
-        profileManager,
-        taskExecutor: workflowRunner.executeTask,
-        taskSeedProvider: workflowRunner.seedTask,
-    });
+	const configManager = ConfigManager.getInstance();
+	const environmentConfig = configManager.getEnvironmentConfig();
+	const environmentNames = Array.from(new Set(environmentConfig.available));
+	const profileManager = new ProfileManager();
+	const workflowRunner = createWorkflowAgentRunner({ profileManager });
 	const userManager = getUserManager();
-	const wsManager = new WebSocketManager({ path: "/ws" });
-	const taskMonitor = new TaskMonitor();
-	
-	// Initialize notification service with mock providers
-	const notificationService = new NotificationService();
-	notificationService.setEmailProvider(new MockEmailProvider());
-	notificationService.setSMSProvider(new MockSMSProvider());
-	notificationService.setSlackProvider(new MockSlackProvider());
-	notificationService.setTeamsProvider(new MockTeamsProvider());
-	
-	// Initialize task scheduler
-	const taskScheduler = new TaskScheduler(pm);
-	await taskScheduler.initialize();
-	
-	// Initialize task audit service
-	const taskAuditService = new TaskAuditService();
-	await taskAuditService.initialize();
-	
-	pm.setWebSocketManager(wsManager);
-	console.log("[DAEMON] Initialized ProductManager, UserManager, TaskMonitor, NotificationService, TaskScheduler, and TaskAuditService with WebSocket support");
+
+	const basePath = configManager.getDatabaseConfig().path;
+	const absoluteBase = path.isAbsolute(basePath) ? basePath : path.join(process.cwd(), basePath);
+	const lock = acquireDaemonLock(path.join(absoluteBase, "daemon.lock"));
+	if (!lock) {
+		return;
+	}
+	const releaseLock = () => lock.release();
+	process.on("exit", releaseLock);
+	process.on("SIGINT", () => {
+		releaseLock();
+		process.exit(0);
+	});
+	process.on("SIGTERM", () => {
+		releaseLock();
+		process.exit(0);
+	});
+
+	const resolveDatabasePath = (environment: string): string => {
+		return path.join(absoluteBase, environment);
+	};
+
+	const createNotificationService = (): NotificationService => {
+		const service = new NotificationService();
+		service.setEmailProvider(new MockEmailProvider());
+		service.setSMSProvider(new MockSMSProvider());
+		service.setSlackProvider(new MockSlackProvider());
+		service.setTeamsProvider(new MockTeamsProvider());
+		return service;
+	};
+
+	const createEnvironmentServices = async (environment: string): Promise<EnvironmentServices> => {
+		const databasePath = resolveDatabasePath(environment);
+		const productManager = new ProductManager(databasePath);
+		const workflowRunnerInstance = new ProfileWorkflowRunner({
+			taskProvider: () => productManager.getAllTasks(),
+			taskExecutor: workflowRunner.executeTask,
+			environment,
+		});
+		const webSocketManager = new WebSocketManager({ path: "/ws" });
+		const taskMonitor = new TaskMonitor();
+		const notificationService = createNotificationService();
+
+		const taskScheduler = new TaskScheduler(productManager);
+		await taskScheduler.initialize();
+
+		const taskAuditService = new TaskAuditService(path.join(databasePath, "task-audit"));
+		await taskAuditService.initialize();
+
+		const progressTrackingService = new ProgressTrackingService(taskAuditService);
+		await progressTrackingService.initialize();
+
+		const dashboardAnalyticsService = new DashboardAnalyticsService(productManager, taskAuditService);
+		await dashboardAnalyticsService.initialize();
+
+		productManager.setWebSocketManager(webSocketManager);
+		await productManager.initialize();
+
+		const taskSearchService = createTaskSearchService(productManager.taskService.getRepository());
+
+		return {
+			environment,
+			productManager,
+			workflowRunner: workflowRunnerInstance,
+			webSocketManager,
+			taskMonitor,
+			notificationService,
+			taskScheduler,
+			taskAuditService,
+			progressTrackingService,
+			analyticsService: dashboardAnalyticsService,
+			taskSearchService,
+		};
+	};
+
+	const environmentServices = new Map<string, EnvironmentServices>();
+	for (const environment of environmentNames) {
+		try {
+			const services = await createEnvironmentServices(environment);
+			environmentServices.set(environment, services);
+		} catch (error) {
+			if (isLevelLockedError(error)) {
+				console.warn(
+					`[DAEMON] Database locked for ${environment}; another daemon may be running. Exiting.`,
+				);
+				releaseLock();
+				return;
+			}
+			throw error;
+		}
+	}
+
+	const defaultEnvironment = environmentConfig.default;
+	const fallbackServices = environmentServices.get(defaultEnvironment)
+		?? environmentServices.values().next().value;
+	if (!fallbackServices) {
+		throw new Error("No environments configured for daemon");
+	}
+
+	console.log(
+		`[DAEMON] Initialized environments: ${Array.from(environmentServices.keys()).join(", ")}`,
+	);
+
+	const resolveEnvironmentFromRequest = (headers: http.IncomingHttpHeaders): string =>
+		resolveEnvironmentFromHeaders(headers, environmentConfig);
+	const resolveEnvironmentFromMessage = (message: Record<string, unknown>): string => {
+		const direct = typeof message.environment === "string" ? message.environment : undefined;
+		const dataEnv =
+			typeof (message.data as { environment?: unknown } | undefined)?.environment === "string"
+				? (message.data as { environment?: string }).environment
+				: undefined;
+		return resolveEnvironmentValue(direct ?? dataEnv, environmentConfig);
+	};
+	const resolveServices = (environment: string): EnvironmentServices =>
+		environmentServices.get(environment) ?? fallbackServices;
+
+	const startMcpHttpServer = async (): Promise<void> => {
+		const transport =
+			process.env.ISOMORPHIQ_MCP_TRANSPORT
+			?? process.env.MCP_TRANSPORT
+			?? "sse";
+		if (transport !== "http" && transport !== "sse") {
+			return;
+		}
+		const host =
+			process.env.ISOMORPHIQ_MCP_HTTP_HOST
+			?? process.env.MCP_HTTP_HOST
+			?? "localhost";
+		const portRaw =
+			process.env.ISOMORPHIQ_MCP_HTTP_PORT
+			?? process.env.MCP_HTTP_PORT
+			?? "3100";
+		const port = Number.parseInt(portRaw, 10);
+		const pathValue =
+			process.env.ISOMORPHIQ_MCP_HTTP_PATH
+			?? process.env.MCP_HTTP_PATH
+			?? "/mcp";
+		const normalizedPath = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
+		const resolvedPort = Number.isFinite(port) && port > 0 ? port : 3100;
+
+		try {
+			await startMcpServer({
+				transport,
+				host,
+				port: resolvedPort,
+				path: normalizedPath,
+			});
+			console.log(
+				`[DAEMON] MCP ${transport.toUpperCase()} server listening on ${host}:${resolvedPort}${normalizedPath}`,
+			);
+		} catch (error) {
+			console.error(`[DAEMON] MCP ${transport.toUpperCase()} server failed to start:`, error);
+		}
+	};
+
+	const setupTaskMonitorHandlers = async (services: EnvironmentServices): Promise<void> => {
+		const { environment, productManager, webSocketManager, taskMonitor, notificationService } = services;
+		const existingTasks = await productManager.getAllTasks();
+		console.log(`[DAEMON] Found ${existingTasks.length} existing tasks in ${environment} database`);
+
+		taskMonitor.updateTaskCache(existingTasks);
+
+		const sendTaskStatusNotifications = async (
+			task: any,
+			oldStatus: string,
+			newStatus: string,
+		): Promise<void> => {
+			try {
+				const recipients = [
+					task.createdBy,
+					task.assignedTo,
+					...(task.collaborators || []),
+					...(task.watchers || []),
+				].filter(Boolean);
+
+				const uniqueRecipients = [...new Set(recipients)];
+
+				await notificationService.notifyTaskStatusChanged(
+					task,
+					oldStatus,
+					newStatus,
+					uniqueRecipients,
+				);
+
+				const mentionedUsers = extractMentions(`${task.title} ${task.description}`);
+				for (const mentionedUser of mentionedUsers) {
+					await notificationService.notifyMention(
+						task,
+						[mentionedUser],
+						task.updatedBy || task.createdBy,
+					);
+				}
+			} catch (error) {
+				console.error("[DAEMON] Error sending task status notifications:", error);
+			}
+		};
+
+		const sendTaskCompletedNotifications = async (task: any): Promise<void> => {
+			try {
+				const recipients = [
+					task.createdBy,
+					task.assignedTo,
+					...(task.collaborators || []),
+					...(task.watchers || []),
+				].filter(Boolean);
+
+				const uniqueRecipients = [...new Set(recipients)];
+
+				await notificationService.notifyTaskCompleted(task, uniqueRecipients);
+			} catch (error) {
+				console.error("[DAEMON] Error sending task completion notifications:", error);
+			}
+		};
+
+		const sendDependencySatisfiedNotifications = async (completedTask: any): Promise<void> => {
+			try {
+				const allTasks = await productManager.getAllTasks();
+				const dependentTasks = allTasks.filter((task) =>
+					task.dependencies && task.dependencies.includes(completedTask.id) && task.status === "todo",
+				);
+
+				for (const dependentTask of dependentTasks) {
+					const recipients = [
+						dependentTask.createdBy,
+						dependentTask.assignedTo,
+						...(dependentTask.collaborators || []),
+						...(dependentTask.watchers || []),
+					].filter(Boolean);
+
+					const uniqueRecipients = [...new Set(recipients)];
+
+					await notificationService.notifyDependencySatisfied(
+						completedTask.id,
+						dependentTask.id,
+						uniqueRecipients,
+					);
+				}
+			} catch (error) {
+				console.error("[DAEMON] Error sending dependency satisfaction notifications:", error);
+			}
+		};
+
+		taskMonitor.on("taskUpdate", async (_sessionId, update) => {
+			webSocketManager.broadcastTaskStatusChanged(
+				update.taskId,
+				update.oldStatus || "unknown",
+				update.newStatus,
+				update.task,
+			);
+
+			await sendTaskStatusNotifications(update.task, update.oldStatus || "unknown", update.newStatus);
+		});
+
+		taskMonitor.on("taskStatusChanged", async (event) => {
+			if (event.data && event.data.taskId && event.data.newStatus) {
+				webSocketManager.broadcastTaskStatusChanged(
+					event.data.taskId,
+					event.data.oldStatus || "unknown",
+					event.data.newStatus,
+					event.data.task,
+				);
+
+				await sendTaskStatusNotifications(
+					event.data.task,
+					event.data.oldStatus || "unknown",
+					event.data.newStatus,
+				);
+			}
+		});
+
+		taskMonitor.on("taskCompleted", async (event) => {
+			if (event.data && event.data.task) {
+				webSocketManager.broadcastTaskStatusChanged(
+					event.data.task.id,
+					event.data.oldStatus || "in-progress",
+					"done",
+					event.data.task,
+				);
+
+				await sendTaskCompletedNotifications(event.data.task);
+				await sendDependencySatisfiedNotifications(event.data.task);
+			}
+		});
+
+		taskMonitor.on("dependenciesSatisfied", (event) => {
+			console.log("[DAEMON] Dependencies satisfied:", event.data);
+		});
+
+		taskMonitor.on("tasksCacheUpdated", (event) => {
+			console.log("[DAEMON] Tasks cache updated:", event.data);
+		});
+	};
+
+	await Promise.all(Array.from(environmentServices.values()).map((services) => setupTaskMonitorHandlers(services)));
 
 	// Add daemon state tracking
 	let daemonPaused: boolean = false;
@@ -58,16 +442,26 @@ async function main() {
 
     // Daemon owns the DB and hosts HTTP/TRPC; gateway proxies requests.
 
-    // Initialize templates and automation rules
-    await pm.initialize();
-
     const httpPort = Number(process.env.DAEMON_HTTP_PORT || process.env.HTTP_PORT || 3004);
     let httpServer: http.Server | null = null;
     let restartingHttp = false;
 
     const startHttp = async (): Promise<void> => {
-        httpServer = await startHttpServer(pm, httpPort);
-        await wsManager.start(httpServer, { attachUpgradeListener: false });
+        httpServer = await startHttpServer(
+            {
+                resolveProductManager: (req) =>
+                    resolveServices(resolveEnvironmentFromRequest(req.headers)).productManager,
+                resolveProfileManager: () => profileManager,
+                resolveWebSocketManager: (req) =>
+                    resolveServices(resolveEnvironmentFromRequest(req.headers)).webSocketManager,
+            },
+            httpPort,
+        );
+        await Promise.all(
+            Array.from(environmentServices.values()).map((services) =>
+                services.webSocketManager.start(httpServer!, { attachUpgradeListener: false }),
+            ),
+        );
         console.log(`[DAEMON] HTTP/TRPC server listening on port ${httpPort}`);
 
         httpServer.on("close", () => {
@@ -87,9 +481,13 @@ async function main() {
         }
         restartingHttp = true;
         try {
-            await wsManager.stop();
+            await Promise.all(
+                Array.from(environmentServices.values()).map((services) =>
+                    services.webSocketManager.stop(),
+                ),
+            );
         } catch (error) {
-            console.error("[DAEMON] Failed to stop WebSocket server before restart:", error);
+            console.error("[DAEMON] Failed to stop WebSocket servers before restart:", error);
         }
         await new Promise((resolve) => setTimeout(resolve, 2000));
         try {
@@ -104,7 +502,11 @@ async function main() {
     await startHttp();
 
     // Initialize and start dashboard server
-    const dashboardServer = new DashboardServer(pm, wsManager);
+	const dashboardServer = new DashboardServer(
+		environmentServices,
+		resolveEnvironmentFromRequest,
+		defaultEnvironment,
+	);
     const dashboardPort = Number(process.env.DASHBOARD_PORT || 3005);
     const dashboardHttpServer = http.createServer((req, res) => {
         dashboardServer.handleRequest(req, res).catch((error) => {
@@ -125,148 +527,6 @@ async function main() {
         console.log(`[DAEMON] Dashboard WebSocket available at ws://localhost:${dashboardPort}/dashboard-ws`);
     });
 
-	// Display current tasks
-	const existingTasks = await pm.getAllTasks();
-	console.log(`[DAEMON] Found ${existingTasks.length} existing tasks in database`);
-
-	// Initialize task monitor cache with existing tasks
-	taskMonitor.updateTaskCache(existingTasks);
-
-	// Set up task status change notifications
-	taskMonitor.on("taskUpdate", async (_sessionId, update) => {
-		wsManager.broadcastTaskStatusChanged(update.taskId, update.oldStatus || "unknown", update.newStatus, update.task);
-		
-		// Send notifications
-		await sendTaskStatusNotifications(update.task, update.oldStatus || "unknown", update.newStatus);
-	});
-
-	// Set up enhanced real-time event broadcasting from task monitor
-	taskMonitor.on("taskStatusChanged", async (event) => {
-		// Use specific broadcast methods for task events
-		if (event.data && event.data.taskId && event.data.newStatus) {
-			wsManager.broadcastTaskStatusChanged(
-				event.data.taskId,
-				event.data.oldStatus || "unknown",
-				event.data.newStatus,
-				event.data.task
-			);
-			
-			// Send notifications
-			await sendTaskStatusNotifications(event.data.task, event.data.oldStatus || "unknown", event.data.newStatus);
-		}
-	});
-
-	taskMonitor.on("taskCompleted", async (event) => {
-		// Use specific broadcast method for task completion
-		if (event.data && event.data.task) {
-			wsManager.broadcastTaskStatusChanged(
-				event.data.task.id,
-				event.data.oldStatus || "in-progress",
-				"done",
-				event.data.task
-			);
-			
-			// Send task completion notifications
-			await sendTaskCompletedNotifications(event.data.task);
-			
-			// Send dependency satisfaction notifications
-			await sendDependencySatisfiedNotifications(event.data.task);
-		}
-	});
-
-	taskMonitor.on("dependenciesSatisfied", (event) => {
-		// Generic broadcast for dependency events
-		console.log("[DAEMON] Dependencies satisfied:", event.data);
-	});
-
-	taskMonitor.on("tasksCacheUpdated", (event) => {
-		// Generic broadcast for cache updates
-		console.log("[DAEMON] Tasks cache updated:", event.data);
-	});
-
-	// Notification helper functions
-	async function sendTaskStatusNotifications(task: any, oldStatus: string, newStatus: string) {
-		try {
-			const recipients = [
-				task.createdBy,
-				task.assignedTo,
-				...(task.collaborators || []),
-				...(task.watchers || [])
-			].filter(Boolean);
-
-			// Remove duplicates
-			const uniqueRecipients = [...new Set(recipients)];
-
-			await notificationService.notifyTaskStatusChanged(task, oldStatus, newStatus, uniqueRecipients);
-			
-			// Check for mentions in task description or title
-			const mentionedUsers = extractMentions(task.title + " " + task.description);
-			for (const mentionedUser of mentionedUsers) {
-				await notificationService.notifyMention(task, [mentionedUser], task.updatedBy || task.createdBy);
-			}
-		} catch (error) {
-			console.error("[DAEMON] Error sending task status notifications:", error);
-		}
-	}
-
-	async function sendTaskCompletedNotifications(task: any) {
-		try {
-			const recipients = [
-				task.createdBy,
-				task.assignedTo,
-				...(task.collaborators || []),
-				...(task.watchers || [])
-			].filter(Boolean);
-
-			// Remove duplicates
-			const uniqueRecipients = [...new Set(recipients)];
-
-			await notificationService.notifyTaskCompleted(task, uniqueRecipients);
-		} catch (error) {
-			console.error("[DAEMON] Error sending task completion notifications:", error);
-		}
-	}
-
-	function extractMentions(text: string): string[] {
-		const mentionRegex = /@(\w+)/g;
-		const mentions = [];
-		let match;
-		while ((match = mentionRegex.exec(text)) !== null) {
-			mentions.push(match[1]);
-		}
-		return mentions;
-	}
-
-	async function sendDependencySatisfiedNotifications(completedTask: any): Promise<void> {
-		try {
-			// Get all tasks that depend on the completed task
-			const allTasks = await pm.getAllTasks();
-			const dependentTasks = allTasks.filter(task => 
-				task.dependencies && task.dependencies.includes(completedTask.id) && task.status === "todo"
-			);
-
-			for (const dependentTask of dependentTasks) {
-				const recipients = [
-					dependentTask.createdBy,
-					dependentTask.assignedTo,
-					...(dependentTask.collaborators || []),
-					...(dependentTask.watchers || [])
-				].filter(Boolean);
-
-				// Remove duplicates
-				const uniqueRecipients = [...new Set(recipients)];
-
-				await notificationService.notifyDependencySatisfied(
-					completedTask.id,
-					dependentTask.id,
-					uniqueRecipients
-				);
-			}
-		} catch (error) {
-			console.error("[DAEMON] Error sending dependency satisfaction notifications:", error);
-		}
-	}
-
 	const tcpPort = Number(process.env.TCP_PORT) || 3001;
 	const skipTcp = process.env.SKIP_TCP === "true";
 
@@ -278,6 +538,16 @@ async function main() {
 				try {
 					const message = JSON.parse(data.toString().trim());
 					console.log("[DAEMON] Received command:", message.command);
+					const environment = resolveEnvironmentFromMessage(message);
+					const services = resolveServices(environment);
+					const pm = services.productManager;
+					const wsManager = services.webSocketManager;
+					const taskMonitor = services.taskMonitor;
+					const notificationService = services.notificationService;
+					const taskAuditService = services.taskAuditService;
+					const taskScheduler = services.taskScheduler;
+					const dashboardAnalyticsService = services.analyticsService;
+					const progressTrackingService = services.progressTrackingService;
 
 					let result: Result<unknown> = {
 						success: false,
@@ -366,58 +636,100 @@ async function main() {
 							}
 							break;
 						}
-						case "list_tasks_filtered": {
+						case "search_tasks": {
 							try {
-								const allTasks = await pm.getAllTasks();
-								const filters = message.data.filters || {};
-								let filteredTasks = allTasks;
-
-								// Apply filters
-								if (filters.status) {
-									const statuses = Array.isArray(filters.status) ? filters.status : [filters.status];
-									filteredTasks = filteredTasks.filter(task => statuses.includes(task.status));
+								const searchService = services.taskSearchService;
+								const query = message.data.query || {};
+								const searchResult = await searchService.searchTasks(query);
+								result = { success: true, data: searchResult };
+							} catch (error) {
+								result = {
+									success: false,
+									error: error instanceof Error ? error : new Error(String(error)),
+								};
+							}
+							break;
+						}
+						case "create_saved_search": {
+							try {
+								const searchService = services.taskSearchService;
+								const input = message.data;
+								const savedSearch = await searchService.createSavedSearch(input);
+								result = { success: true, data: savedSearch };
+							} catch (error) {
+								result = {
+									success: false,
+									error: error instanceof Error ? error : new Error(String(error)),
+								};
+							}
+							break;
+						}
+						case "get_saved_search": {
+							try {
+								const searchService = services.taskSearchService;
+								const { id } = message.data;
+								const savedSearch = await searchService.getSavedSearch(id);
+								if (savedSearch) {
+									result = { success: true, data: savedSearch };
+								} else {
+									result = { success: false, error: new Error("Saved search not found") };
 								}
-
-								if (filters.priority) {
-									const priorities = Array.isArray(filters.priority) ? filters.priority : [filters.priority];
-									filteredTasks = filteredTasks.filter(task => priorities.includes(task.priority));
-								}
-
-								if (filters.createdBy) {
-									filteredTasks = filteredTasks.filter(task => task.createdBy === filters.createdBy);
-								}
-
-								if (filters.assignedTo) {
-									filteredTasks = filteredTasks.filter(task => task.assignedTo === filters.assignedTo);
-								}
-
-								if (filters.type) {
-									filteredTasks = filteredTasks.filter(task => task.type === filters.type);
-								}
-
-								if (filters.search) {
-									const searchLower = filters.search.toLowerCase();
-									filteredTasks = filteredTasks.filter(task => 
-										task.title.toLowerCase().includes(searchLower) ||
-										task.description.toLowerCase().includes(searchLower) ||
-										(task.assignedTo && task.assignedTo.toLowerCase().includes(searchLower)) ||
-										(task.createdBy && task.createdBy.toLowerCase().includes(searchLower))
-									);
-								}
-
-								// Sort by creation date (newest first)
-								filteredTasks.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-								// Apply pagination
-								if (filters.offset && filters.offset > 0) {
-									filteredTasks = filteredTasks.slice(filters.offset);
-								}
-
-								if (filters.limit && filters.limit > 0) {
-									filteredTasks = filteredTasks.slice(0, filters.limit);
-								}
-
-								result = { success: true, data: filteredTasks };
+							} catch (error) {
+								result = {
+									success: false,
+									error: error instanceof Error ? error : new Error(String(error)),
+								};
+							}
+							break;
+						}
+						case "list_saved_searches": {
+							try {
+								const searchService = services.taskSearchService;
+								const { createdBy } = message.data || {};
+								const savedSearches = await searchService.listSavedSearches(createdBy);
+								result = { success: true, data: savedSearches };
+							} catch (error) {
+								result = {
+									success: false,
+									error: error instanceof Error ? error : new Error(String(error)),
+								};
+							}
+							break;
+						}
+						case "update_saved_search": {
+							try {
+								const searchService = services.taskSearchService;
+								const input = message.data;
+								const savedSearch = await searchService.updateSavedSearch(input);
+								result = { success: true, data: savedSearch };
+							} catch (error) {
+								result = {
+									success: false,
+									error: error instanceof Error ? error : new Error(String(error)),
+								};
+							}
+							break;
+						}
+						case "delete_saved_search": {
+							try {
+								const searchService = services.taskSearchService;
+								const { id } = message.data;
+								await searchService.deleteSavedSearch(id);
+								result = { success: true, data: { deleted: true } };
+							} catch (error) {
+								result = {
+									success: false,
+									error: error instanceof Error ? error : new Error(String(error)),
+								};
+							}
+							break;
+						}
+						case "execute_saved_search": {
+							try {
+								const searchService = services.taskSearchService;
+								const { id } = message.data;
+								const searchResult = await searchService.executeSavedSearch(id);
+								result = { success: true, data: searchResult };
 							} catch (error) {
 								result = {
 									success: false,
@@ -543,6 +855,67 @@ async function main() {
 									message.data.priority,
 									task,
 								);
+							} catch (error) {
+								result = {
+									success: false,
+									error: error instanceof Error ? error : new Error(String(error)),
+								};
+							}
+							break;
+						}
+						case "update_task": {
+							try {
+								const oldTask = await pm
+									.getAllTasks()
+									.then((t) => t.find((task) => task.id === message.data.id));
+								
+								const task = await pm.updateTask(message.data.id, message.data.updates, message.data.changedBy);
+								
+								// Record task update in audit trail
+								await taskAuditService.recordTaskUpdated(
+									message.data.id,
+									message.data.changedBy,
+									{
+										updatedFields: Object.keys(message.data.updates),
+										oldValues: {
+											description: oldTask?.description,
+											status: oldTask?.status,
+											priority: oldTask?.priority,
+										},
+										newValues: message.data.updates,
+									}
+								);
+								
+								result = { success: true, data: task };
+								
+								// Update task monitor cache and notify subscribers
+								taskMonitor.updateTaskCache([task]);
+								
+								// Broadcast appropriate changes
+								if (message.data.updates.status) {
+									taskMonitor.notifyTaskStatusChange({
+										taskId: message.data.id,
+										oldStatus: oldTask?.status || "todo",
+										newStatus: message.data.updates.status,
+										timestamp: new Date(),
+										task,
+									});
+									wsManager.broadcastTaskStatusChanged(
+										message.data.id,
+										oldTask?.status || "todo",
+										message.data.updates.status,
+										task,
+									);
+								}
+								
+								if (message.data.updates.priority) {
+									wsManager.broadcastTaskPriorityChanged(
+										message.data.id,
+										oldTask?.priority || "medium",
+										message.data.updates.priority,
+										task,
+									);
+								}
 							} catch (error) {
 								result = {
 									success: false,
@@ -734,38 +1107,57 @@ async function main() {
 							break;
 						// Profile management commands
                         case "get_profile_states":
-                            result = { success: true, data: pm.getAllProfileStates() };
+                            result = { success: true, data: profileManager.getAllProfileStates() };
                             break;
                         case "get_profile_state":
-                            result = { success: true, data: pm.getProfileState(message.data.name) };
+                            result = { success: true, data: profileManager.getProfileState(message.data.name) };
                             break;
                         case "get_profile_metrics":
-                            result = { success: true, data: pm.getProfileMetrics(message.data.name) };
+                            result = { success: true, data: profileManager.getProfileMetrics(message.data.name) };
                             break;
                         case "get_all_profile_metrics":
-                            result = { success: true, data: Object.fromEntries(pm.getAllProfileMetrics()) };
+                            result = {
+                                success: true,
+                                data: Object.fromEntries(profileManager.getAllProfileMetrics()),
+                            };
                             break;
                         case "get_profiles_with_states":
-                            result = { success: true, data: pm.getProfilesWithStates() };
+                            result = { success: true, data: profileManager.getProfilesWithStates() };
                             break;
                         case "get_profile_task_queue":
-                            result = { success: true, data: pm.getProfileTaskQueue(message.data.name) };
+                            result = { success: true, data: profileManager.getTaskQueue(message.data.name) };
                             break;
-                        case "update_profile_status":
-                            result = {
-                                success: true,
-                                data: pm.updateProfileStatus(message.data.name, message.data.isActive),
-                            };
+                        case "update_profile_status": {
+                            const state = profileManager.getProfileState(message.data.name);
+                            if (!state) {
+                                result = { success: false, error: new Error("Profile not found") };
+                                break;
+                            }
+                            profileManager.updateProfileState(message.data.name, {
+                                isActive: message.data.isActive,
+                            });
+                            result = { success: true, data: true };
                             break;
+                        }
                         case "get_best_profile_for_task":
-                            result = { success: true, data: pm.getBestProfileForTask(message.data.task) };
-                            break;
-                        case "assign_task_to_profile":
                             result = {
                                 success: true,
-                                data: pm.assignTaskToProfile(message.data.profileName, message.data.task),
+                                data: profileManager.getBestProfileForTask(message.data.task),
                             };
                             break;
+                        case "assign_task_to_profile": {
+                            const profile = profileManager.getProfile(message.data.profileName);
+                            if (!profile) {
+                                result = { success: false, error: new Error("Profile not found") };
+                                break;
+                            }
+                            profileManager.addToTaskQueue(
+                                message.data.profileName,
+                                message.data.task,
+                            );
+                            result = { success: true, data: true };
+                            break;
+                        }
 						case "unlock_accounts":
 							console.log("[DAEMON] Unlocking all user accounts");
 							try {
@@ -1817,12 +2209,29 @@ async function main() {
 		console.log("[DAEMON] TCP server disabled via SKIP_TCP=true");
 	}
 
-	// Start the continuous task processing loop in parallel
-	pm.processTasksLoop().catch((error) => {
-		console.error("[DAEMON] Task processing loop error:", error);
-	});
+	void startMcpHttpServer();
 
-	console.log("[DAEMON] Daemon is running with both TCP server and task processing loop");
+	const isTestMode =
+		process.env.ISOMORPHIQ_TEST_MODE === "true" || process.env.NODE_ENV === "test";
+	const shouldProcessTasks =
+		process.env.ISOMORPHIQ_ENABLE_TASK_PROCESSING === "true" || !isTestMode;
+
+	if (shouldProcessTasks) {
+		// Start the continuous task processing loop in parallel
+		for (const services of environmentServices.values()) {
+			services.workflowRunner.runLoop().catch((error) => {
+				console.error(
+					`[DAEMON] Task processing loop error (${services.environment}):`,
+					error,
+				);
+			});
+		}
+		console.log("[DAEMON] Daemon is running with both TCP server and task processing loop");
+	} else {
+		processingLoopActive = false;
+		console.log("[DAEMON] Task processing loop disabled for test mode");
+		console.log("[DAEMON] Daemon is running with TCP server only");
+	}
 }
 
 // Run the daemon

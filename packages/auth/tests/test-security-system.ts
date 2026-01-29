@@ -1,3 +1,4 @@
+import "../../../tests/test-utils/env-fetch.ts";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { expect } from "../../../test-utils/expect.ts";
 import {

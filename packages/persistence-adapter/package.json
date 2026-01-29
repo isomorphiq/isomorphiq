@@ -9,6 +9,10 @@
         ".": {
             "import": "./src/index.ts",
             "types": "./src/index.ts"
+        },
+        "./tests/adapter-specification": {
+            "import": "./tests/adapter-specification.ts",
+            "types": "./tests/adapter-specification.ts"
         }
     },
     "scripts": {

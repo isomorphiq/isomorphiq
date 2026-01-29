@@ -282,7 +282,7 @@ if (args.includes("--version") || args.includes("-v")) {
 }
 
 // Start the daemon
-if (require.main === module) {
+if (import.meta.url === `file://${process.argv[1]}`) {
 	main().catch((error) => {
 		console.error("[DAEMON] Fatal error:", error);
 		process.exit(1);

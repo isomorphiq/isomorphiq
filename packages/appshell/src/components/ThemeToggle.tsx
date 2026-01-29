@@ -1,4 +1,4 @@
-import { useTheme } from "./ThemeProvider.tsx";
+import { useTheme } from "./ThemeProvider";
 
 interface ThemeToggleProps {
     size?: "small" | "medium" | "large";

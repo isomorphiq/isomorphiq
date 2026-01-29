@@ -3,8 +3,8 @@ import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { workflowGraph } from "@isomorphiq/workflow/workflow-graph";
-import { Header, Layout } from "./Layout.tsx";
-import { SectionCard } from "./SectionCard.tsx";
+import { Header, Layout } from "./Layout";
+import { SectionCard } from "./SectionCard";
 
 type NodeDatum = {
 	id: string;

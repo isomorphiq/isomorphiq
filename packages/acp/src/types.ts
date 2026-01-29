@@ -18,11 +18,25 @@ export const AcpClientConfigSchema = z.object({
 export const AcpClientConfigStruct = struct.name("AcpClientConfig")<z.output<typeof AcpClientConfigSchema>, z.input<typeof AcpClientConfigSchema>>(AcpClientConfigSchema);
 export type AcpClientConfig = StructSelf<typeof AcpClientConfigStruct>;
 
-export const McpServerConfigSchema = z.object({
+const McpCommandServerConfigSchema = z.object({
     name: z.string(),
     command: z.string(),
-    args: z.array(z.string()).optional(),
+    args: z.array(z.string()),
+    env: z.array(z.object({ name: z.string(), value: z.string() })).optional(),
 });
+
+const McpHttpServerConfigSchema = z.object({
+    name: z.string(),
+    type: z.enum(["http", "sse"]),
+    url: z.string(),
+    headers: z.array(z.object({ name: z.string(), value: z.string() })),
+    env: z.array(z.object({ name: z.string(), value: z.string() })),
+});
+
+export const McpServerConfigSchema = z.union([
+    McpCommandServerConfigSchema,
+    McpHttpServerConfigSchema,
+]);
 
 export const McpServerConfigStruct = struct.name("McpServerConfig")<z.output<typeof McpServerConfigSchema>, z.input<typeof McpServerConfigSchema>>(McpServerConfigSchema);
 export type McpServerConfig = StructSelf<typeof McpServerConfigStruct>;

@@ -166,6 +166,388 @@ export class AdvancedTaskManager {
 // Export singleton instance
 export const advancedTaskManager = new AdvancedTaskManager();
 
+// Mixed Base 3 Operations for Task b7c2d592-load
+export interface MixedOperationConfig {
+  concurrentOperations: number;
+  operationMix: {
+    creates: number;    // percentage
+    reads: number;      // percentage
+    updates: number;    // percentage
+    deletes: number;    // percentage
+  };
+  resourceContention: boolean;
+  errorRecovery: boolean;
+}
+
+export interface MixedOperationResult {
+  operationType: string;
+  success: boolean;
+  duration: number;
+  error?: string;
+  dataSize?: number;
+  contentionLevel?: number;
+}
+
+export interface MixedOperationMetrics {
+  totalOperations: number;
+  successfulOperations: number;
+  failedOperations: number;
+  averageDuration: number;
+  operationsPerSecond: number;
+  contentionEvents: number;
+  errorRecoveryEvents: number;
+  performanceByType: Record<string, {
+    count: number;
+    successRate: number;
+    avgDuration: number;
+  }>;
+}
+
+export class MixedOperationManager {
+  
+  /**
+   * Execute mixed operations with configurable concurrency and operation mix
+   */
+  async executeMixedOperations(
+    config: MixedOperationConfig,
+    taskData: any[]
+  ): Promise<MixedOperationMetrics> {
+    const results: MixedOperationResult[] = [];
+    const startTime = Date.now();
+    
+    // Generate operation queue based on mix configuration
+    const operationQueue = this.generateOperationQueue(config, taskData);
+    
+    // Execute operations concurrently with controlled batch size
+    const batchSize = Math.min(config.concurrentOperations, 20);
+    for (let i = 0; i < operationQueue.length; i += batchSize) {
+      const batch = operationQueue.slice(i, i + batchSize);
+      const batchPromises = batch.map(op => this.executeOperation(op, config));
+      const batchResults = await Promise.allSettled(batchPromises);
+      
+      batchResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+        } else {
+          results.push({
+            operationType: batch[index].type,
+            success: false,
+            duration: 0,
+            error: result.reason?.message || 'Unknown error'
+          });
+        }
+      });
+      
+      // Small delay between batches to prevent overwhelming the system
+      if (i + batchSize < operationQueue.length) {
+        await this.delay(50);
+      }
+    }
+    
+    return this.calculateMetrics(results, Date.now() - startTime);
+  }
+  
+  /**
+   * Generate operation queue based on configuration
+   */
+  private generateOperationQueue(config: MixedOperationConfig, taskData: any[]): Array<{type: string, data: any}> {
+    const queue: Array<{type: string, data: any}> = [];
+    const totalOps = 100; // Base percentage scale
+    const counts = {
+      creates: Math.floor((config.operationMix.creates / 100) * totalOps),
+      reads: Math.floor((config.operationMix.reads / 100) * totalOps),
+      updates: Math.floor((config.operationMix.updates / 100) * totalOps),
+      deletes: Math.floor((config.operationMix.deletes / 100) * totalOps)
+    };
+    
+    // Add create operations
+    for (let i = 0; i < counts.creates; i++) {
+      queue.push({
+        type: 'create',
+        data: {
+          title: `Mixed Operation Create ${Date.now()}-${i}`,
+          description: `Mixed load test create operation ${i}`,
+          priority: ['high', 'medium', 'low'][i % 3],
+          createdBy: 'mixed-operation-manager-b7c2d592'
+        }
+      });
+    }
+    
+    // Add read operations
+    for (let i = 0; i < counts.reads; i++) {
+      if (taskData.length > 0) {
+        const randomTask = taskData[i % taskData.length];
+        queue.push({ type: 'read', data: { taskId: randomTask.id } });
+      }
+    }
+    
+    // Add update operations
+    for (let i = 0; i < counts.updates; i++) {
+      if (taskData.length > 0) {
+        const randomTask = taskData[i % taskData.length];
+        queue.push({
+          type: 'update',
+          data: {
+            taskId: randomTask.id,
+            updates: {
+              status: ['todo', 'in-progress', 'done'][i % 3],
+              priority: ['high', 'medium', 'low'][i % 3]
+            }
+          }
+        });
+      }
+    }
+    
+    // Add delete operations (only if we have enough tasks)
+    for (let i = 0; i < counts.deletes && i < taskData.length - 5; i++) {
+      const randomTask = taskData[i % taskData.length];
+      queue.push({ type: 'delete', data: { taskId: randomTask.id } });
+    }
+    
+    // Shuffle queue for realistic mixed operations
+    return this.shuffleArray(queue);
+  }
+  
+  /**
+   * Execute individual operation with error handling and performance tracking
+   */
+  private async executeOperation(
+    operation: {type: string, data: any},
+    config: MixedOperationConfig
+  ): Promise<MixedOperationResult> {
+    const startTime = Date.now();
+    const operationType = operation.type;
+    
+    try {
+      let result: any;
+      
+      // Simulate different operation types
+      switch (operationType) {
+        case 'create':
+          result = await this.simulateCreateOperation(operation.data);
+          break;
+        case 'read':
+          result = await this.simulateReadOperation(operation.data);
+          break;
+        case 'update':
+          result = await this.simulateUpdateOperation(operation.data);
+          break;
+        case 'delete':
+          result = await this.simulateDeleteOperation(operation.data);
+          break;
+        default:
+          throw new Error(`Unknown operation type: ${operationType}`);
+      }
+      
+      // Add resource contention if enabled
+      let contentionLevel = 0;
+      if (config.resourceContention) {
+        contentionLevel = await this.simulateResourceContention();
+      }
+      
+      return {
+        operationType,
+        success: true,
+        duration: Date.now() - startTime,
+        dataSize: JSON.stringify(result).length,
+        contentionLevel
+      };
+      
+    } catch (error) {
+      // Error recovery if enabled
+      if (config.errorRecovery) {
+        await this.performErrorRecovery(operationType, error);
+      }
+      
+      return {
+        operationType,
+        success: false,
+        duration: Date.now() - startTime,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+  
+  /**
+   * Simulate create operation with realistic timing
+   */
+  private async simulateCreateOperation(data: any): Promise<any> {
+    // Simulate database operation with realistic timing
+    await this.delay(Math.random() * 100 + 50); // 50-150ms
+    
+    return {
+      id: `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      ...data,
+      status: 'todo',
+      createdAt: new Date().toISOString()
+    };
+  }
+  
+  /**
+   * Simulate read operation
+   */
+  private async simulateReadOperation(data: any): Promise<any> {
+    await this.delay(Math.random() * 50 + 20); // 20-70ms
+    
+    return {
+      id: data.taskId,
+      title: 'Sample Task',
+      status: 'todo',
+      priority: 'medium',
+      createdAt: new Date().toISOString()
+    };
+  }
+  
+  /**
+   * Simulate update operation
+   */
+  private async simulateUpdateOperation(data: any): Promise<any> {
+    await this.delay(Math.random() * 80 + 40); // 40-120ms
+    
+    return {
+      id: data.taskId,
+      ...data.updates,
+      updatedAt: new Date().toISOString()
+    };
+  }
+  
+  /**
+   * Simulate delete operation
+   */
+  private async simulateDeleteOperation(data: any): Promise<any> {
+    await this.delay(Math.random() * 60 + 30); // 30-90ms
+    
+    return {
+      id: data.taskId,
+      deleted: true,
+      deletedAt: new Date().toISOString()
+    };
+  }
+  
+  /**
+   * Simulate resource contention scenarios
+   */
+  private async simulateResourceContention(): Promise<number> {
+    // Simulate lock contention with random severity
+    const contentionLevel = Math.random();
+    
+    if (contentionLevel > 0.8) {
+      // High contention - longer delay
+      await this.delay(Math.random() * 200 + 100);
+      return contentionLevel;
+    } else if (contentionLevel > 0.5) {
+      // Medium contention - moderate delay
+      await this.delay(Math.random() * 100 + 50);
+      return contentionLevel;
+    }
+    
+    return 0;
+  }
+  
+  /**
+   * Perform error recovery procedures
+   */
+  private async performErrorRecovery(operationType: string, error: any): Promise<void> {
+    // Simulate error recovery with exponential backoff
+    const baseDelay = 100;
+    const maxRetries = 3;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      await this.delay(baseDelay * Math.pow(2, attempt - 1));
+      
+      // Simulate recovery attempt
+      try {
+        await this.simulateRecoveryAttempt(operationType);
+        break;
+      } catch (recoveryError) {
+        if (attempt === maxRetries) {
+          console.error(`Failed to recover from ${operationType} error:`, recoveryError);
+        }
+      }
+    }
+  }
+  
+  /**
+   * Simulate a recovery attempt
+   */
+  private async simulateRecoveryAttempt(operationType: string): Promise<void> {
+    await this.delay(Math.random() * 50 + 10);
+    
+    // Simulate success/failure of recovery
+    if (Math.random() > 0.3) {
+      // Recovery successful
+      return;
+    }
+    
+    throw new Error(`Recovery failed for ${operationType}`);
+  }
+  
+  /**
+   * Calculate comprehensive metrics from operation results
+   */
+  private calculateMetrics(results: MixedOperationResult[], totalDuration: number): MixedOperationMetrics {
+    const successfulOps = results.filter(r => r.success);
+    const failedOps = results.filter(r => !r.success);
+    
+    // Calculate performance by operation type
+    const performanceByType: Record<string, any> = {};
+    results.forEach(result => {
+      if (!performanceByType[result.operationType]) {
+        performanceByType[result.operationType] = {
+          count: 0,
+          successCount: 0,
+          totalDuration: 0
+        };
+      }
+      
+      const typeMetrics = performanceByType[result.operationType];
+      typeMetrics.count++;
+      typeMetrics.totalDuration += result.duration;
+      
+      if (result.success) {
+        typeMetrics.successCount++;
+      }
+    });
+    
+    // Convert to final format
+    Object.keys(performanceByType).forEach(type => {
+      const metrics = performanceByType[type];
+      performanceByType[type] = {
+        count: metrics.count,
+        successRate: metrics.successCount / metrics.count,
+        avgDuration: metrics.totalDuration / metrics.count
+      };
+    });
+    
+    return {
+      totalOperations: results.length,
+      successfulOperations: successfulOps.length,
+      failedOperations: failedOps.length,
+      averageDuration: results.reduce((sum, r) => sum + r.duration, 0) / results.length,
+      operationsPerSecond: (successfulOps.length / totalDuration) * 1000,
+      contentionEvents: results.filter(r => r.contentionLevel && r.contentionLevel > 0).length,
+      errorRecoveryEvents: failedOps.length,
+      performanceByType
+    };
+  }
+  
+  /**
+   * Utility functions
+   */
+  private shuffleArray<T>(array: T[]): T[] {
+    const shuffled = [...array];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+  }
+  
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+}
+
 // Task 3 specific utilities
 export const Task3Utils = {
   /**
@@ -241,4 +623,7 @@ Generated: ${timestamp}
   }
 };
 
-export default { advancedTaskManager, Task3Utils };
+// Export mixed operation manager
+export const mixedOperationManager = new MixedOperationManager();
+
+export default { advancedTaskManager, mixedOperationManager, Task3Utils };

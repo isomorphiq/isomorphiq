@@ -1,7 +1,7 @@
 import { ProductManager } from "@isomorphiq/tasks";
 import { ProfileManager } from "@isomorphiq/user-profile";
 import { createWorkflowAgentRunner } from "@isomorphiq/workflow/agent-runner";
-import { WORKFLOW, advanceToken, createToken, runFlow } from "@isomorphiq/workflow";
+import { ProfileWorkflowRunner } from "@isomorphiq/workflow";
 
 /**
  * Workflows service: runs workflow deciders and agent Effects isolated from the HTTP gateway.
@@ -9,21 +9,15 @@ import { WORKFLOW, advanceToken, createToken, runFlow } from "@isomorphiq/workfl
 export async function startWorkflowsService(): Promise<void> {
     const profileManager = new ProfileManager();
     const workflowRunner = createWorkflowAgentRunner({ profileManager });
-    const pm = new ProductManager(undefined, {
-        profileManager,
-        taskExecutor: workflowRunner.executeTask,
-        taskSeedProvider: workflowRunner.seedTask,
-    });
+    const pm = new ProductManager();
     await pm.initialize();
 
     console.log("[WORKFLOWS] Starting workflow engine");
-
-    // Simple runner placeholder: advance a token through a basic transition loop.
-    // Replace with real deciders/agents as we flesh out the workflow service.
-    const token = createToken("new-feature-proposed");
-    await runFlow({ currentState: token.state, transition: "prioritize" }, WORKFLOW);
-    const next = await advanceToken(token, "prioritize", WORKFLOW);
-    console.log("[WORKFLOWS] Advanced token to", next.state);
+    const runner = new ProfileWorkflowRunner({
+        taskProvider: () => pm.getAllTasks(),
+        taskExecutor: workflowRunner.executeTask,
+    });
+    await runner.runLoop();
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {

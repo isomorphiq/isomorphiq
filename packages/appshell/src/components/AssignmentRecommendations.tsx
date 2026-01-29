@@ -1,6 +1,6 @@
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "./UIComponents.tsx";
+import { Card, CardContent, CardHeader, CardTitle } from "./UIComponents";
 
 interface AssignmentRecommendation {
 	userId: string;

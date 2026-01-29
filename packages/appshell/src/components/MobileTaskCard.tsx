@@ -1,8 +1,8 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Task } from "@isomorphiq/tasks/types";
-import { PriorityBadge } from "./PriorityBadge.tsx";
-import { TypeBadge } from "./TypeBadge.tsx";
+import { PriorityBadge } from "./PriorityBadge";
+import { TypeBadge } from "./TypeBadge";
 
 interface MobileTaskCardProps {
     task: Task & { isOffline?: boolean }; // Allow for offline tasks

@@ -2,21 +2,40 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
 import { setTimeout } from "node:timers/promises";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 describe("Scheduler TCP Integration Test", () => {
 	let daemonProcess: any;
 	let tcpPort: number;
+	let testDbRoot: string;
 	
 	before(async () => {
 		// Use a different port for testing to avoid conflicts
 		tcpPort = 3002;
 		process.env.TCP_PORT = tcpPort.toString();
 		process.env.SKIP_TCP = "false"; // Ensure TCP server is enabled
+
+		testDbRoot = await mkdtemp(path.join(tmpdir(), "isomorphiq-daemon-test-"));
+		const dbPath = path.join(testDbRoot, "db");
+		const savedSearchesPath = path.join(testDbRoot, "saved-searches-db");
+		const auditPath = path.join(testDbRoot, "task-audit");
 		
 		// Start the daemon
 		daemonProcess = spawn("yarn", ["run", "daemon"], {
 			cwd: process.cwd(),
-			env: { ...process.env, TCP_PORT: tcpPort.toString() },
+			env: {
+				...process.env,
+				NODE_ENV: "test",
+				ISOMORPHIQ_TEST_MODE: "true",
+				ISOMORPHIQ_STORAGE_MODE: "memory",
+				TCP_PORT: tcpPort.toString(),
+				DB_PATH: dbPath,
+				SAVED_SEARCHES_DB_PATH: savedSearchesPath,
+				TASK_AUDIT_DB_PATH: auditPath,
+				SKIP_TCP: "false",
+			},
 			stdio: "pipe",
 			detached: false,
 			shell: true
@@ -43,6 +62,9 @@ describe("Scheduler TCP Integration Test", () => {
 		if (daemonProcess) {
 			daemonProcess.kill("SIGTERM");
 			await setTimeout(1000);
+		}
+		if (testDbRoot) {
+			await rm(testDbRoot, { recursive: true, force: true });
 		}
 	});
 

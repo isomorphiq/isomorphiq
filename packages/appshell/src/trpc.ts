@@ -1,5 +1,6 @@
 import { createWSClient, httpBatchLink, splitLink, wsLink } from "@trpc/client";
 import { createTRPCJotai } from "jotai-trpc";
+import { getEnvironment, getEnvironmentHeaderName } from "./environment.ts";
 
 type AppRouter = {
 	_def: {
@@ -28,13 +29,29 @@ const getWsUrl = () => {
 };
 
 // Build links with HTTP fallback so data still loads even if WS handshake fails (self-signed cert, firewall, etc.)
-const wsClient = typeof window !== "undefined" ? createWSClient({ url: getWsUrl() }) : null;
+const resolveEnvironmentHeaders = (): Record<string, string> => {
+	const headerName = getEnvironmentHeaderName();
+	return { [headerName]: getEnvironment() };
+};
+
+const wsClient =
+	typeof window !== "undefined"
+		? createWSClient({
+				url: getWsUrl(),
+				connectionParams: () => ({
+					headers: resolveEnvironmentHeaders(),
+				}),
+		  })
+		: null;
 
 const links = [
 	splitLink({
 		condition: (op) => op.type === "subscription" && wsClient !== null,
 		true: wsLink({ client: wsClient }),
-		false: httpBatchLink({ url: `${getBaseUrl()}/trpc` }),
+		false: httpBatchLink({
+			url: `${getBaseUrl()}/trpc`,
+			headers: () => resolveEnvironmentHeaders(),
+		}),
 	}),
 ];
 

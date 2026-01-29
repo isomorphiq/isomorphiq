@@ -128,7 +128,12 @@ const estimateTaskDuration = (task: Task): number => {
         case "story":
             baseDuration = 3;
             break;
+        case "implementation":
+        case "task":
+            baseDuration = 1;
+            break;
         case "integration":
+        case "testing":
             baseDuration = 2;
             break;
         case "research":

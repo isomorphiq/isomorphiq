@@ -20,7 +20,14 @@ export type WorkflowSeedSpec = {
     title: string;
     description: string;
     priority: "low" | "medium" | "high";
-    type: "feature" | "story" | "task" | "integration" | "research";
+    type:
+        | "feature"
+        | "story"
+        | "task"
+        | "implementation"
+        | "integration"
+        | "testing"
+        | "research";
     assignedTo?: string;
     createdBy?: string;
     dependencies?: string[];
@@ -39,6 +46,8 @@ export type WorkflowExecutionResult = {
 export type WorkflowTaskExecutor = (context: {
     task: WorkflowTask;
     workflowState: RuntimeState | null;
+    workflowTransition?: string | null;
+    environment?: string;
 }) => Promise<WorkflowExecutionResult>;
 
 export type WorkflowTaskSeedProvider = (context: {
@@ -54,8 +63,19 @@ export type WorkflowAgentRunnerOptions = {
 const SeedSpecSchema = z.object({
     title: z.string().min(1),
     description: z.string().min(1),
-    priority: z.enum(["low", "medium", "high"]),
-    type: z.enum(["feature", "story", "task", "integration", "research"]),
+    priority: z.enum(["low", "medium", "high"]).optional().default("medium"),
+    type: z
+        .enum([
+            "feature",
+            "story",
+            "task",
+            "implementation",
+            "integration",
+            "testing",
+            "research",
+        ])
+        .optional()
+        .default("feature"),
     assignedTo: z.string().min(1).optional(),
     createdBy: z.string().min(1).optional(),
     dependencies: z.array(z.string()).optional(),
@@ -79,14 +99,26 @@ const extractJsonObject = (text: string): string | null => {
     if (!trimmed) {
         return null;
     }
-    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    if (
+        (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
         return trimmed;
     }
-    const start = trimmed.indexOf("{");
-    const end = trimmed.lastIndexOf("}");
-    if (start < 0 || end < 0 || end <= start) {
+    const startBrace = trimmed.indexOf("{");
+    const startBracket = trimmed.indexOf("[");
+    const starts = [startBrace, startBracket].filter((value) => value >= 0);
+    if (starts.length === 0) {
         return null;
     }
+    const start = Math.min(...starts);
+    const endBrace = trimmed.lastIndexOf("}");
+    const endBracket = trimmed.lastIndexOf("]");
+    const ends = [endBrace, endBracket].filter((value) => value > start);
+    if (ends.length === 0) {
+        return null;
+    }
+    const end = Math.max(...ends);
     return trimmed.slice(start, end + 1);
 };
 
@@ -129,6 +161,9 @@ const summarizeText = (text: string): string => {
     return `${combined.slice(0, 397).trim()}...`;
 };
 
+const isSeedRecord = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === "object" && !Array.isArray(value);
+
 const parseSeedSpec = (text: string): WorkflowSeedSpec | null => {
     const jsonText = extractJsonObject(text);
     if (!jsonText) {
@@ -136,8 +171,36 @@ const parseSeedSpec = (text: string): WorkflowSeedSpec | null => {
     }
     try {
         const parsed = JSON.parse(jsonText);
-        const validated = SeedSpecSchema.safeParse(parsed);
-        return validated.success ? validated.data : null;
+        const asSeed = (value: unknown): WorkflowSeedSpec | null => {
+            const validated = SeedSpecSchema.safeParse(value);
+            return validated.success ? (validated.data as WorkflowSeedSpec) : null;
+        };
+        if (Array.isArray(parsed)) {
+            return parsed.reduce<WorkflowSeedSpec | null>(
+                (acc, item) => acc ?? asSeed(item),
+                null,
+            );
+        }
+        if (isSeedRecord(parsed)) {
+            const direct = asSeed(parsed);
+            if (direct) {
+                return direct;
+            }
+            const listKeys = ["features", "tickets", "items", "stories", "tasks"];
+            const lists = listKeys
+                .map((key) => parsed[key])
+                .filter((value): value is unknown[] => Array.isArray(value));
+            return lists.reduce<WorkflowSeedSpec | null>(
+                (acc, list) =>
+                    acc ??
+                    list.reduce<WorkflowSeedSpec | null>(
+                        (innerAcc, item) => innerAcc ?? asSeed(item),
+                        null,
+                    ),
+                null,
+            );
+        }
+        return null;
     } catch (error) {
         void error;
         return null;
@@ -149,13 +212,46 @@ const resolveWorkflowProfileName = (profileName: string): string => {
     const mapping: Record<string, string> = {
         "product-research": "product-manager",
         roadmapping: "product-manager",
-        "ux-research": "project-manager",
+        "ux-research": "ux-specialist",
+        "ux-researcher": "ux-researcher",
         planning: "project-manager",
         refinement: "principal-architect",
         development: "senior-developer",
         "integration-testing": "qa-specialist",
     };
     return mapping[normalized] ?? profileName;
+};
+
+const resolveTransitionModelOverride = (transition?: string | null): string | null => {
+    if (!transition) {
+        return null;
+    }
+    switch (transition) {
+        case "prioritize-features":
+            return "lmstudio/nvidia/nemotron-3-nano";
+        default:
+            return null;
+    }
+};
+
+const shouldEnforceWorkflowProfile = (
+    workflowState: RuntimeState | null,
+    workflowTransition?: string | null,
+): boolean => {
+    if (workflowState?.profile) {
+        return true;
+    }
+    if (workflowState?.name === "tests-completed") {
+        return true;
+    }
+    if (workflowState?.name === "features-prioritized") {
+        return true;
+    }
+    return (
+        workflowTransition === "review-task-validity" ||
+        workflowTransition === "close-invalid-task" ||
+        workflowTransition === "prioritize-features"
+    );
 };
 
 const resolveProfile = (
@@ -167,43 +263,48 @@ const resolveProfile = (
 };
 
 const selectPromptFiles = (profile: ACPProfile, task: WorkflowTask): string[] => {
-    const basePrompts = ["quick-reference.md"];
-    const profilePrompts =
-        profile.name === "senior-developer"
-            ? ["implementation-development.md", "testing-quality.md"]
-            : profile.name === "qa-specialist"
-              ? ["testing-quality.md"]
-              : profile.name === "project-manager"
-                ? ["architecture-planning.md", "documentation-knowledge.md"]
-                : profile.name === "principal-architect"
-                  ? ["architecture-planning.md"]
-                  : profile.name === "product-manager"
-                    ? ["architecture-planning.md"]
-                    : profile.name === "ux-specialist"
-                      ? ["documentation-knowledge.md"]
-                      : [];
-
     const title = task.title ?? "";
     const description = task.description ?? "";
-    const taskPrompts = [
-        task.type === "integration" ? "architecture-planning.md" : null,
-        task.type === "research" ? "documentation-knowledge.md" : null,
-        /refactor|cleanup|maintenance/i.test(`${title} ${description}`)
-            ? "refactoring-maintenance.md"
-            : null,
-        /doc|documentation|readme/i.test(`${title} ${description}`)
-            ? "documentation-knowledge.md"
-            : null,
-        /test|coverage|qa/i.test(`${title} ${description}`)
-            ? "testing-quality.md"
-            : null,
-        /architecture|design/i.test(`${title} ${description}`)
-            ? "architecture-planning.md"
-            : null,
-    ].filter((entry): entry is string => entry !== null);
+    const text = `${title} ${description}`;
 
-    const allPrompts = [...basePrompts, ...profilePrompts, ...taskPrompts];
-    return allPrompts.reduce<string[]>((acc, file) => (acc.includes(file) ? acc : [...acc, file]), []);
+    const hasRefactor = /refactor|cleanup|maintenance/i.test(text);
+    const hasDocs = /doc|documentation|readme/i.test(text);
+    const hasTests = /test|coverage|qa|regression/i.test(text);
+    const hasArchitecture = /architecture|design/i.test(text);
+
+    const unique = (files: string[]): string[] =>
+        files.reduce<string[]>((acc, file) => (acc.includes(file) ? acc : [...acc, file]), []);
+
+    switch (profile.name) {
+        case "senior-developer": {
+            const files = ["implementation-development.md"];
+            if (hasRefactor) files.push("refactoring-maintenance.md");
+            if (hasDocs) files.push("documentation-knowledge.md");
+            if (hasTests) files.push("testing-quality.md");
+            if (hasArchitecture) files.push("architecture-planning.md");
+            return unique(files);
+        }
+        case "qa-specialist": {
+            return ["testing-quality.md"];
+        }
+        case "principal-architect": {
+            return ["architecture-planning.md"];
+        }
+        case "project-manager": {
+            return hasArchitecture ? ["architecture-planning.md"] : [];
+        }
+        case "ux-specialist": {
+            return hasDocs ? ["documentation-knowledge.md"] : [];
+        }
+        case "ux-researcher": {
+            return hasDocs ? ["documentation-knowledge.md"] : [];
+        }
+        case "product-manager": {
+            return [];
+        }
+        default:
+            return [];
+    }
 };
 
 const readPromptFile = async (root: string, fileName: string): Promise<string | null> => {
@@ -234,29 +335,27 @@ const buildProfilePrompt = async (
     profile: ACPProfile,
     task: WorkflowTask,
     workflowState: RuntimeState | null,
+    workflowTransition?: string | null,
 ): Promise<string> => {
-    const promptFiles = selectPromptFiles(profile, task);
-    const promptBlocks = await loadPromptBlocks(root, promptFiles);
-    const workflowHint = workflowState?.promptHint
-        ? `Workflow hint: ${workflowState.promptHint}`
-        : "";
+    const workflowHint =
+        workflowState?.promptHint && workflowState.profile === profile.name
+            ? `Workflow hint: ${workflowState.promptHint}`
+            : "";
+    const projectRules = [
+        "Project rules:",
+        "- Follow AGENTS.md and the repository conventions.",
+        "- Node ESM with no transpilation: include `.ts` on local imports.",
+        "- Do not restart the daemon directly; use the restart_daemon MCP tool.",
+    ].join("\n");
     const instructions = [
         profile.systemPrompt.trim(),
         "",
         workflowHint,
-        "Before acting, orient yourself in the repo:",
-        "- Read AGENTS.md and follow the workflow rules.",
-        "- Review root package.json scripts to understand how services are started.",
-        "- Skim README.md and any relevant docs in docs/ and packages/**/docs.",
-        "- Survey existing packages to avoid duplicating implemented features.",
-        "Never kill or restart the daemon process directly; use the restart_daemon MCP tool if a restart is required.",
+        projectRules,
         "If you discover the task is already implemented, say so and propose a better-scoped follow-up.",
         "If you lack permission to read files, say so and proceed with the task using the context available.",
         "At the end of your response, include `Summary:` with 1-2 sentences describing what you completed.",
         "",
-        promptBlocks.length > 0
-            ? ["Project prompt templates (apply as relevant):", ...promptBlocks, ""].join("\n")
-            : "",
         profile.getTaskPrompt({
             task,
             workflow: workflowState
@@ -264,14 +363,25 @@ const buildProfilePrompt = async (
                         state: workflowState.name,
                         profile: workflowState.profile,
                         promptHint: workflowState.promptHint,
+                        transition: workflowTransition ?? undefined,
                     }
                 : undefined,
+            workflowTransition: workflowTransition ?? undefined,
         }),
     ];
     return instructions.filter((line) => line.length > 0).join("\n");
 };
 
 type FsAccessMode = "default" | "read-only" | "read-write";
+
+type TurnContext = {
+    taskId?: string;
+    taskTitle?: string;
+    taskType?: string;
+    taskStatus?: string;
+    workflowState?: string;
+    workflowTransition?: string;
+};
 
 const resolveModelFromEnv = (): string | null => {
     const candidates = [
@@ -283,6 +393,9 @@ const resolveModelFromEnv = (): string | null => {
     const match = candidates.find((value) => typeof value === "string" && value.trim().length > 0);
     return match ? match.trim() : null;
 };
+
+const isTestMode = (): boolean =>
+    process.env.ISOMORPHIQ_TEST_MODE === "true" || process.env.NODE_ENV === "test";
 
 const readModelNameFromResult = (result: Record<string, unknown>): string | null => {
     const direct = result.model ?? result.modelName ?? result.model_name;
@@ -299,10 +412,112 @@ const readModelNameFromResult = (result: Record<string, unknown>): string | null
     return null;
 };
 
+const safeStringify = (value: unknown): string | null => {
+    const seen = new WeakSet();
+    try {
+        const json = JSON.stringify(value, (_key, val) => {
+            if (typeof val === "bigint") {
+                return val.toString();
+            }
+            if (typeof val === "object" && val !== null) {
+                if (seen.has(val)) {
+                    return "[Circular]";
+                }
+                seen.add(val);
+            }
+            return val;
+        });
+        return typeof json === "string" ? json : null;
+    } catch (error) {
+        void error;
+        return null;
+    }
+};
+
+const extractErrorDetails = (error: Error): Record<string, unknown> | null => {
+    const standardKeys = ["name", "message", "stack", "cause"];
+    const ownKeys = Object.getOwnPropertyNames(error).filter(
+        (key) => !standardKeys.includes(key),
+    );
+    const ownSymbols = Object.getOwnPropertySymbols(error);
+    if (ownKeys.length === 0 && ownSymbols.length === 0) {
+        return null;
+    }
+    const base = ownKeys.reduce<Record<string, unknown>>((acc, key) => {
+        const value = (error as unknown as Record<string, unknown>)[key];
+        return { ...acc, [key]: value };
+    }, {});
+    return ownSymbols.reduce<Record<string, unknown>>((acc, key) => {
+        return { ...acc, [key.toString()]: (error as unknown as Record<symbol, unknown>)[key] };
+    }, base);
+};
+
+const normalizeErrorMessage = (value: unknown): string => {
+    if (typeof value === "string") {
+        return value;
+    }
+    if (value instanceof Error) {
+        const errorCode = (value as { code?: unknown }).code;
+        const rawMessage = value.message ?? "";
+        const isPlaceholderMessage = rawMessage.trim() === "" || rawMessage === "[object Object]";
+        const errorDetails = extractErrorDetails(value);
+        const detailsJson = errorDetails ? safeStringify(errorDetails) : null;
+        const details =
+            detailsJson && detailsJson !== "{}" ? `details=${detailsJson}` : "";
+        const parts = [
+            value.name && !isPlaceholderMessage
+                ? `${value.name}: ${rawMessage}`
+                : !isPlaceholderMessage
+                    ? rawMessage
+                    : value.name || "",
+            errorCode !== undefined ? `code=${String(errorCode)}` : "",
+            value.cause ? `cause=${normalizeErrorMessage(value.cause)}` : "",
+            details,
+            value.stack ?? "",
+        ].filter((part) => part.length > 0);
+        return parts.join(" | ");
+    }
+    if (
+        typeof value === "number" ||
+        typeof value === "boolean" ||
+        typeof value === "bigint" ||
+        typeof value === "symbol" ||
+        value === null ||
+        value === undefined
+    ) {
+        return String(value);
+    }
+    if (typeof value === "object") {
+        const record = value as Record<string, unknown>;
+        const name = typeof record.name === "string" ? record.name : null;
+        const message = typeof record.message === "string" ? record.message : null;
+        const code =
+            typeof record.code === "string" || typeof record.code === "number"
+                ? String(record.code)
+                : null;
+        const stack = typeof record.stack === "string" ? record.stack : null;
+        const cause =
+            record.cause !== undefined ? normalizeErrorMessage(record.cause) : null;
+        const details = safeStringify(record);
+        const parts = [
+            name && message ? `${name}: ${message}` : message ?? name ?? "",
+            code ? `code=${code}` : "",
+            cause ? `cause=${cause}` : "",
+            details && details !== "{}" ? `details=${details}` : "",
+            stack ?? "",
+        ].filter((part) => part.length > 0);
+        return parts.join(" | ");
+    }
+    return String(value);
+};
+
 const executePrompt = async (
     profileName: string,
     prompt: string,
     fsMode: FsAccessMode,
+    environment: string | undefined,
+    modelName: string | undefined,
+    turnContext?: TurnContext,
 ): Promise<{ output: string; error: string; modelName: string }> => {
     const session = await createConnection(
         fsMode === "default"
@@ -313,7 +528,25 @@ const executePrompt = async (
                         writeTextFile: fsMode === "read-write",
                     },
                 },
+        { environment, modelName },
     );
+    session.taskClient.profileName = profileName;
+    if (turnContext) {
+        session.taskClient.taskId = turnContext.taskId ?? null;
+        session.taskClient.taskTitle = turnContext.taskTitle ?? null;
+        session.taskClient.taskType = turnContext.taskType ?? null;
+        session.taskClient.taskStatus = turnContext.taskStatus ?? null;
+        session.taskClient.workflowState = turnContext.workflowState ?? null;
+        session.taskClient.workflowTransition = turnContext.workflowTransition ?? null;
+    }
+    await session.taskClient.sessionUpdate({
+        sessionId: session.sessionId,
+        update: {
+            sessionUpdate: "session_meta",
+            modelName: session.taskClient.modelName ?? undefined,
+            mcpTools: session.taskClient.mcpTools ?? undefined,
+        },
+    });
     try {
         const promptResult = await sendPrompt(
             session.connection,
@@ -326,6 +559,15 @@ const executePrompt = async (
             (promptResult && readModelNameFromResult(promptResult)) ??
             resolveModelFromEnv() ??
             "unknown-model";
+        session.taskClient.modelName = modelName;
+        await session.taskClient.sessionUpdate({
+            sessionId: session.sessionId,
+            update: {
+                sessionUpdate: "session_meta",
+                modelName,
+                mcpTools: session.taskClient.mcpTools ?? undefined,
+            },
+        });
         return {
             output: completion.output ?? "",
             error: completion.error ?? "",
@@ -468,7 +710,7 @@ const buildSeedPrompt = async (
         "  \"title\": \"...\",",
         "  \"description\": \"...\",",
         "  \"priority\": \"low|medium|high\",",
-        "  \"type\": \"feature|story|task|integration|research\",",
+        "  \"type\": \"feature|story|implementation|testing|task|integration|research\",",
         "  \"assignedTo\": \"senior-developer\"",
         "}",
         "Description should include: problem, requirements/acceptance criteria, evidence (file paths reviewed), impacted packages/files, and testing notes.",
@@ -489,8 +731,16 @@ export const createWorkflowAgentRunner = (
         options.workspaceRoot ?? findWorkspaceRoot(process.env.INIT_CWD ?? process.cwd());
     const profileManager = options.profileManager ?? new ProfileManager();
 
-    const executeTask: WorkflowTaskExecutor = async ({ task, workflowState }) => {
-        const enforceWorkflowProfile = workflowState?.name === "tests-completed";
+    const executeTask: WorkflowTaskExecutor = async ({
+        task,
+        workflowState,
+        workflowTransition,
+        environment,
+    }) => {
+        const enforceWorkflowProfile = shouldEnforceWorkflowProfile(
+            workflowState,
+            workflowTransition,
+        );
         const assignedProfile = !enforceWorkflowProfile && task.assignedTo
             ? profileManager.getProfile(task.assignedTo) ?? resolveProfile(profileManager, task.assignedTo)
             : undefined;
@@ -506,11 +756,31 @@ export const createWorkflowAgentRunner = (
             };
         }
 
-        const prompt = await buildProfilePrompt(workspaceRoot, profile, task, workflowState);
+        const prompt = await buildProfilePrompt(
+            workspaceRoot,
+            profile,
+            task,
+            workflowState,
+            workflowTransition,
+        );
         const startTime = Date.now();
         profileManager.startTaskProcessing(profile.name);
         try {
-            const completion = await executePrompt(profile.name, prompt, "read-write");
+            const completion = await executePrompt(
+                profile.name,
+                prompt,
+                "read-write",
+                environment,
+                resolveTransitionModelOverride(workflowTransition) ?? profile.modelName,
+                {
+                taskId: task.id,
+                taskTitle: task.title,
+                taskType: task.type,
+                taskStatus: task.status,
+                workflowState: workflowState?.name,
+                workflowTransition: workflowTransition ?? undefined,
+                },
+            );
             const summarySource = completion.error.length > 0 ? completion.error : completion.output;
             const summary = summarizeText(summarySource);
             const duration = Date.now() - startTime;
@@ -544,7 +814,7 @@ export const createWorkflowAgentRunner = (
             const duration = Date.now() - startTime;
             profileManager.endTaskProcessing(profile.name);
             profileManager.recordTaskProcessing(profile.name, duration, false);
-            const message = error instanceof Error ? error.message : String(error);
+            const message = normalizeErrorMessage(error);
             return {
                 success: false,
                 output: "",
@@ -569,7 +839,11 @@ export const createWorkflowAgentRunner = (
         const startTime = Date.now();
         profileManager.startTaskProcessing(profile.name);
         try {
-            const completion = await executePrompt(profile.name, prompt, "read-only");
+            const completion = await executePrompt(profile.name, prompt, "read-only", undefined, undefined, {
+                taskType: workflowState?.targetType,
+                workflowState: workflowState?.name,
+                workflowTransition: workflowState?.defaultTransition,
+            });
             const duration = Date.now() - startTime;
             profileManager.endTaskProcessing(profile.name);
             profileManager.recordTaskProcessing(
@@ -584,9 +858,10 @@ export const createWorkflowAgentRunner = (
             if (!parsed) {
                 return null;
             }
+            const shouldAssign = !isTestMode();
             return {
                 ...parsed,
-                assignedTo: parsed.assignedTo ?? "senior-developer",
+                assignedTo: shouldAssign ? parsed.assignedTo ?? "senior-developer" : undefined,
                 createdBy: profile.name,
             };
         } catch (error) {

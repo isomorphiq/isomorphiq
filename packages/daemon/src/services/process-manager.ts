@@ -6,6 +6,7 @@ import { startHttpServer } from "@isomorphiq/http-server";
 import { ProductManager } from "@isomorphiq/tasks";
 import { ProfileManager } from "@isomorphiq/user-profile";
 import { createWorkflowAgentRunner } from "@isomorphiq/workflow/agent-runner";
+import { ProfileWorkflowRunner } from "@isomorphiq/workflow";
 import { WebSocketManager } from "@isomorphiq/realtime";
 import type { Task } from "@isomorphiq/tasks";
 
@@ -51,6 +52,7 @@ export class ProcessManager extends EventEmitter {
 	private config: ProcessManagerConfig;
 	private commandServer: NetServer | null = null;
 	private productManager: ProductManager | null = null;
+	private workflowRunner: ProfileWorkflowRunner | null = null;
 	private webSocketManager: WebSocketManager | null = null;
 	private httpServer: HttpServer | null = null;
 
@@ -72,10 +74,10 @@ export class ProcessManager extends EventEmitter {
 		// Initialize core services
         const profileManager = new ProfileManager();
         const workflowRunner = createWorkflowAgentRunner({ profileManager });
-		this.productManager = new ProductManager(undefined, {
-            profileManager,
+		this.productManager = new ProductManager();
+        this.workflowRunner = new ProfileWorkflowRunner({
+            taskProvider: () => this.productManager?.getAllTasks() ?? Promise.resolve([]),
             taskExecutor: workflowRunner.executeTask,
-            taskSeedProvider: workflowRunner.seedTask,
         });
 		this.webSocketManager = new WebSocketManager({ path: "/ws" });
 		this.productManager.setWebSocketManager(this.webSocketManager);
@@ -83,7 +85,13 @@ export class ProcessManager extends EventEmitter {
 		// Start HTTP API server
 		const httpPort = Number(process.env.HTTP_PORT) || 3003;
 		try {
-			this.httpServer = await startHttpServer(this.productManager, httpPort);
+			this.httpServer = await startHttpServer(
+				{
+					resolveProductManager: () => this.productManager as ProductManager,
+					resolveProfileManager: () => profileManager,
+				},
+				httpPort,
+			);
 			console.log(`[PROCESS-MANAGER] HTTP API server started on port ${httpPort}`);
 		} catch (error) {
 			console.error("[PROCESS-MANAGER] Failed to start HTTP API server:", error);
@@ -600,9 +608,9 @@ export class ProcessManager extends EventEmitter {
 
 	// Start task processing loop
 	private startTaskProcessing(): void {
-		if (!this.productManager) return;
+		if (!this.workflowRunner) return;
 
-		this.productManager.processTasksLoop().catch((error) => {
+		this.workflowRunner.runLoop().catch((error) => {
 			console.error("[PROCESS-MANAGER] Task processing loop error:", error);
 		});
 	}

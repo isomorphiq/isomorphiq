@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../../../tests/test-utils/env-fetch.ts";
 
 /**
  * Test suite for report generation capabilities

@@ -1,3 +1,4 @@
+import "../../../tests/test-utils/env-fetch.ts";
 // Simple test to verify security system implementation
 import { getSecurityService } from "./src/services/security-service.ts";
 import { getEnhancedRbacService } from "./src/services/enhanced-rbac-service.ts";

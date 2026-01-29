@@ -9,6 +9,7 @@ import type {
 import type { WebSocketEvent } from "@isomorphiq/realtime";
 import type { ProductManager } from "@isomorphiq/tasks";
 import type { WebSocketManager } from "@isomorphiq/realtime";
+import type { ProductManagerResolver } from "./routes/route-helpers.ts";
 
 export type TrpcContext = { pm: ProductManager; wsManager?: WebSocketManager };
 
@@ -54,10 +55,19 @@ export const appRouter: ReturnType<typeof t.router> = t.router({
 
 export type AppRouter = typeof appRouter;
 
-export const createTrpcContext = (pm: ProductManager): TrpcContext => ({
-    pm,
-    wsManager: pm.getWebSocketManager(),
-});
+export const createTrpcContext = (
+    resolver: ProductManagerResolver,
+    req?: { headers: Record<string, string | string[] | undefined> },
+): TrpcContext => {
+    const pm = resolver(req ?? { headers: {} });
+    return {
+        pm,
+        wsManager: pm.getWebSocketManager(),
+    };
+};
 
-export const createTrpcMiddleware = (pm: ProductManager) =>
-    createExpressMiddleware({ router: appRouter, createContext: () => createTrpcContext(pm) });
+export const createTrpcMiddleware = (resolver: ProductManagerResolver) =>
+    createExpressMiddleware({
+        router: appRouter,
+        createContext: ({ req }) => createTrpcContext(resolver, req),
+    });

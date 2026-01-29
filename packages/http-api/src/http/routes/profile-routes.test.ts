@@ -1,22 +1,23 @@
 import assert from "node:assert";
 import { test } from "node:test";
 import express from "express";
+import "../../../../../tests/test-utils/env-fetch.ts";
 import { registerProfileRoutes } from "./profile-routes.ts";
-import type { ProductManager } from "@isomorphiq/tasks";
-import type { ACPProfile, ProfileMetrics, ProfileState } from "@isomorphiq/user-profile";
+import type { ACPProfile, ProfileMetrics, ProfileState, ProfileManager } from "@isomorphiq/user-profile";
 import type { Task } from "@isomorphiq/tasks";
 
 class StubProfileManager implements Pick<
-	ProductManager,
+	ProfileManager,
 	| "getProfilesWithStates"
 	| "getAllProfileStates"
     | "getProfileState"
     | "getProfileMetrics"
     | "getAllProfileMetrics"
-	| "getProfileTaskQueue"
-	| "updateProfileStatus"
-	| "assignTaskToProfile"
+	| "getTaskQueue"
+	| "updateProfileState"
+	| "addToTaskQueue"
 	| "getBestProfileForTask"
+	| "getProfile"
 > {
 	private profile: ACPProfile = {
 		name: "alpha",
@@ -66,16 +67,16 @@ class StubProfileManager implements Pick<
 		return new Map([["alpha", this.metrics]]);
 	}
 
-	getProfileTaskQueue(name: string) {
+	getTaskQueue(name: string) {
         void name;
         return [] as Task[];
 	}
 
-	updateProfileStatus(name: string, isActive: boolean) {
-		return name === "alpha" && isActive;
+	updateProfileState(name: string, _updates: Partial<ProfileState>) {
+		return name === "alpha";
 	}
 
-	assignTaskToProfile(name: string, _task: Task) {
+	addToTaskQueue(name: string, _task: Task) {
 		void _task;
 		return name === "alpha";
 	}
@@ -84,12 +85,16 @@ class StubProfileManager implements Pick<
 		void _task;
 		return this.profile;
 	}
+
+	getProfile(name: string) {
+		return name === "alpha" ? this.profile : undefined;
+	}
 }
 
 const createServer = () => {
 	const app = express();
 	app.use(express.json());
-    registerProfileRoutes(app, new StubProfileManager() as unknown as ProductManager);
+    registerProfileRoutes(app, new StubProfileManager() as unknown as ProfileManager);
     return app.listen(0);
 };
 
@@ -103,7 +108,9 @@ test("profile routes: with-states and state", async (t) => {
     assert.strictEqual(statesResponse.status, 200);
     const states = (await statesResponse.json()) as unknown[];
     assert.ok(Array.isArray(states));
-    assert.deepStrictEqual(states[0], { name: "alpha", state: "ready" });
+    const first = states[0] as Record<string, unknown>;
+    assert.strictEqual((first.profile as { name?: string }).name, "alpha");
+    assert.strictEqual((first.state as { name?: string }).name, "alpha");
 
     const stateResponse = await fetch(`${base}/api/profiles/alpha/state`);
     assert.strictEqual(stateResponse.status, 200);

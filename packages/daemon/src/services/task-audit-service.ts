@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Level } from "level";
 import type { Task } from "@isomorphiq/tasks";
 
@@ -62,18 +63,33 @@ export interface AuditStatistics {
 
 export class TaskAuditService {
 	private db: Level<string, string>;
+	private isAvailable: boolean = false;
 
 	constructor(databasePath?: string) {
-		this.db = new Level(databasePath || "./saved-searches-db/task-audit", {
-			valueEncoding: "json",
-		});
+		const envPath = process.env.TASK_AUDIT_DB_PATH;
+		const savedSearchesPath = process.env.SAVED_SEARCHES_DB_PATH;
+		const resolvedPath =
+			databasePath ??
+			envPath ??
+			(savedSearchesPath
+				? path.join(savedSearchesPath, "task-audit")
+				: "./saved-searches-db/task-audit");
+		this.db = new Level(resolvedPath, { valueEncoding: "json" });
 	}
 
 	async initialize(): Promise<void> {
 		try {
 			await this.db.open();
+			this.isAvailable = true;
 			console.log("[AUDIT] Task audit service initialized");
 		} catch (error) {
+			if (this.isLockError(error)) {
+				this.isAvailable = false;
+				console.warn(
+					"[AUDIT] Audit database locked; continuing without audit logging.",
+				);
+				return;
+			}
 			console.error("[AUDIT] Failed to initialize audit service:", error);
 			throw error;
 		}
@@ -81,6 +97,9 @@ export class TaskAuditService {
 
 	async shutdown(): Promise<void> {
 		try {
+			if (!this.isAvailable) {
+				return;
+			}
 			await this.db.close();
 			console.log("[AUDIT] Task audit service shutdown");
 		} catch (error) {
@@ -90,6 +109,9 @@ export class TaskAuditService {
 
 	// Record task creation
 	async recordTaskCreated(task: Task, createdBy?: string): Promise<void> {
+		if (!this.isAvailable) {
+			return;
+		}
 		const event: TaskAuditEvent = {
 			id: this.generateEventId(),
 			taskId: task.id,
@@ -120,6 +142,9 @@ export class TaskAuditService {
 		errorMessage?: string,
 		duration?: number,
 	): Promise<void> {
+		if (!this.isAvailable) {
+			return;
+		}
 		const event: TaskAuditEvent = {
 			id: this.generateEventId(),
 			taskId,
@@ -143,6 +168,9 @@ export class TaskAuditService {
 		newPriority: string,
 		changedBy?: string,
 	): Promise<void> {
+		if (!this.isAvailable) {
+			return;
+		}
 		const event: TaskAuditEvent = {
 			id: this.generateEventId(),
 			taskId,
@@ -159,6 +187,9 @@ export class TaskAuditService {
 
 	// Record task assignment
 	async recordTaskAssigned(taskId: string, assignedTo: string, assignedBy?: string): Promise<void> {
+		if (!this.isAvailable) {
+			return;
+		}
 		const event: TaskAuditEvent = {
 			id: this.generateEventId(),
 			taskId,
@@ -174,6 +205,9 @@ export class TaskAuditService {
 
 	// Record task update
 	async recordTaskUpdated(taskId: string, changedBy?: string, metadata?: Record<string, any>): Promise<void> {
+		if (!this.isAvailable) {
+			return;
+		}
 		const event: TaskAuditEvent = {
 			id: this.generateEventId(),
 			taskId,
@@ -189,6 +223,9 @@ export class TaskAuditService {
 
 	// Record task deletion
 	async recordTaskDeleted(taskId: string, deletedBy?: string): Promise<void> {
+		if (!this.isAvailable) {
+			return;
+		}
 		const event: TaskAuditEvent = {
 			id: this.generateEventId(),
 			taskId,
@@ -203,6 +240,9 @@ export class TaskAuditService {
 
 	// Record dependency changes
 	async recordDependencyAdded(taskId: string, dependencyId: string, addedBy?: string): Promise<void> {
+		if (!this.isAvailable) {
+			return;
+		}
 		const event: TaskAuditEvent = {
 			id: this.generateEventId(),
 			taskId,
@@ -217,6 +257,9 @@ export class TaskAuditService {
 	}
 
 	async recordDependencyRemoved(taskId: string, dependencyId: string, removedBy?: string): Promise<void> {
+		if (!this.isAvailable) {
+			return;
+		}
 		const event: TaskAuditEvent = {
 			id: this.generateEventId(),
 			taskId,
@@ -232,6 +275,9 @@ export class TaskAuditService {
 
 	// Get task history with filtering
 	async getTaskHistory(filter: TaskAuditFilter = {}): Promise<TaskAuditEvent[]> {
+		if (!this.isAvailable) {
+			return [];
+		}
 		const events: TaskAuditEvent[] = [];
 		
 		try {
@@ -274,6 +320,9 @@ export class TaskAuditService {
 
 	// Get task history summary
 	async getTaskHistorySummary(taskId: string): Promise<TaskHistorySummary | null> {
+		if (!this.isAvailable) {
+			return null;
+		}
 		const events = await this.getTaskHistory({ taskId });
 		
 		if (events.length === 0) {
@@ -328,6 +377,17 @@ export class TaskAuditService {
 
 	// Get audit statistics
 	async getAuditStatistics(fromDate?: Date, toDate?: Date): Promise<AuditStatistics> {
+		if (!this.isAvailable) {
+			return {
+				totalEvents: 0,
+				eventsByType: {},
+				eventsByDate: {},
+				mostActiveTasks: [],
+				failureRate: 0,
+				averageCompletionTime: 0,
+				dailyStats: [],
+			};
+		}
 		const events = await this.getTaskHistory({ fromDate, toDate });
 		
 		const eventsByType: Record<string, number> = {};
@@ -398,6 +458,9 @@ export class TaskAuditService {
 
 	// Cleanup old events (for maintenance)
 	async cleanupOldEvents(olderThanDays: number = 90): Promise<number> {
+		if (!this.isAvailable) {
+			return 0;
+		}
 		const cutoffDate = new Date();
 		cutoffDate.setDate(cutoffDate.getDate() - olderThanDays);
 		
@@ -440,6 +503,9 @@ export class TaskAuditService {
 	}
 
 	private async saveEvent(event: TaskAuditEvent): Promise<void> {
+		if (!this.isAvailable) {
+			return;
+		}
 		const key = `event:${event.id}`;
 		try {
 			await this.db.put(key, JSON.stringify(event));
@@ -447,5 +513,21 @@ export class TaskAuditService {
 			console.error("[AUDIT] Failed to save audit event:", error);
 			throw error;
 		}
+	}
+
+	private isLockError(error: unknown): boolean {
+		if (!error || typeof error !== "object") {
+			return false;
+		}
+		const record = error as Record<string, unknown>;
+		const code = record.code;
+		if (code === "LEVEL_LOCKED") {
+			return true;
+		}
+		const cause = record.cause as Record<string, unknown> | undefined;
+		if (cause && cause.code === "LEVEL_LOCKED") {
+			return true;
+		}
+		return false;
 	}
 }

@@ -13,7 +13,9 @@ describe("Dashboard Task Monitoring", () => {
 	let baseUrl: string;
 
 	beforeEach(async () => {
-		productManager = new ProductManager() as any;
+		productManager = {
+			getAllTasks: async () => [],
+		} as unknown as ProductManager;
 		webSocketManager = new WebSocketManager({ path: "/ws" }) as any;
 		dashboardServer = new DashboardServer(productManager, webSocketManager);
 		

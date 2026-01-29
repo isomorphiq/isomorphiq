@@ -2,8 +2,8 @@ import { useAtom } from "jotai";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { authAtom } from "../authAtoms.ts";
-import { Header, Layout } from "./Layout.tsx";
-import { SectionCard } from "./SectionCard.tsx";
+import { Header, Layout } from "./Layout";
+import { SectionCard } from "./SectionCard";
 
 type ProfileForm = {
 	firstName?: string;

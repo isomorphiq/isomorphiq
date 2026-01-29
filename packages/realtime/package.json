@@ -23,7 +23,7 @@
     },
     "dependencies": {
         "@isomorphiq/core": "workspace:*",
-        "@isomorphiq/tasks": "workspace:*",
+        "@isomorphiq/types": "workspace:*",
         "@tsimpl/core": "0.1.1",
         "@tsimpl/runtime": "0.1.1",
         "@tsimpl/validation": "0.1.1",

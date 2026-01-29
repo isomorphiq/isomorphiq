@@ -1,9 +1,46 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import type { ProductManager } from "@isomorphiq/tasks";
 import type { WebSocketManager } from "@isomorphiq/realtime";
 import { DaemonTcpClient } from "./tcp-client.ts";
 import type { Task as CoreTask } from "@isomorphiq/tasks";
+import { DashboardAnalyticsService } from "../services/dashboard-analytics-service.ts";
+
+// Notification filtering options
+export interface NotificationFilter {
+	userId?: string;
+	priority?: 'high' | 'medium' | 'low' | 'all';
+	eventTypes?: string[];
+	taskIds?: string[];
+	enabled?: boolean;
+}
+
+// Notification data structure
+export interface NotificationData {
+	id: string;
+	type: 'task_created' | 'task_status_changed' | 'task_completed' | 'task_failed' | 'task_priority_changed' | 'task_deleted';
+	timestamp: string;
+	taskId: string;
+	taskTitle: string;
+	taskPriority: string;
+	oldStatus?: string;
+	newStatus?: string;
+	oldPriority?: string;
+	newPriority?: string;
+	message: string;
+	severity: 'info' | 'success' | 'warning' | 'error';
+	requiresAction?: boolean;
+	actionUrl?: string;
+}
+
+// Client connection with notification preferences
+interface ClientConnection {
+	ws: WebSocket;
+	environment: string;
+	notificationFilter: NotificationFilter;
+	lastPing: number;
+	isAlive: boolean;
+}
 
 // Extended Task interface with additional statuses
 interface Task extends Omit<CoreTask, 'status' | 'priority'> {
@@ -21,6 +58,13 @@ interface Task extends Omit<CoreTask, 'status' | 'priority'> {
 	type?: string;
 	dependencies?: string[];
 }
+
+type EnvironmentServices = {
+	environment: string;
+	productManager: ProductManager;
+	webSocketManager: WebSocketManager;
+	analyticsService: DashboardAnalyticsService;
+};
 
 export interface DashboardMetrics {
 	daemon: {
@@ -71,17 +115,74 @@ export interface DashboardMetrics {
 	};
 }
 
+// Notification filtering options
+export interface NotificationFilter {
+	userId?: string;
+	priority?: 'high' | 'medium' | 'low' | 'all';
+	eventTypes?: string[];
+	taskIds?: string[];
+	enabled?: boolean;
+}
+
+// Notification data structure
+export interface NotificationData {
+	id: string;
+	type: 'task_created' | 'task_status_changed' | 'task_completed' | 'task_failed' | 'task_priority_changed' | 'task_deleted';
+	timestamp: string;
+	taskId: string;
+	taskTitle: string;
+	taskPriority: string;
+	oldStatus?: string;
+	newStatus?: string;
+	oldPriority?: string;
+	newPriority?: string;
+	message: string;
+	severity: 'info' | 'success' | 'warning' | 'error';
+	requiresAction?: boolean;
+	actionUrl?: string;
+}
+
+// Client connection with notification preferences
+interface ClientConnection {
+	ws: WebSocket;
+	notificationFilter: NotificationFilter;
+	lastPing: number;
+	isAlive: boolean;
+}
+
 export class DashboardServer {
-	private productManager: ProductManager;
-	private webSocketManager: WebSocketManager;
+	private environmentServices: Map<string, EnvironmentServices>;
+	private resolveEnvironment: (headers: IncomingHttpHeaders) => string;
+	private defaultEnvironment: string;
 	private tcpClient: DaemonTcpClient;
 	private wsServer: WebSocketServer | null = null;
-	private activeConnections: Set<WebSocket> = new Set();
+	private activeConnections: Map<WebSocket, ClientConnection> = new Map();
+	private notificationLog: NotificationData[] = [];
+	private maxNotificationLogSize = 1000;
 
-	constructor(productManager: ProductManager, webSocketManager: WebSocketManager) {
-		this.productManager = productManager;
-		this.webSocketManager = webSocketManager;
+	constructor(
+		environmentServices: Map<string, EnvironmentServices>,
+		resolveEnvironment: (headers: IncomingHttpHeaders) => string,
+		defaultEnvironment: string,
+	) {
+		this.environmentServices = environmentServices;
+		this.resolveEnvironment = resolveEnvironment;
+		this.defaultEnvironment = defaultEnvironment;
 		this.tcpClient = new DaemonTcpClient();
+	}
+
+	private getEnvironmentServices(environment?: string): EnvironmentServices {
+		if (environment && this.environmentServices.has(environment)) {
+			return this.environmentServices.get(environment)!;
+		}
+		if (this.environmentServices.has(this.defaultEnvironment)) {
+			return this.environmentServices.get(this.defaultEnvironment)!;
+		}
+		const fallback = this.environmentServices.values().next().value as EnvironmentServices | undefined;
+		if (!fallback) {
+			throw new Error("No environment services configured for dashboard");
+		}
+		return fallback;
 	}
 
 	// Initialize WebSocket server for dashboard real-time updates
@@ -93,15 +194,22 @@ export class DashboardServer {
 
 		this.wsServer.on("connection", (ws: WebSocket, req) => {
 			console.log("[DASHBOARD] WebSocket client connected");
-			this.activeConnections.add(ws);
+			const environment = this.resolveEnvironment(req.headers);
+			this.activeConnections.set(ws, {
+				ws,
+				environment,
+				notificationFilter: {},
+				lastPing: Date.now(),
+				isAlive: true,
+			});
 
 			// Send initial dashboard state
-			this.sendInitialState(ws);
+			this.sendInitialState(ws, environment);
 
 			ws.on("message", (message) => {
 				try {
 					const data = JSON.parse(message.toString());
-					this.handleWebSocketMessage(ws, data);
+					this.handleWebSocketMessage(ws, data, environment);
 				} catch (error) {
 					console.error("[DASHBOARD] Invalid WebSocket message:", error);
 				}
@@ -128,10 +236,11 @@ export class DashboardServer {
 	}
 
 	// Send initial state to newly connected dashboard client
-	private async sendInitialState(ws: WebSocket): Promise<void> {
+	private async sendInitialState(ws: WebSocket, environment: string): Promise<void> {
 		try {
-			const metrics = await this.getMetrics();
-			const coreTasks = await this.productManager.getAllTasks();
+			const services = this.getEnvironmentServices(environment);
+			const metrics = await this.getMetrics(services);
+			const coreTasks = await services.productManager.getAllTasks();
 			const tasks = coreTasks.map(task => ({
 				...task,
 				status: (task.status as Task["status"]) || "todo",
@@ -152,11 +261,12 @@ export class DashboardServer {
 	}
 
 	// Handle incoming WebSocket messages from dashboard
-	private async handleWebSocketMessage(ws: WebSocket, data: any): Promise<void> {
+	private async handleWebSocketMessage(ws: WebSocket, data: any, environment: string): Promise<void> {
+		const services = this.getEnvironmentServices(environment);
 		switch (data.type) {
 			case "refresh_metrics":
 				try {
-					const metrics = await this.getMetrics();
+					const metrics = await this.getMetrics(services);
 					ws.send(JSON.stringify({
 						type: "metrics_update",
 						data: metrics
@@ -170,7 +280,7 @@ export class DashboardServer {
 				break;
 			case "refresh_tasks":
 				try {
-					const tasks = await this.productManager.getAllTasks();
+					const tasks = await services.productManager.getAllTasks();
 					ws.send(JSON.stringify({
 						type: "tasks_update",
 						data: tasks
@@ -182,6 +292,73 @@ export class DashboardServer {
 					}));
 				}
 				break;
+			case "bulk_task_action":
+				try {
+					const result = await this.handleBulkTaskAction(
+						data.action,
+						data.taskIds,
+						data.data,
+						environment,
+					);
+					ws.send(JSON.stringify({
+						type: "bulk_action_result",
+						data: result
+					}));
+				} catch (error) {
+					ws.send(JSON.stringify({
+						type: "error",
+						message: "Failed to perform bulk action: " + (error instanceof Error ? error.message : "Unknown error")
+					}));
+				}
+				break;
+			case "get_task_details":
+				try {
+					const tasks = await services.productManager.getAllTasks();
+					const task = tasks.find(t => t.id === data.taskId);
+					if (task) {
+						ws.send(JSON.stringify({
+							type: "task_details",
+							data: task
+						}));
+					} else {
+						ws.send(JSON.stringify({
+							type: "error",
+							message: "Task not found"
+						}));
+					}
+				} catch (error) {
+					ws.send(JSON.stringify({
+						type: "error",
+						message: "Failed to get task details"
+					}));
+				}
+				break;
+			case "get_system_health":
+				try {
+					const health = await this.getSystemHealth(environment);
+					ws.send(JSON.stringify({
+						type: "system_health",
+						data: health
+					}));
+				} catch (error) {
+					ws.send(JSON.stringify({
+						type: "error",
+						message: "Failed to get system health"
+					}));
+				}
+				break;
+			case "subscribe_to_events":
+				// Client wants to subscribe to specific event types
+				data.eventTypes?.forEach((eventType: string) => {
+					ws.addEventListener('message', (event) => {
+						// Handle subscription-specific events
+					});
+				});
+				ws.send(JSON.stringify({
+					type: "subscription_confirmed",
+					data: { eventTypes: data.eventTypes }
+				}));
+				break;
 			default:
 				console.log("[DASHBOARD] Unknown WebSocket message type:", data.type);
 		}
@@ -189,42 +366,66 @@ export class DashboardServer {
 
 	// Set up forwarding of task events from the main WebSocket manager
 	private setupTaskEventForwarding(): void {
-		// Listen to task events from the main WebSocket manager
-		(this.webSocketManager as any).on?.("task_created", (task: Task) => {
-			this.broadcastToDashboard({
-				type: "task_created",
-				data: task
+		for (const services of this.environmentServices.values()) {
+			const environment = services.environment;
+			const wsManager = services.webSocketManager as any;
+			wsManager.on?.("task_created", (task: Task) => {
+				this.broadcastToDashboard(
+					{
+						type: "task_created",
+						data: task,
+					},
+					environment,
+				);
 			});
-		});
 
-		(this.webSocketManager as any).on?.("task_status_changed", (taskId: string, oldStatus: string, newStatus: string, task: Task) => {
-			this.broadcastToDashboard({
-				type: "task_status_changed",
-				data: { taskId, oldStatus, newStatus, task }
-			});
-		});
+			wsManager.on?.(
+				"task_status_changed",
+				(taskId: string, oldStatus: string, newStatus: string, task: Task) => {
+					this.broadcastToDashboard(
+						{
+							type: "task_status_changed",
+							data: { taskId, oldStatus, newStatus, task },
+						},
+						environment,
+					);
+				},
+			);
 
-		(this.webSocketManager as any).on?.("task_priority_changed", (taskId: string, oldPriority: string, newPriority: string, task: Task) => {
-			this.broadcastToDashboard({
-				type: "task_priority_changed",
-				data: { taskId, oldPriority, newPriority, task }
-			});
-		});
+			wsManager.on?.(
+				"task_priority_changed",
+				(taskId: string, oldPriority: string, newPriority: string, task: Task) => {
+					this.broadcastToDashboard(
+						{
+							type: "task_priority_changed",
+							data: { taskId, oldPriority, newPriority, task },
+						},
+						environment,
+					);
+				},
+			);
 
-		(this.webSocketManager as any).on?.("task_deleted", (taskId: string) => {
-			this.broadcastToDashboard({
-				type: "task_deleted",
-				data: { taskId }
+			wsManager.on?.("task_deleted", (taskId: string) => {
+				this.broadcastToDashboard(
+					{
+						type: "task_deleted",
+						data: { taskId },
+					},
+					environment,
+				);
 			});
-		});
+		}
 	}
 
 	// Broadcast message to all connected dashboard clients
-	private broadcastToDashboard(message: any): void {
+	private broadcastToDashboard(message: any, environment?: string): void {
 		const messageStr = JSON.stringify(message);
-		this.activeConnections.forEach(ws => {
-			if (ws.readyState === 1) { // WebSocket.OPEN
-				ws.send(messageStr);
+		this.activeConnections.forEach((connection) => {
+			if (environment && connection.environment !== environment) {
+				return;
+			}
+			if (connection.ws.readyState === 1) {
+				connection.ws.send(messageStr);
 			}
 		});
 	}
@@ -235,11 +436,20 @@ export class DashboardServer {
 		setInterval(async () => {
 			try {
 				if (this.activeConnections.size > 0) {
-					const metrics = await this.getMetrics();
-					this.broadcastToDashboard({
-						type: "metrics_update",
-						data: metrics
-					});
+					const environments = new Set(
+						Array.from(this.activeConnections.values()).map((connection) => connection.environment),
+					);
+					for (const environment of environments) {
+						const services = this.getEnvironmentServices(environment);
+						const metrics = await this.getMetrics(services);
+						this.broadcastToDashboard(
+							{
+								type: "metrics_update",
+								data: metrics,
+							},
+							environment,
+						);
+					}
 				}
 			} catch (error) {
 				console.error("[DASHBOARD] Error broadcasting metrics:", error);
@@ -247,11 +457,166 @@ export class DashboardServer {
 		}, 30000);
 	}
 
+	// Handle bulk task actions (pause, resume, cancel, prioritize)
+	private async handleBulkTaskAction(
+		action: string,
+		taskIds: string[],
+		data: any,
+		environment: string,
+	): Promise<any> {
+		const results = [];
+		
+		for (const taskId of taskIds) {
+			try {
+				let result;
+				switch (action) {
+					case "pause":
+						result = await this.tcpClient.sendCommand(
+							"update_task_status",
+							{ id: taskId, status: "cancelled" },
+							environment,
+						);
+						break;
+					case "resume":
+						result = await this.tcpClient.sendCommand(
+							"update_task_status",
+							{ id: taskId, status: "todo" },
+							environment,
+						);
+						break;
+					case "cancel":
+						result = await this.tcpClient.sendCommand(
+							"update_task_status",
+							{ id: taskId, status: "cancelled" },
+							environment,
+						);
+						break;
+					case "set_priority":
+						result = await this.tcpClient.sendCommand(
+							"update_task_priority",
+							{ id: taskId, priority: data.priority },
+							environment,
+						);
+						break;
+					case "delete":
+						result = await this.tcpClient.sendCommand(
+							"delete_task",
+							{ id: taskId },
+							environment,
+						);
+						break;
+					default:
+						throw new Error(`Unknown bulk action: ${action}`);
+				}
+				
+				results.push({
+					taskId,
+					success: result.success,
+					data: result.data,
+					error: result.error?.message
+				});
+			} catch (error) {
+				results.push({
+					taskId,
+					success: false,
+					error: error instanceof Error ? error.message : "Unknown error"
+				});
+			}
+		}
+		
+		return {
+			action,
+			totalTasks: taskIds.length,
+			successful: results.filter(r => r.success).length,
+			failed: results.filter(r => !r.success).length,
+			results
+		};
+	}
+
+	// Get system health metrics
+	private async getSystemHealth(environment: string): Promise<any> {
+		const memUsage = process.memoryUsage();
+		const uptime = process.uptime();
+		const tcpConnected = await this.tcpClient.checkConnection();
+		
+		// Get tasks for health analysis
+		const tasksResult = await this.tcpClient.sendCommand("list_tasks", {}, environment);
+		const tasks = tasksResult.success ? tasksResult.data as any[] : [];
+		
+		const failedTasks = tasks.filter(t => t.status === "failed");
+		const overdueTasks = tasks.filter(t => {
+			const created = new Date(t.createdAt);
+			const ageHours = (Date.now() - created.getTime()) / (1000 * 60 * 60);
+			return t.status !== "done" && ageHours > 24;
+		});
+		
+		// Determine health status
+		let healthStatus = "healthy";
+		const issues = [];
+		
+		if (!tcpConnected) {
+			healthStatus = "unhealthy";
+			issues.push("TCP connection to daemon lost");
+		}
+		
+		if (memUsage.heapUsed / memUsage.heapTotal > 0.9) {
+			healthStatus = "unhealthy";
+			issues.push("Memory usage critical");
+		}
+		
+		if (failedTasks.length > 10) {
+			healthStatus = "degraded";
+			issues.push(`${failedTasks.length} failed tasks`);
+		}
+		
+		if (overdueTasks.length > 20) {
+			healthStatus = "degraded";
+			issues.push(`${overdueTasks.length} overdue tasks`);
+		}
+		
+		return {
+			status: healthStatus,
+			issues,
+			metrics: {
+				memory: {
+					used: memUsage.heapUsed,
+					total: memUsage.heapTotal,
+					percentage: Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100)
+				},
+				uptime: {
+					seconds: uptime,
+					formatted: this.formatUptime(uptime)
+				},
+				tasks: {
+					total: tasks.length,
+					failed: failedTasks.length,
+					overdue: overdueTasks.length,
+					completionRate: tasks.length > 0 ? Math.round((tasks.filter(t => t.status === "done").length / tasks.length) * 100) : 0
+				},
+				connections: {
+					tcp: tcpConnected,
+					websockets: this.activeConnections.size
+				}
+			},
+			timestamp: new Date().toISOString()
+		};
+	}
+
+	// Format uptime into human readable string
+	private formatUptime(seconds: number): string {
+		const days = Math.floor(seconds / (24 * 60 * 60));
+		const hours = Math.floor((seconds % (24 * 60 * 60)) / (60 * 60));
+		const minutes = Math.floor((seconds % (60 * 60)) / 60);
+		
+		return `${days}d ${hours}h ${minutes}m`;
+	}
+
 	// Main request handler
 	async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
 		try {
 			const url = new URL(req.url || "", `http://${req.headers.host}`);
 			const pathname = url.pathname;
+			const environment = this.resolveEnvironment(req.headers);
 
 			// Serve main dashboard page
 			if (pathname === "/") {
@@ -262,7 +627,8 @@ export class DashboardServer {
 
 			// Serve API endpoints
 			if (pathname === "/api/metrics") {
-				const metrics = await this.getMetrics();
+				const services = this.getEnvironmentServices(environment);
+				const metrics = await this.getMetrics(services);
 				res.writeHead(200, { "Content-Type": "application/json" });
 				res.end(JSON.stringify(metrics));
 				return;
@@ -270,37 +636,57 @@ export class DashboardServer {
 
 			// Serve tasks API endpoints
 			if (pathname.startsWith("/api/tasks")) {
-				await this.serveTasksAPI(req, res);
+				await this.serveTasksAPI(req, res, environment);
 				return;
 			}
 
 			// Serve queue status endpoint
 			if (pathname === "/api/queue/status") {
-				await this.serveQueueStatus(req, res);
+				await this.serveQueueStatus(req, res, environment);
 				return;
 			}
 
 			// Serve activity logs endpoint
 			if (pathname === "/api/logs") {
-				await this.serveActivityLogs(req, res);
+				await this.serveActivityLogs(req, res, environment);
 				return;
 			}
 
 			// Serve audit history endpoint
 			if (pathname === "/api/audit/history") {
-				await this.serveAuditHistory(req, res);
+				await this.serveAuditHistory(req, res, environment);
 				return;
 			}
 
 			// Serve audit summary endpoint
 			if (pathname === "/api/audit/summary") {
-				await this.serveAuditSummary(req, res);
+				await this.serveAuditSummary(req, res, environment);
 				return;
 			}
 
 			// Serve audit statistics endpoint
 			if (pathname === "/api/audit/statistics") {
-				await this.serveAuditStatistics(req, res);
+				await this.serveAuditStatistics(req, res, environment);
+				return;
+			}
+
+			// Serve daemon control endpoints
+			if (pathname.startsWith("/api/daemon/")) {
+				await this.serveDaemonControl(req, res, pathname, environment);
+				return;
+			}
+
+			// Serve analytics endpoints
+			if (pathname.startsWith("/api/analytics")) {
+				const environment = this.resolveEnvironment(req.headers);
+				const services = this.getEnvironmentServices(environment);
+				await services.analyticsService.handleAnalyticsRequest(req, res);
+				return;
+			}
+
+			// Serve bulk actions endpoint
+			if (pathname === "/api/tasks/bulk-action" && req.method === "POST") {
+				await this.serveBulkActions(req, res, environment);
 				return;
 			}
 
@@ -591,7 +977,11 @@ export class DashboardServer {
 		`;
 	}
 
-	private async serveAuditHistory(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	private async serveAuditHistory(
+		req: IncomingMessage,
+		res: ServerResponse,
+		environment: string,
+	): Promise<void> {
 		try {
 			const url = new URL(req.url || "", `http://${req.headers.host}`);
 			const taskId = url.searchParams.get("taskId");
@@ -611,7 +1001,11 @@ export class DashboardServer {
 			if (fromDate) requestData.fromDate = fromDate;
 			if (toDate) requestData.toDate = toDate;
 			
-			const result = await this.tcpClient.sendCommand("get_task_history", requestData);
+			const result = await this.tcpClient.sendCommand(
+				"get_task_history",
+				requestData,
+				environment,
+			);
 			
 			if (result.success) {
 				res.writeHead(200, { "Content-Type": "application/json" });
@@ -630,7 +1024,11 @@ export class DashboardServer {
 		}
 	}
 
-	private async serveAuditSummary(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	private async serveAuditSummary(
+		req: IncomingMessage,
+		res: ServerResponse,
+		environment: string,
+	): Promise<void> {
 		try {
 			const url = new URL(req.url || "", `http://${req.headers.host}`);
 			const taskId = url.searchParams.get("taskId");
@@ -641,7 +1039,11 @@ export class DashboardServer {
 				return;
 			}
 			
-			const result = await this.tcpClient.sendCommand("get_task_history_summary", { taskId });
+			const result = await this.tcpClient.sendCommand(
+				"get_task_history_summary",
+				{ taskId },
+				environment,
+			);
 			
 			if (result.success) {
 				res.writeHead(200, { "Content-Type": "application/json" });
@@ -660,7 +1062,11 @@ export class DashboardServer {
 		}
 	}
 
-	private async serveAuditStatistics(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	private async serveAuditStatistics(
+		req: IncomingMessage,
+		res: ServerResponse,
+		environment: string,
+	): Promise<void> {
 		try {
 			const url = new URL(req.url || "", `http://${req.headers.host}`);
 			const fromDate = url.searchParams.get("fromDate");
@@ -670,7 +1076,11 @@ export class DashboardServer {
 			if (fromDate) requestData.fromDate = fromDate;
 			if (toDate) requestData.toDate = toDate;
 			
-			const result = await this.tcpClient.sendCommand("get_audit_statistics", requestData);
+			const result = await this.tcpClient.sendCommand(
+				"get_audit_statistics",
+				requestData,
+				environment,
+			);
 			
 			if (result.success) {
 				res.writeHead(200, { "Content-Type": "application/json" });
@@ -704,7 +1114,11 @@ export class DashboardServer {
 		});
 	}
 
-	private async serveTasksAPI(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	private async serveTasksAPI(
+		req: IncomingMessage,
+		res: ServerResponse,
+		environment: string,
+	): Promise<void> {
 		try {
 			const url = new URL(req.url || "", `http://${req.headers.host}`);
 			const pathname = url.pathname;
@@ -721,7 +1135,11 @@ export class DashboardServer {
 				if (priorityFilter && priorityFilter !== "all") filters.priority = priorityFilter;
 				if (searchQuery) filters.search = searchQuery;
 				
-				const result = await this.tcpClient.sendCommand("list_tasks_filtered", { filters });
+				const result = await this.tcpClient.sendCommand(
+					"list_tasks_filtered",
+					{ filters },
+					environment,
+				);
 				
 				if (result.success) {
 					res.writeHead(200, { "Content-Type": "application/json" });
@@ -735,7 +1153,7 @@ export class DashboardServer {
 				const body = await this.parseRequestBody(req);
 				const taskData = JSON.parse(body);
 				
-				const result = await this.tcpClient.sendCommand("create_task", taskData);
+				const result = await this.tcpClient.sendCommand("create_task", taskData, environment);
 				
 				if (result.success) {
 					res.writeHead(201, { "Content-Type": "application/json" });
@@ -752,9 +1170,17 @@ export class DashboardServer {
 				
 				let result;
 				if (updateData.status !== undefined) {
-					result = await this.tcpClient.sendCommand("update_task_status", { id: taskId, status: updateData.status });
+					result = await this.tcpClient.sendCommand(
+						"update_task_status",
+						{ id: taskId, status: updateData.status },
+						environment,
+					);
 				} else if (updateData.priority !== undefined) {
-					result = await this.tcpClient.sendCommand("update_task_priority", { id: taskId, priority: updateData.priority });
+					result = await this.tcpClient.sendCommand(
+						"update_task_priority",
+						{ id: taskId, priority: updateData.priority },
+						environment,
+					);
 				} else {
 					res.writeHead(400, { "Content-Type": "application/json" });
 					res.end(JSON.stringify({ error: "No valid update fields provided" }));
@@ -772,7 +1198,7 @@ export class DashboardServer {
 				// Delete task
 				const taskId = pathname.split("/").pop();
 				
-				const result = await this.tcpClient.sendCommand("delete_task", { id: taskId });
+				const result = await this.tcpClient.sendCommand("delete_task", { id: taskId }, environment);
 				
 				if (result.success) {
 					res.writeHead(200, { "Content-Type": "application/json" });
@@ -786,10 +1212,11 @@ export class DashboardServer {
 				const body = await this.parseRequestBody(req);
 				const updateData = JSON.parse(body);
 				
-				const result = await this.tcpClient.sendCommand("update_task_status", { 
-					id: updateData.id, 
-					status: updateData.status 
-				});
+				const result = await this.tcpClient.sendCommand(
+					"update_task_status",
+					{ id: updateData.id, status: updateData.status },
+					environment,
+				);
 				
 				if (result.success) {
 					res.writeHead(200, { "Content-Type": "application/json" });
@@ -809,7 +1236,7 @@ export class DashboardServer {
 					return;
 				}
 				
-				const result = await this.tcpClient.sendCommand("delete_task", { id: taskId });
+				const result = await this.tcpClient.sendCommand("delete_task", { id: taskId }, environment);
 				
 				if (result.success) {
 					res.writeHead(200, { "Content-Type": "application/json" });
@@ -823,7 +1250,11 @@ export class DashboardServer {
 				const body = await this.parseRequestBody(req);
 				const { id } = JSON.parse(body);
 				
-				const result = await this.tcpClient.sendCommand("update_task_status", { id, status: "cancelled" });
+				const result = await this.tcpClient.sendCommand(
+					"update_task_status",
+					{ id, status: "cancelled" },
+					environment,
+				);
 				
 				if (result.success) {
 					res.writeHead(200, { "Content-Type": "application/json" });
@@ -837,7 +1268,11 @@ export class DashboardServer {
 				const body = await this.parseRequestBody(req);
 				const { id } = JSON.parse(body);
 				
-				const result = await this.tcpClient.sendCommand("update_task_status", { id, status: "todo" });
+				const result = await this.tcpClient.sendCommand(
+					"update_task_status",
+					{ id, status: "todo" },
+					environment,
+				);
 				
 				if (result.success) {
 					res.writeHead(200, { "Content-Type": "application/json" });
@@ -856,10 +1291,14 @@ export class DashboardServer {
 		}
 	}
 
-	private async serveQueueStatus(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	private async serveQueueStatus(
+		req: IncomingMessage,
+		res: ServerResponse,
+		environment: string,
+	): Promise<void> {
 		try {
 			// Get all tasks to analyze queue status
-			const tasksResult = await this.tcpClient.sendCommand("list_tasks", {});
+			const tasksResult = await this.tcpClient.sendCommand("list_tasks", {}, environment);
 			
 			if (!tasksResult.success) {
 				res.writeHead(500, { "Content-Type": "application/json" });
@@ -905,13 +1344,17 @@ export class DashboardServer {
 		}
 	}
 
-	private async serveActivityLogs(req: IncomingMessage, res: ServerResponse): Promise<void> {
+	private async serveActivityLogs(
+		req: IncomingMessage,
+		res: ServerResponse,
+		environment: string,
+	): Promise<void> {
 		try {
 			const url = new URL(req.url || "", `http://${req.headers.host}`);
 			const limit = parseInt(url.searchParams.get("limit") || "50");
 
 			// Get recent tasks to simulate activity logs
-			const tasksResult = await this.tcpClient.sendCommand("list_tasks", {});
+			const tasksResult = await this.tcpClient.sendCommand("list_tasks", {}, environment);
 			
 			if (!tasksResult.success) {
 				res.writeHead(500, { "Content-Type": "application/json" });
@@ -958,8 +1401,35 @@ export class DashboardServer {
 		res.end(`Internal Server Error: ${message}`);
 	}
 
-	private async getMetrics(): Promise<DashboardMetrics> {
-		const coreTasks = await this.productManager.getAllTasks();
+	private async serveBulkActions(
+		req: IncomingMessage,
+		res: ServerResponse,
+		environment: string,
+	): Promise<void> {
+		try {
+			const body = await this.parseRequestBody(req);
+			const { action, taskIds, data } = JSON.parse(body);
+
+			if (!action || !taskIds || !Array.isArray(taskIds)) {
+				res.writeHead(400, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ error: "Action and taskIds array are required" }));
+				return;
+			}
+
+			// Use the existing handleBulkTaskAction method
+			const result = await this.handleBulkTaskAction(action, taskIds, data, environment);
+
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify(result));
+		} catch (error) {
+			console.error("[DASHBOARD] Error in bulk action:", error);
+			res.writeHead(500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: error instanceof Error ? error.message : "Failed to perform bulk action" }));
+		}
+	}
+
+	private async getMetrics(services: EnvironmentServices): Promise<DashboardMetrics> {
+		const coreTasks = await services.productManager.getAllTasks();
 		const tasks = coreTasks.map(task => ({
 			...task,
 			status: (task.status as Task["status"]) || "todo",
@@ -1012,7 +1482,7 @@ export class DashboardServer {
 			health: {
 				status: healthStatus,
 				lastUpdate: new Date().toISOString(),
-				wsConnections: (this.webSocketManager as any).getConnectionCount?.() || 0,
+				wsConnections: (services.webSocketManager as any).getConnectionCount?.() || 0,
 				tcpConnected,
 				memoryUsage: Math.round(memoryUsagePercent),
 			},
@@ -1024,6 +1494,73 @@ export class DashboardServer {
 				freemem: require("os").freemem(),
 			},
 		};
+	}
+
+	private async serveDaemonControl(
+		req: IncomingMessage,
+		res: ServerResponse,
+		pathname: string,
+		environment: string,
+	): Promise<void> {
+		try {
+			const action = pathname.replace("/api/daemon/", "");
+			
+			switch (action) {
+				case "status": {
+					const result = await this.tcpClient.sendCommand("get_daemon_status", {}, environment);
+					if (result.success) {
+						res.writeHead(200, { "Content-Type": "application/json" });
+						res.end(JSON.stringify(result.data));
+					} else {
+						res.writeHead(500, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ error: result.error?.message || "Failed to get daemon status" }));
+					}
+					break;
+				}
+				case "pause": {
+					const result = await this.tcpClient.sendCommand("pause_daemon", {}, environment);
+					if (result.success) {
+						res.writeHead(200, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ success: true, message: "Daemon paused successfully" }));
+					} else {
+						res.writeHead(500, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ error: result.error?.message || "Failed to pause daemon" }));
+					}
+					break;
+				}
+				case "resume": {
+					const result = await this.tcpClient.sendCommand("resume_daemon", {}, environment);
+					if (result.success) {
+						res.writeHead(200, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ success: true, message: "Daemon resumed successfully" }));
+					} else {
+						res.writeHead(500, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ error: result.error?.message || "Failed to resume daemon" }));
+					}
+					break;
+				}
+				case "restart": {
+					const result = await this.tcpClient.sendCommand("restart", {}, environment);
+					if (result.success) {
+						res.writeHead(200, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ success: true, message: "Daemon restart initiated" }));
+					} else {
+						res.writeHead(500, { "Content-Type": "application/json" });
+						res.end(JSON.stringify({ error: result.error?.message || "Failed to restart daemon" }));
+					}
+					break;
+				}
+				default: {
+					res.writeHead(404, { "Content-Type": "application/json" });
+					res.end(JSON.stringify({ error: "Unknown daemon control action" }));
+					break;
+				}
+			}
+		} catch (error) {
+			console.error("[DASHBOARD] Error in daemon control:", error);
+			res.writeHead(500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: error instanceof Error ? error.message : "Internal server error" }));
+		}
 	}
 
 	private getDashboardHTML(): string {
@@ -1866,13 +2403,167 @@ export class DashboardServer {
             font-size: 0.875rem;
         }
 
+        /* Bulk Actions Styles */
+        .bulk-actions-container {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        
+        .bulk-actions-info {
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 12px;
+            font-size: 0.875rem;
+        }
+        
+        .bulk-actions-buttons {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .action-separator {
+            width: 1px;
+            height: 24px;
+            background: #d1d5db;
+            margin: 0 4px;
+        }
+        
+        .bulk-select {
+            padding: 6px 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+        }
+        
+        .task-checkbox {
+            width: 18px;
+            height: 18px;
+            margin-right: 12px;
+            cursor: pointer;
+            accent-color: #3b82f6;
+        }
+        
+        .task-item.selected {
+            background: #eff6ff;
+            border-left: 4px solid #3b82f6;
+            padding-left: 12px;
+        }
+        
+        .task-item:hover {
+            background: #f9fafb;
+        }
+        
+        .task-item.selected:hover {
+            background: #dbeafe;
+        }
+
+        /* Task Details Modal */
+        .task-details-modal {
+            max-width: 800px;
+            width: 90%;
+        }
+        
+        .task-details-content {
+            display: grid;
+            gap: 20px;
+        }
+        
+        .task-details-section {
+            background: #f9fafb;
+            padding: 16px;
+            border-radius: 8px;
+        }
+        
+        .task-details-section h3 {
+            margin-bottom: 12px;
+            font-size: 1.1rem;
+            color: #1f2937;
+            font-weight: 600;
+        }
+        
+        .task-detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .task-detail-row:last-child {
+            border-bottom: none;
+        }
+        
+        .task-detail-label {
+            font-weight: 600;
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+        
+        .task-detail-value {
+            color: #1f2937;
+            font-size: 0.875rem;
+        }
+
+        /* Enhanced Health Tab */
+        .health-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+        
+        .health-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            border-left: 4px solid #10b981;
+        }
+        
+        .health-card.warning {
+            border-left-color: #f59e0b;
+        }
+        
+        .health-card.error {
+            border-left-color: #ef4444;
+        }
+        
+        .health-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 12px;
+        }
+        
+        .health-metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            font-size: 0.875rem;
+        }
+        
+        .health-metric-label {
+            color: #6b7280;
+        }
+        
+        .health-metric-value {
+            font-weight: 600;
+            color: #1f2937;
+        }
+
         /* Print styles */
         @media print {
             body {
                 background: white;
             }
             
-            .header, .task-form, .filters, .btn, .task-actions {
+            .header, .task-form, .filters, .btn, .task-actions,
+            .bulk-actions-container, .task-actions {
                 display: none;
             }
             
@@ -2092,38 +2783,183 @@ export class DashboardServer {
                         <button class="btn btn-primary btn-sm" onclick="loadTasks()">
                             <span>🔄</span> Refresh
                         </button>
+                        <button class="btn btn-secondary btn-sm" onclick="toggleBulkActions()">
+                            <span>☑️</span> Bulk Actions
+                        </button>
                     </div>
                 </div>
+                
+                <!-- Bulk Actions Panel -->
+                <div id="bulkActionsPanel" style="display: none; margin-bottom: 20px;">
+                    <div class="bulk-actions-container">
+                        <div class="bulk-actions-info">
+                            <span id="selectedCount">0</span> tasks selected
+                        </div>
+                        <div class="bulk-actions-buttons">
+                            <button class="btn btn-secondary btn-sm" onclick="selectAllTasks()">
+                                <span>☑️</span> Select All
+                            </button>
+                            <button class="btn btn-secondary btn-sm" onclick="clearSelection()">
+                                <span>❌</span> Clear Selection
+                            </button>
+                            <div class="action-separator"></div>
+                            <select id="bulkPrioritySelect" class="bulk-select">
+                                <option value="">Set Priority...</option>
+                                <option value="high">High Priority</option>
+                                <option value="medium">Medium Priority</option>
+                                <option value="low">Low Priority</option>
+                            </select>
+                            <button class="btn btn-warning btn-sm" onclick="bulkSetPriority()">
+                                <span>⚡</span> Set Priority
+                            </button>
+                            <div class="action-separator"></div>
+                            <button class="btn btn-success btn-sm" onclick="bulkResume()">
+                                <span>▶️</span> Resume
+                            </button>
+                            <button class="btn btn-danger btn-sm" onclick="bulkCancel()">
+                                <span>⏹️</span> Cancel
+                            </button>
+                            <button class="btn btn-danger btn-sm" onclick="bulkDelete()">
+                                <span>🗑️</span> Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
                 <div id="tasksList" class="loading">Loading tasks...</div>
             </div>
         </div>
 
         <!-- Health Tab -->
         <div id="health-tab" class="tab-content">
-            <div class="metrics">
-                <div class="metric-card">
-                    <div class="metric-value" id="healthStatusDetailed">-</div>
-                    <div class="metric-label">System Status</div>
+            <div class="health-grid">
+                <div class="health-card">
+                    <div class="health-title">🏥️ System Health</div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Status:</span>
+                        <span class="health-metric-value" id="healthStatusDetailed">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Uptime:</span>
+                        <span class="health-metric-value" id="healthUptime">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Process ID:</span>
+                        <span class="health-metric-value" id="healthPid">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Node Version:</span>
+                        <span class="health-metric-value" id="healthNodeVersion">-</span>
+                    </div>
                 </div>
-                <div class="metric-card">
-                    <div class="metric-value" id="tcpConnection">-</div>
-                    <div class="metric-label">TCP Connection</div>
+
+                <div class="health-card">
+                    <div class="health-title">💾 Memory Usage</div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Used:</span>
+                        <span class="health-metric-value" id="memoryUsed">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Total:</span>
+                        <span class="health-metric-value" id="memoryTotal">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Usage:</span>
+                        <span class="health-metric-value" id="memoryPercent">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">External:</span>
+                        <span class="health-metric-value" id="memoryExternal">-</span>
+                    </div>
                 </div>
-                <div class="metric-card">
-                    <div class="metric-value" id="systemMemory">-</div>
-                    <div class="metric-label">Memory Usage</div>
+
+                <div class="health-card">
+                    <div class="health-title">🔌 Connections</div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">TCP:</span>
+                        <span class="health-metric-value" id="tcpConnection">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">WebSockets:</span>
+                        <span class="health-metric-value" id="wsConnectionsHealth">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">HTTP Server:</span>
+                        <span class="health-metric-value" id="httpServerStatus">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Dashboard Server:</span>
+                        <span class="health-metric-value" id="dashboardServerStatus">-</span>
+                    </div>
                 </div>
-                <div class="metric-card">
-                    <div class="metric-value" id="freeMemory">-</div>
-                    <div class="metric-label">Free Memory</div>
+
+                <div class="health-card">
+                    <div class="health-title">🖥️ System Info</div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Platform:</span>
+                        <span class="health-metric-value" id="systemPlatform">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Architecture:</span>
+                        <span class="health-metric-value" id="systemArch">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Total Memory:</span>
+                        <span class="health-metric-value" id="totalMemory">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Free Memory:</span>
+                        <span class="health-metric-value" id="freeMemory">-</span>
+                    </div>
                 </div>
-                <div class="metric-card">
-                    <div class="metric-value" id="systemPlatform">-</div>
-                    <div class="metric-label">Platform</div>
+
+                <div class="health-card">
+                    <div class="health-title">📊 Task Performance</div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Total Tasks:</span>
+                        <span class="health-metric-value" id="healthTotalTasks">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Completion Rate:</span>
+                        <span class="health-metric-value" id="healthCompletionRate">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Failed Tasks:</span>
+                        <span class="health-metric-value" id="healthFailedTasks">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Overdue Tasks:</span>
+                        <span class="health-metric-value" id="healthOverdueTasks">-</span>
+                    </div>
                 </div>
-                <div class="metric-card">
-                    <div class="metric-value" id="systemArch">-</div>
-                    <div class="metric-label">Architecture</div>
+
+                <div class="health-card">
+                    <div class="health-title">⚙️ Daemon Controls</div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Processing Status:</span>
+                        <span class="health-metric-value" id="daemonProcessingStatus">-</span>
+                    </div>
+                    <div class="health-metric">
+                        <span class="health-metric-label">Controls:</span>
+                        <div style="display: flex; gap: 8px; margin-top: 8px;">
+                            <button class="btn btn-warning btn-sm" id="pauseDaemonBtn" onclick="pauseDaemon()">
+                                <span>⏸️</span> Pause
+                            </button>
+                            <button class="btn btn-success btn-sm" id="resumeDaemonBtn" onclick="resumeDaemon()" style="display: none;">
+                                <span>▶️</span> Resume
+                            </button>
+                            <button class="btn btn-danger btn-sm" onclick="restartDaemon()">
+                                <span>🔄</span> Restart
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="health-card">
+                    <div class="health-title">⚠️ System Alerts</div>
+                    <div id="healthAlerts" class="health-alerts">
+                        <div class="loading">Loading system alerts...</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2515,10 +3351,261 @@ export class DashboardServer {
             document.getElementById('taskModal').classList.remove('show');
         }
 
+        // Bulk Actions Functions
+        let selectedTasks = new Set();
+        let bulkActionsVisible = false;
+
+        function toggleBulkActions() {
+            bulkActionsVisible = !bulkActionsVisible;
+            const panel = document.getElementById('bulkActionsPanel');
+            panel.style.display = bulkActionsVisible ? 'block' : 'none';
+            
+            // Add checkboxes to tasks if showing bulk actions
+            if (bulkActionsVisible) {
+                addTaskCheckboxes();
+            } else {
+                removeTaskCheckboxes();
+            }
+            
+            updateBulkActionsUI();
+        }
+
+        function addTaskCheckboxes() {
+            const taskItems = document.querySelectorAll('.task-item');
+            taskItems.forEach(item => {
+                const taskId = item.dataset.taskId;
+                if (!item.querySelector('.task-checkbox')) {
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.className = 'task-checkbox';
+                    checkbox.dataset.taskId = taskId;
+                    checkbox.addEventListener('change', (e) => {
+                        if (e.target.checked) {
+                            selectedTasks.add(taskId);
+                            item.classList.add('selected');
+                        } else {
+                            selectedTasks.delete(taskId);
+                            item.classList.remove('selected');
+                        }
+                        updateBulkActionsUI();
+                    });
+                    
+                    // Insert checkbox at the beginning of task-header
+                    const header = item.querySelector('.task-header');
+                    header.insertBefore(checkbox, header.firstChild);
+                }
+            });
+        }
+
+        function removeTaskCheckboxes() {
+            const checkboxes = document.querySelectorAll('.task-checkbox');
+            checkboxes.forEach(cb => cb.remove());
+            
+            const taskItems = document.querySelectorAll('.task-item');
+            taskItems.forEach(item => item.classList.remove('selected'));
+            
+            selectedTasks.clear();
+        }
+
+        function selectAllTasks() {
+            const checkboxes = document.querySelectorAll('.task-checkbox');
+            checkboxes.forEach(cb => {
+                cb.checked = true;
+                const taskId = cb.dataset.taskId;
+                selectedTasks.add(taskId);
+                cb.closest('.task-item').classList.add('selected');
+            });
+            updateBulkActionsUI();
+        }
+
+        function clearSelection() {
+            const checkboxes = document.querySelectorAll('.task-checkbox');
+            checkboxes.forEach(cb => {
+                cb.checked = false;
+                cb.closest('.task-item').classList.remove('selected');
+            });
+            selectedTasks.clear();
+            updateBulkActionsUI();
+        }
+
+        function updateBulkActionsUI() {
+            document.getElementById('selectedCount').textContent = selectedTasks.size;
+            
+            // Enable/disable bulk action buttons based on selection
+            const buttons = document.querySelectorAll('.bulk-actions-buttons button');
+            buttons.forEach(btn => {
+                if (btn.textContent.includes('Select All') || btn.textContent.includes('Clear Selection')) {
+                    return; // Always enable these
+                }
+                btn.disabled = selectedTasks.size === 0;
+            });
+        }
+
+        async function bulkSetPriority() {
+            if (selectedTasks.size === 0) return;
+            
+            const priority = document.getElementById('bulkPrioritySelect').value;
+            if (!priority) {
+                showError('Please select a priority level');
+                return;
+            }
+            
+            if (!confirm('Set priority to ' + priority + ' for ' + selectedTasks.size + ' selected tasks?')) {
+                return;
+            }
+            
+            await performBulkAction('set_priority', { priority });
+        }
+
+        async function bulkResume() {
+            if (selectedTasks.size === 0) return;
+            
+            if (!confirm('Resume ' + selectedTasks.size + ' selected tasks?')) {
+                return;
+            }
+            
+            await performBulkAction('resume');
+        }
+
+        async function bulkCancel() {
+            if (selectedTasks.size === 0) return;
+            
+            if (!confirm('Cancel ' + selectedTasks.size + ' selected tasks?')) {
+                return;
+            }
+            
+            await performBulkAction('cancel');
+        }
+
+        async function bulkDelete() {
+            if (selectedTasks.size === 0) return;
+            
+            if (!confirm('PERMANENTLY delete ' + selectedTasks.size + ' selected tasks? This action cannot be undone.')) {
+                return;
+            }
+            
+            await performBulkAction('delete');
+        }
+
+        async function performBulkAction(action, data = null) {
+            try {
+                showInfo('Performing ' + action + ' on ' + selectedTasks.size + ' tasks...');
+                
+                const taskIds = Array.from(selectedTasks);
+                const response = await fetch('/api/tasks/bulk-action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action,
+                        taskIds,
+                        data
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.successful > 0) {
+                    showSuccess(action + ' completed successfully for ' + result.successful + ' tasks');
+                }
+                
+                if (result.failed > 0) {
+                    showError(action + ' failed for ' + result.failed + ' tasks');
+                }
+                
+                // Clear selection and refresh
+                clearSelection();
+                await loadTasks();
+                await loadMetrics();
+                
+            } catch (error) {
+                showError('Failed to perform bulk action: ' + error.message);
+            }
+        }
+
         async function loadHealthDetails() {
             // Health details are already loaded in loadMetrics()
-            // This function ensures the health tab is updated when switched to
+            // This function ensures that health tab is updated when switched to
             await loadMetrics();
+        }
+            } catch (error) {
+                console.error('Error loading daemon status:', error);
+                document.getElementById('daemonProcessingStatus').textContent = 'Unknown';
+            }
+        }
+
+        // Daemon Control Functions
+        async function pauseDaemon() {
+            if (!confirm('Are you sure you want to pause the daemon? This will stop task processing.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/daemon/pause', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    showSuccess('Daemon paused successfully!');
+                    await loadHealthDetails();
+                    await loadMetrics();
+                } else {
+                    showError('Failed to pause daemon: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                showError('Failed to pause daemon: ' + error.message);
+            }
+        }
+
+        async function resumeDaemon() {
+            if (!confirm('Are you sure you want to resume the daemon? This will restart task processing.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/daemon/resume', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    showSuccess('Daemon resumed successfully!');
+                    await loadHealthDetails();
+                    await loadMetrics();
+                } else {
+                    showError('Failed to resume daemon: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                showError('Failed to resume daemon: ' + error.message);
+            }
+        }
+
+        async function restartDaemon() {
+            if (!confirm('Are you sure you want to restart the daemon? This will restart the entire service.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/daemon/restart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    showSuccess('Daemon restart initiated! The dashboard will refresh in a few seconds.');
+                    // Refresh after delay to allow restart to complete
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 5000);
+                } else {
+                    showError('Failed to restart daemon: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                showError('Failed to restart daemon: ' + error.message);
+            }
         }
 
         // Queue Status Functions
@@ -2859,6 +3946,10 @@ export class DashboardServer {
             showMessage(message, 'warning');
         }
 
+        function showInfo(message) {
+            showMessage(message, 'info');
+        }
+
         function showNotification(message, type) {
             type = type || 'info';
             
@@ -3001,6 +4092,276 @@ export class DashboardServer {
             // Function defined in audit-history.js
             if (typeof window.clearHistoryFilters === 'function') {
                 window.clearHistoryFilters();
+            }
+        }
+
+        // Bulk Actions Functions
+        let selectedTasks = new Set();
+        let bulkActionsVisible = false;
+
+        function toggleBulkActions() {
+            bulkActionsVisible = !bulkActionsVisible;
+            const panel = document.getElementById('bulkActionsPanel');
+            panel.style.display = bulkActionsVisible ? 'block' : 'none';
+            
+            // Add checkboxes to tasks if showing bulk actions
+            if (bulkActionsVisible) {
+                addTaskCheckboxes();
+            } else {
+                removeTaskCheckboxes();
+            }
+            
+            updateBulkActionsUI();
+        }
+
+        function addTaskCheckboxes() {
+            const taskItems = document.querySelectorAll('.task-item');
+            taskItems.forEach(item => {
+                const taskId = item.dataset.taskId;
+                if (!item.querySelector('.task-checkbox')) {
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.className = 'task-checkbox';
+                    checkbox.dataset.taskId = taskId;
+                    checkbox.addEventListener('change', (e) => {
+                        if (e.target.checked) {
+                            selectedTasks.add(taskId);
+                            item.classList.add('selected');
+                        } else {
+                            selectedTasks.delete(taskId);
+                            item.classList.remove('selected');
+                        }
+                        updateBulkActionsUI();
+                    });
+                    
+                    // Insert checkbox at the beginning of task-header
+                    const header = item.querySelector('.task-header');
+                    header.insertBefore(checkbox, header.firstChild);
+                }
+            });
+        }
+
+        function removeTaskCheckboxes() {
+            const checkboxes = document.querySelectorAll('.task-checkbox');
+            checkboxes.forEach(cb => cb.remove());
+            
+            const taskItems = document.querySelectorAll('.task-item');
+            taskItems.forEach(item => item.classList.remove('selected'));
+            
+            selectedTasks.clear();
+        }
+
+        function selectAllTasks() {
+            const checkboxes = document.querySelectorAll('.task-checkbox');
+            checkboxes.forEach(cb => {
+                cb.checked = true;
+                const taskId = cb.dataset.taskId;
+                selectedTasks.add(taskId);
+                cb.closest('.task-item').classList.add('selected');
+            });
+            updateBulkActionsUI();
+        }
+
+        function clearSelection() {
+            const checkboxes = document.querySelectorAll('.task-checkbox');
+            checkboxes.forEach(cb => {
+                cb.checked = false;
+                cb.closest('.task-item').classList.remove('selected');
+            });
+            selectedTasks.clear();
+            updateBulkActionsUI();
+        }
+
+        function updateBulkActionsUI() {
+            document.getElementById('selectedCount').textContent = selectedTasks.size;
+            
+            // Enable/disable bulk action buttons based on selection
+            const buttons = document.querySelectorAll('.bulk-actions-buttons button');
+            buttons.forEach(btn => {
+                if (btn.textContent.includes('Select All') || btn.textContent.includes('Clear Selection')) {
+                    return; // Always enable these
+                }
+                btn.disabled = selectedTasks.size === 0;
+            });
+        }
+
+        async function bulkSetPriority() {
+            if (selectedTasks.size === 0) return;
+            
+            const priority = document.getElementById('bulkPrioritySelect').value;
+            if (!priority) {
+                showError('Please select a priority level');
+                return;
+            }
+            
+            if (!confirm('Set priority to ' + priority + ' for ' + selectedTasks.size + ' selected tasks?')) {
+                return;
+            }
+            
+            await performBulkAction('set_priority', { priority });
+        }
+
+        async function bulkResume() {
+            if (selectedTasks.size === 0) return;
+            
+            if (!confirm('Resume ' + selectedTasks.size + ' selected tasks?')) {
+                return;
+            }
+            
+            await performBulkAction('resume');
+        }
+
+        async function bulkCancel() {
+            if (selectedTasks.size === 0) return;
+            
+            if (!confirm('Cancel ' + selectedTasks.size + ' selected tasks?')) {
+                return;
+            }
+            
+            await performBulkAction('cancel');
+        }
+
+        async function bulkDelete() {
+            if (selectedTasks.size === 0) return;
+            
+            if (!confirm('PERMANENTLY delete ' + selectedTasks.size + ' selected tasks? This action cannot be undone.')) {
+                return;
+            }
+            
+            await performBulkAction('delete');
+        }
+
+        async function performBulkAction(action, data) {
+            try {
+                showInfo('Performing ' + action + ' on ' + selectedTasks.size + ' tasks...');
+                
+                const taskIds = Array.from(selectedTasks);
+                const response = await fetch('/api/tasks/bulk-action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action,
+                        taskIds,
+                        data
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.successful > 0) {
+                    showSuccess(action + ' completed successfully for ' + result.successful + ' tasks');
+                }
+                
+                if (result.failed > 0) {
+                    showError(action + ' failed for ' + result.failed + ' tasks');
+                }
+                
+                // Clear selection and refresh
+                clearSelection();
+                await loadTasks();
+                await loadMetrics();
+                
+            } catch (error) {
+                showError('Failed to perform bulk action: ' + error.message);
+            }
+        }
+
+        // Daemon Control Functions
+        async function loadDaemonStatus() {
+            try {
+                const response = await fetch('/api/daemon/status');
+                const data = await response.json();
+                
+                document.getElementById('daemonProcessingStatus').textContent = data.paused ? 'Paused' : 'Active';
+                
+                // Update button states
+                const pauseBtn = document.getElementById('pauseDaemonBtn');
+                const resumeBtn = document.getElementById('resumeDaemonBtn');
+                
+                if (data.paused) {
+                    pauseBtn.style.display = 'none';
+                    resumeBtn.style.display = 'inline-flex';
+                } else {
+                    pauseBtn.style.display = 'inline-flex';
+                    resumeBtn.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error loading daemon status:', error);
+                document.getElementById('daemonProcessingStatus').textContent = 'Unknown';
+            }
+        }
+
+        async function pauseDaemon() {
+            if (!confirm('Are you sure you want to pause the daemon? This will stop task processing.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/daemon/pause', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    showSuccess('Daemon paused successfully!');
+                    await loadDaemonStatus();
+                    await loadMetrics();
+                } else {
+                    showError('Failed to pause daemon: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                showError('Failed to pause daemon: ' + error.message);
+            }
+        }
+
+        async function resumeDaemon() {
+            if (!confirm('Are you sure you want to resume the daemon? This will restart task processing.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/daemon/resume', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    showSuccess('Daemon resumed successfully!');
+                    await loadDaemonStatus();
+                    await loadMetrics();
+                } else {
+                    showError('Failed to resume daemon: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                showError('Failed to resume daemon: ' + error.message);
+            }
+        }
+
+        async function restartDaemon() {
+            if (!confirm('Are you sure you want to restart the daemon? This will restart the entire service.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/daemon/restart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    showSuccess('Daemon restart initiated! The dashboard will refresh in a few seconds.');
+                    // Refresh after delay to allow restart to complete
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 5000);
+                } else {
+                    showError('Failed to restart daemon: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                showError('Failed to restart daemon: ' + error.message);
             }
         }
 

@@ -8,6 +8,7 @@ import {
     requirePermission,
     type AuthContextRequest,
 } from "@isomorphiq/auth";
+import { normalizeProductManagerResolver, type ProductManagerResolver } from "./route-helpers.ts";
 
 const validateTaskInput = (title: string, description: string, priority?: string) => {
     if (!title || typeof title !== "string" || title.trim().length === 0) {
@@ -22,8 +23,8 @@ const validateTaskInput = (title: string, description: string, priority?: string
 };
 
 const validateTaskStatus = (status: string) => {
-    if (!["todo", "in-progress", "done"].includes(status)) {
-        throw new Error("Status must be one of: todo, in-progress, done");
+    if (!["todo", "in-progress", "done", "invalid"].includes(status)) {
+        throw new Error("Status must be one of: todo, in-progress, done, invalid");
     }
 };
 
@@ -33,7 +34,11 @@ const priorityWeight: Record<Task["priority"], number> = {
     low: 2,
 };
 
-export function registerTaskRoutes(app: express.Application, pm: ProductManager) {
+export function registerTaskRoutes(
+    app: express.Application,
+    pmOrResolver: ProductManager | ProductManagerResolver,
+) {
+    const resolvePm = normalizeProductManagerResolver(pmOrResolver);
     // GET /api/tasks - List all tasks (requires authentication)
     app.get("/api/tasks", authenticateToken, async (req: AuthContextRequest, res, next) => {
         try {
@@ -43,6 +48,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
             }
             console.log(`[HTTP API] GET /api/tasks - Listing all tasks for user: ${user.username}`);
 
+            const pm = resolvePm(req);
             const allTasks = await pm.getAllTasks();
             const userManager = getUserManager();
             const hasAdminPermission = await userManager.hasPermission(user, "tasks", "read");
@@ -93,6 +99,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
                     | "collaborating"
                     | "watching"
                 )[];
+                const pm = resolvePm(req);
                 const tasks = await pm.getTasksForUser(userId, includeTypes);
 
                 res.json({ tasks, count: tasks.length });
@@ -103,10 +110,11 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
     );
 
     // GET /api/queue - Show prioritized task queue (next up for ACP)
-    app.get("/api/queue", async (_req, res, next) => {
+    app.get("/api/queue", async (req, res, next) => {
         try {
             console.log("[HTTP API] GET /api/queue - Getting prioritized queue");
 
+            const pm = resolvePm(req);
             const allTasks = await pm.getAllTasks();
             const queue = allTasks
                 .filter((t) => t.status === "todo")
@@ -139,6 +147,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
             }
             console.log(`[HTTP API] GET /api/tasks/${id} - Getting task by user: ${user.username}`);
 
+            const pm = resolvePm(req);
             const tasks = await pm.getAllTasks();
             const task = tasks.find((t) => t.id === id);
 
@@ -190,10 +199,21 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
                         error: "dependencies must be an array of task IDs",
                     });
                 }
-                if (!["feature", "story", "task", "integration", "research"].includes(type)) {
+                if (
+                    ![
+                        "feature",
+                        "story",
+                        "task",
+                        "implementation",
+                        "integration",
+                        "testing",
+                        "research",
+                    ].includes(type)
+                ) {
                     return res.status(400).json({ error: "Invalid task type" });
                 }
 
+                const pm = resolvePm(req);
                 const task = await pm.createTask(
                     title,
                     description,
@@ -238,6 +258,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
                     });
                 }
 
+                const pm = resolvePm(req);
                 const hasAccess = await pm.hasTaskAccess(user.id, id, "write");
                 if (!hasAccess) {
                     return res.status(403).json({
@@ -275,6 +296,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
 
                 validateTaskStatus(status);
 
+                const pm = resolvePm(req);
                 const hasAccess = await pm.hasTaskAccess(user.id, id, "write");
                 if (!hasAccess) {
                     return res.status(403).json({
@@ -314,6 +336,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
                     throw new Error("Priority must be one of: low, medium, high");
                 }
 
+                const pm = resolvePm(req);
                 const hasAccess = await pm.hasTaskAccess(user.id, id, "write");
                 if (!hasAccess) {
                     return res.status(403).json({
@@ -346,6 +369,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
                 }
                 console.log(`[HTTP API] DELETE /api/tasks/${id} - Deleting task by user: ${user.username}`);
 
+                const pm = resolvePm(req);
                 const tasks = await pm.getAllTasks();
                 const task = tasks.find((t) => t.id === id);
 
@@ -395,6 +419,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
                     return res.status(400).json({ error: "Assigned user ID is required" });
                 }
 
+                const pm = resolvePm(req);
                 const hasAccess = await pm.hasTaskAccess(user.id, id, "write");
                 if (!hasAccess) {
                     return res.status(403).json({
@@ -436,6 +461,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
                     });
                 }
 
+                const pm = resolvePm(req);
                 const hasAccess = await pm.hasTaskAccess(user.id, id, "write");
                 if (!hasAccess) {
                     return res.status(403).json({
@@ -477,6 +503,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
                     });
                 }
 
+                const pm = resolvePm(req);
                 const hasAccess = await pm.hasTaskAccess(user.id, id, "write");
                 if (!hasAccess) {
                     return res.status(403).json({
@@ -500,6 +527,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
 
             validateTaskStatus(status);
 
+            const pm = resolvePm(req);
             const allTasks = await pm.getAllTasks();
             const tasks = allTasks.filter((t) => t.status === status);
 
@@ -519,6 +547,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
                 throw new Error("Priority must be one of: low, medium, high");
             }
 
+            const pm = resolvePm(req);
             const allTasks = await pm.getAllTasks();
             const tasks = allTasks.filter((t) => t.priority === priority);
 
@@ -529,10 +558,11 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
     });
 
     // GET /api/tasks/critical-path - Get critical path analysis
-    app.get("/api/tasks/critical-path", authenticateToken, async (_req, res, next) => {
+    app.get("/api/tasks/critical-path", authenticateToken, async (req, res, next) => {
         try {
             console.log("[HTTP API] GET /api/tasks/critical-path - Getting critical path analysis");
 
+            const pm = resolvePm(req);
             const allTasks = await pm.getAllTasks();
             const criticalPathResult = CriticalPathService.calculateCriticalPath(allTasks);
 
@@ -543,10 +573,11 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
     });
 
     // GET /api/tasks/available - Get tasks that can be started
-    app.get("/api/tasks/available", authenticateToken, async (_req, res, next) => {
+    app.get("/api/tasks/available", authenticateToken, async (req, res, next) => {
         try {
             console.log("[HTTP API] GET /api/tasks/available - Getting available tasks");
 
+            const pm = resolvePm(req);
             const allTasks = await pm.getAllTasks();
             const availableTasks = CriticalPathService.getAvailableTasks(allTasks);
 
@@ -557,10 +588,11 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
     });
 
     // GET /api/tasks/blocking - Get tasks that are blocking others
-    app.get("/api/tasks/blocking", authenticateToken, async (_req, res, next) => {
+    app.get("/api/tasks/blocking", authenticateToken, async (req, res, next) => {
         try {
             console.log("[HTTP API] GET /api/tasks/blocking - Getting blocking tasks");
 
+            const pm = resolvePm(req);
             const allTasks = await pm.getAllTasks();
             const blockingTasks = CriticalPathService.getBlockingTasks(allTasks);
 
@@ -583,6 +615,7 @@ export function registerTaskRoutes(app: express.Application, pm: ProductManager)
                 `[HTTP API] POST /api/tasks/${taskId}/impact - Analyzing impact with ${delayDays} days delay`,
             );
 
+            const pm = resolvePm(req);
             const allTasks = await pm.getAllTasks();
             const impactAnalysis = CriticalPathService.analyzeDelayImpact(allTasks, taskId, delayDays);
 

@@ -1,3 +1,4 @@
+import "../../../tests/test-utils/env-fetch.ts";
 import {
     AuthService,
     AuthenticationRepository,

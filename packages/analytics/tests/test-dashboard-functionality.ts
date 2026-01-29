@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../../../tests/test-utils/env-fetch.ts";
 
 /**
  * Test suite for dashboard functionality and UI components
@@ -49,7 +50,7 @@ class DashboardTester {
 
 	async setup(): Promise<void> {
 		// Start HTTP API server for testing
-		this.server = await startHttpServer(this.pm, 3004);
+		this.server = await startHttpServer({ resolveProductManager: () => this.pm }, 3004);
 		console.log("🚀 Test server started on port 3004");
 	}
 

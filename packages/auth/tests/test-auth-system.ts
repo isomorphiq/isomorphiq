@@ -1,3 +1,4 @@
+import "../../../tests/test-utils/env-fetch.ts";
 import { UserManager, AuthService, PermissionService } from "@isomorphiq/auth";
 import type { CreateUserInput, UserRole } from "@isomorphiq/auth";
 

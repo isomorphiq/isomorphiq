@@ -2,12 +2,12 @@ import type { MouseEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CriticalPathService } from "@isomorphiq/tasks/critical-path";
 import type { Task } from "@isomorphiq/tasks/types";
-import { DependencyVisualization } from "./DependencyVisualization.tsx";
-import { ImpactAnalysisComponent as ImpactAnalysis } from "./ImpactAnalysis.tsx";
-import { Header, Layout } from "./Layout.tsx";
-import { PriorityBadge } from "./PriorityBadge.tsx";
-import { SectionCard } from "./SectionCard.tsx";
-import { TypeBadge } from "./TypeBadge.tsx";
+import { DependencyVisualization } from "./DependencyVisualization";
+import { ImpactAnalysisComponent as ImpactAnalysis } from "./ImpactAnalysis";
+import { Header, Layout } from "./Layout";
+import { PriorityBadge } from "./PriorityBadge";
+import { SectionCard } from "./SectionCard";
+import { TypeBadge } from "./TypeBadge";
 
 type DependencyAnalysisPageProps = {
 	tasks: Task[];

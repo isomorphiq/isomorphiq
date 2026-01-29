@@ -1,4 +1,5 @@
 import type { WorkflowStateName } from "./workflow.ts";
+import type { TaskActionLog } from "@isomorphiq/types";
 
 export type WorkflowTask = {
 	id?: string;
@@ -7,9 +8,13 @@ export type WorkflowTask = {
 	type?: string;
 	status?: string;
 	priority?: string;
+	dependencies?: string[];
+	actionLog?: TaskActionLog[];
 };
 
 export type TransitionEffect = (payload?: unknown) => Promise<unknown> | unknown | Generator;
+
+export type MaybePromise<T> = T | Promise<T>;
 
 export interface TransitionDefinition<
 	Name extends string = string,
@@ -31,7 +36,7 @@ export interface StateDefinition<
 	promptHint?: string;
 	defaultTransition?: string;
 	transitions: TDefs;
-	decider?: (tasks: WorkflowTask[]) => TDefs[number]["name"];
+	decider?: (tasks: WorkflowTask[], context?: unknown) => MaybePromise<TDefs[number]["name"]>;
 }
 
 export interface RuntimeTransition {
@@ -53,7 +58,7 @@ export interface RuntimeState<
 	promptHint?: string;
 	defaultTransition?: string;
 	transitions: TransitionRecord<TNames>;
-	decider?: (tasks: WorkflowTask[]) => TNames;
+	decider?: (tasks: WorkflowTask[], context?: unknown) => MaybePromise<TNames>;
 }
 
 export function createTransition<Name extends string, Next extends WorkflowStateName>(

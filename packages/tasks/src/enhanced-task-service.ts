@@ -29,6 +29,10 @@ export class EnhancedTaskService {
 		this.setupEventHandlers();
 	}
 
+	getRepository(): TaskRepository {
+		return this.taskRepository;
+	}
+
 	private setupEventHandlers(): void {
 		// Handle task events for logging, metrics, etc.
 		globalEventBus.on("task_created", this.handleTaskCreated.bind(this));

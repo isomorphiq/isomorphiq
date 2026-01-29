@@ -405,14 +405,14 @@ export const TimeTrackingFactory = {
         }
 
         const now = new Date();
-        const candidate = {
+        const candidate: z.input<typeof TimeEntrySchema> = {
             id: `time-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
             taskId: input.taskId,
             userId: input.userId,
             ...(input.description ? { description: input.description } : {}),
             startTime: input.startTime || now,
             type: input.type || "manual",
-            status: "active",
+            status: "active" as const,
             billableStatus: input.billableStatus || "pending",
             tags: input.tags || [],
             createdAt: now,
@@ -441,11 +441,11 @@ export const TimeTrackingFactory = {
         }
 
         const now = new Date();
-        const candidate = {
+        const candidate: z.input<typeof TimesheetSchema> = {
             id: `timesheet-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
             userId: input.userId,
             period: input.period,
-            status: "draft",
+            status: "draft" as const,
             entries: [],
             totalHours: 0,
             billableHours: 0,

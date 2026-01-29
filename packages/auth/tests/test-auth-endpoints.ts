@@ -1,4 +1,4 @@
-import fetch from "node-fetch";
+import "../../../tests/test-utils/env-fetch.ts";
 
 const API_BASE = "http://localhost:3003";
 

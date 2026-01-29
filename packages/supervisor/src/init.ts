@@ -1,12 +1,71 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Lightweight supervisor for the task daemon.
 // - Runs the daemon in a separate Node process (fresh V8 each time)
 // - Auto-restarts on crash/exit only (no file-watching)
 // - Minimal deps, no nodemon/systemd required
 
-const ROOT = process.cwd();
+const pathExists = (candidate: string): boolean => {
+    try {
+        fs.accessSync(candidate, fs.constants.F_OK);
+        return true;
+    } catch {
+        return false;
+    }
+};
+
+const hasDaemonEntry = (root: string): boolean =>
+    pathExists(path.join(root, "packages", "daemon", "src", "daemon.ts"));
+
+const hasWorkspaceConfig = (root: string): boolean => {
+    const pkgPath = path.join(root, "package.json");
+    if (!pathExists(pkgPath)) {
+        return false;
+    }
+    try {
+        const raw = fs.readFileSync(pkgPath, "utf8");
+        const parsed = JSON.parse(raw) as { workspaces?: unknown };
+        return Array.isArray(parsed.workspaces) && parsed.workspaces.length > 0;
+    } catch {
+        return false;
+    }
+};
+
+const findRepoRoot = (start: string): string | null => {
+    let current = start;
+    for (;;) {
+        if (hasDaemonEntry(current) || hasWorkspaceConfig(current)) {
+            return current;
+        }
+        const parent = path.dirname(current);
+        if (parent === current) {
+            return null;
+        }
+        current = parent;
+    }
+};
+
+const resolveRoot = (): string => {
+    const seeds = [
+        process.env.INIT_CWD,
+        process.cwd(),
+        path.dirname(fileURLToPath(import.meta.url)),
+    ].filter((value): value is string => typeof value === "string" && value.length > 0);
+
+    for (const seed of seeds) {
+        const found = findRepoRoot(seed);
+        if (found) {
+            return found;
+        }
+    }
+
+    return process.cwd();
+};
+
+const ROOT = resolveRoot();
 const DAEMON_ENTRY = path.join(ROOT, "packages", "daemon", "src", "daemon.ts");
 
 let child: ChildProcess | null = null;
@@ -18,11 +77,32 @@ let lastStart = 0;
 
 const log = (...args: unknown[]) => console.log("[INIT]", ...args);
 
+const readInteractiveFlag = (): boolean => {
+	for (const arg of process.argv.slice(2)) {
+		if (!arg.startsWith("--interactive")) {
+			continue;
+		}
+		const [, value] = arg.split("=");
+		if (!value) {
+			return true;
+		}
+		const normalized = value.trim().toLowerCase();
+		if (["false", "0", "no"].includes(normalized)) {
+			return false;
+		}
+		if (["true", "1", "yes"].includes(normalized)) {
+			return true;
+		}
+	}
+	return true;
+};
+
 function startDaemon(reason: string = "boot") {
 	if (child) return;
 
 	lastStart = Date.now();
 	log(`Starting daemon (${reason})...`);
+	const interactive = readInteractiveFlag();
 
 	child = spawn("node", ["--experimental-strip-types", DAEMON_ENTRY], {
 		cwd: ROOT,
@@ -31,6 +111,11 @@ function startDaemon(reason: string = "boot") {
 			// Keep TCP enabled by default; can be overridden with SKIP_TCP=true
 			SKIP_TCP: process.env.SKIP_TCP ?? "false",
 			HTTP_PORT: process.env.HTTP_PORT ?? "3003",
+			ACP_SESSION_UPDATE_STREAM: interactive ? process.env.ACP_SESSION_UPDATE_STREAM : "",
+			ACP_SESSION_UPDATE_PATH: interactive ? process.env.ACP_SESSION_UPDATE_PATH : "",
+			ACP_SESSION_UPDATE_QUIET: interactive
+				? process.env.ACP_SESSION_UPDATE_QUIET
+				: "0",
 		},
 		stdio: "inherit",
 	});

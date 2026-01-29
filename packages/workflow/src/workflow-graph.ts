@@ -40,6 +40,7 @@ export const workflowLinks: WorkflowGraphLink[] = [
     { source: "stories-created", target: "new-feature-proposed", label: "request-feature" },
     { source: "stories-prioritized", target: "tasks-prepared", label: "refine-into-tasks" },
     { source: "tasks-prepared", target: "task-in-progress", label: "begin-implementation" },
+    { source: "tasks-prepared", target: "task-completed", label: "close-invalid-task" },
     { source: "tasks-prepared", target: "stories-prioritized", label: "need-more-tasks" },
     { source: "task-in-progress", target: "tests-completed", label: "run-tests" },
     { source: "task-in-progress", target: "task-in-progress", label: "additional-implementation" },

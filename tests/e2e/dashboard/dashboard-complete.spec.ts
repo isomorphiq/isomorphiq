@@ -10,7 +10,7 @@ type HttpResponse = {
 };
 
 const DASHBOARD_PORT = 3005;
-const TCP_PORT = 3001;
+const TCP_PORT = Number(process.env.TCP_PORT ?? process.env.DAEMON_PORT ?? 3001);
 const BASE_URL = `http://localhost:${DASHBOARD_PORT}`;
 let serverAvailable = false;
 

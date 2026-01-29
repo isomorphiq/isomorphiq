@@ -1,10 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { Level } from "level";
 import { AutomationRuleEngine } from "./automation-rule-engine.ts";
 import { globalEventBus } from "@isomorphiq/core";
-import { TaskDomainRules } from "./task-domain.ts";
 import type { CreateTaskInputWithPriority, ExtendedUpdateTaskInput, TaskEntity } from "./task-domain.ts";
 import {
     TaskSearchOptionsSchema,
@@ -16,11 +13,9 @@ import {
     type Task,
     type TaskActionLog,
     type TaskPriority,
-    TaskActionLogStruct,
     type TaskSearchOptions,
     type TaskStatus,
     type TaskType,
-    TaskSchema,
     type UpdateSavedSearchInput,
 } from "./types.ts";
 import type {
@@ -32,65 +27,26 @@ import type {
     TaskUpdatedEvent,
     WebSocketEventType,
 } from "@isomorphiq/realtime";
-import { ProfileManager } from "@isomorphiq/user-profile";
-import type { ACPProfile, ProfileMetrics, ProfileState } from "@isomorphiq/user-profile";
 import type { WebSocketManager as RealtimeWebSocketManager } from "@isomorphiq/realtime";
 import { LevelDbTaskRepository } from "./persistence/leveldb-task-repository.ts";
+import {
+    createInMemoryStore,
+    createLevelStore,
+    type KeyValueStore,
+    type KeyValueStoreFactory,
+} from "./persistence/key-value-store.ts";
 import { EnhancedTaskService } from "./enhanced-task-service.ts";
 import { TemplateManager } from "./template-manager.ts";
 import { IntegrationService } from "@isomorphiq/integrations";
-import { advanceToken, createToken, WORKFLOW } from "@isomorphiq/workflow";
-import type { RuntimeState } from "@isomorphiq/workflow";
+import { InMemoryTaskRepository } from "./task-repository.ts";
 
 type TaskWebSocketManager = RealtimeWebSocketManager;
 
-export type TaskSeedSpec = {
-    title: string;
-    description: string;
-    priority: TaskPriority;
-    type: TaskType;
-    assignedTo?: string;
-    createdBy?: string;
-    dependencies?: string[];
-};
-
-export type TaskExecutionResult = {
-    success: boolean;
-    output: string;
-    error: string;
-    profileName: string;
-    prompt?: string;
-    summary?: string;
-    modelName?: string;
-};
-
-export type TaskExecutor = (context: {
-    task: Task;
-    workflowState: RuntimeState | null;
-}) => Promise<TaskExecutionResult>;
-
-export type TaskSeedProvider = (context: {
-    workflowState: RuntimeState | null;
-    tasks: Task[];
-}) => Promise<TaskSeedSpec | null>;
-
 export type ProductManagerOptions = {
-    taskExecutor?: TaskExecutor;
-    taskSeedProvider?: TaskSeedProvider;
-    profileManager?: ProfileManager;
+    storageMode?: StorageMode;
 };
 
-const defaultTaskExecutor: TaskExecutor = async ({ task }) => {
-    const profileName = task.assignedTo ?? "system";
-    return {
-        success: true,
-        output: `No workflow executor configured; marked task ${task.id} as complete.`,
-        error: "",
-        profileName,
-        summary: "Marked task complete without an external executor.",
-        modelName: "system",
-    };
-};
+export type StorageMode = "level" | "memory";
 
 const findWorkspaceRoot = (startDir: string): string => {
     const hasPrompts = existsSync(path.join(startDir, "prompts"));
@@ -105,65 +61,122 @@ const findWorkspaceRoot = (startDir: string): string => {
     return findWorkspaceRoot(parentDir);
 };
 
+const normalizeStorageMode = (value: string | undefined): StorageMode | undefined => {
+    if (value === "level" || value === "memory") {
+        return value;
+    }
+    return undefined;
+};
+
+const isTestScriptName = (value: string): boolean => {
+    const base = path.basename(value);
+    const isScript =
+        base.endsWith(".ts") ||
+        base.endsWith(".js") ||
+        base.endsWith(".mjs") ||
+        base.endsWith(".cjs");
+    return isScript && base.includes("test");
+};
+
+const isLikelyTestArg = (value: string): boolean =>
+    value.includes("--test") ||
+    value.includes(".test.") ||
+    value.includes(".spec.") ||
+    value.includes(`${path.sep}tests${path.sep}`) ||
+    isTestScriptName(value);
+
+const isTestRuntime = (): boolean =>
+    process.env.NODE_ENV === "test" ||
+    process.env.ISOMORPHIQ_TEST_MODE === "true" ||
+    process.argv.some(isLikelyTestArg);
+
+const resolveStorageMode = (options: ProductManagerOptions): StorageMode => {
+    const optionMode = options.storageMode;
+    if (optionMode) {
+        return optionMode;
+    }
+    const envMode = normalizeStorageMode(process.env.ISOMORPHIQ_STORAGE_MODE);
+    if (envMode) {
+        return envMode;
+    }
+    return isTestRuntime() ? "memory" : "level";
+};
+
+const resolveWorkspacePath = (value: string | undefined, workspaceRoot: string): string | undefined => {
+    if (!value) {
+        return undefined;
+    }
+    return path.isAbsolute(value) ? value : path.join(workspaceRoot, value);
+};
+
+const resolveDatabasePath = (dbPath: string | undefined, workspaceRoot: string): string => {
+    if (dbPath) {
+        return dbPath;
+    }
+    const envPath = resolveWorkspacePath(process.env.DB_PATH, workspaceRoot);
+    return envPath ?? path.join(workspaceRoot, "db");
+};
+
+const resolveSavedSearchesPath = (
+    databasePath: string,
+    workspaceRoot: string,
+    storageMode: StorageMode,
+): string => {
+    const envPath = resolveWorkspacePath(process.env.SAVED_SEARCHES_DB_PATH, workspaceRoot);
+    if (envPath) {
+        return envPath;
+    }
+    if (storageMode === "memory") {
+        return path.join(databasePath, "saved-searches-db");
+    }
+    return path.join(databasePath, "saved-searches-db");
+};
+
 /**
- * ProductManager - Core task management and orchestration service
+ * ProductManager - Core task management service
  * TODO - reimplement this using `@tsimpl/core` and `@tsimpl/runtime` ; use a `struct` and `impl` pattern.
  *
- * This is the main orchestrator for the task management system. It provides:
+ * This is the main service for the task management system. It provides:
  * - High-level task operations with business logic
  * - Template and automation integration
  * - Event-driven coordination between components
  * - Dependency management and validation
- * - Task processing orchestration
  */
 export class ProductManager {
-    private taskService: EnhancedTaskService;
+    public taskService: EnhancedTaskService;
     private templateManager: TemplateManager;
     private automationEngine: AutomationRuleEngine;
-    private db: Level<string, unknown>;
-    private savedSearchesDb: Level<string, SavedSearch>;
-    private integrationDb: Level<string, unknown>;
+    private db: KeyValueStore<string, unknown>;
+    private savedSearchesDb: KeyValueStore<string, SavedSearch>;
+    private integrationDb: KeyValueStore<string, unknown>;
     private integrationService: IntegrationService;
-    private profileManager: ProfileManager;
-    private taskExecutor: TaskExecutor;
-    private taskSeedProvider: TaskSeedProvider | null;
-    private workflowToken = createToken<Record<string, unknown>>("new-feature-proposed");
-    private lastWorkflowTransition: string | null = null;
-    private activeTaskIds = new Set<string>();
-    private processLoopStartedAt = 0;
     private isInitialized = false;
     private wsManager: TaskWebSocketManager | null = null;
 
     constructor(dbPath?: string, options: ProductManagerOptions = {}) {
-        // Initialize LevelDB
         const workspaceRoot = findWorkspaceRoot(process.env.INIT_CWD ?? process.cwd());
-        const envDbPath = process.env.DB_PATH;
-        const resolvedEnvPath = envDbPath
-            ? (path.isAbsolute(envDbPath) ? envDbPath : path.join(workspaceRoot, envDbPath))
-            : undefined;
-        const databasePath = dbPath ?? resolvedEnvPath ?? path.join(workspaceRoot, "db");
-        this.db = new Level<string, unknown>(databasePath, { valueEncoding: "json" });
-        this.savedSearchesDb = new Level<string, SavedSearch>(
-            path.join(process.cwd(), "saved-searches-db"),
-            { valueEncoding: "json" },
-        );
-        this.integrationDb = new Level<string, unknown>(
-            path.join(databasePath, "integrations"),
-            { valueEncoding: "json" },
-        );
+        const storageMode = resolveStorageMode(options);
+        const storeFactory: KeyValueStoreFactory =
+            storageMode === "memory" ? createInMemoryStore : createLevelStore;
+        const databasePath = resolveDatabasePath(dbPath, workspaceRoot);
+        const savedSearchesPath = resolveSavedSearchesPath(databasePath, workspaceRoot, storageMode);
+
+        this.db = storeFactory<string, unknown>(databasePath);
+        this.savedSearchesDb = storeFactory<string, SavedSearch>(savedSearchesPath);
+        this.integrationDb = storeFactory<string, unknown>(path.join(databasePath, "integrations"));
 
         // Initialize repository and service - use tasks subdirectory
         const tasksPath = path.join(databasePath, "tasks");
-        const taskRepository = new LevelDbTaskRepository(tasksPath);
+        const taskRepository =
+            storageMode === "memory"
+                ? new InMemoryTaskRepository()
+                : new LevelDbTaskRepository(tasksPath);
         this.taskService = new EnhancedTaskService(taskRepository);
 
         // Initialize supporting services
-        this.templateManager = new TemplateManager(databasePath);
+        this.templateManager = new TemplateManager(databasePath, { storeFactory });
         this.automationEngine = new AutomationRuleEngine();
         this.integrationService = new IntegrationService(this.integrationDb);
-        this.profileManager = options.profileManager ?? new ProfileManager();
-        this.taskExecutor = options.taskExecutor ?? defaultTaskExecutor;
-        this.taskSeedProvider = options.taskSeedProvider ?? null;
 
         // Setup event handlers
         this.setupEventHandlers();
@@ -823,91 +836,6 @@ export class ProductManager {
         return this.templateManager;
     }
 
-    getProfilesWithStates(): Array<{
-        profile: ACPProfile;
-        state: ProfileState;
-        metrics: ProfileMetrics;
-    }> {
-        const profiles = this.profileManager.getAllProfiles();
-        return profiles.map((profile) => {
-            const state =
-                this.profileManager.getProfileState(profile.name) ??
-                ({
-                    name: profile.name,
-                    isActive: true,
-                    currentTasks: 0,
-                    completedTasks: 0,
-                    failedTasks: 0,
-                    averageProcessingTime: 0,
-                    lastActivity: new Date(),
-                    queueSize: 0,
-                    isProcessing: false,
-                } satisfies ProfileState);
-            const metrics =
-                this.profileManager.getProfileMetrics(profile.name) ??
-                ({
-                    throughput: 0,
-                    successRate: 100,
-                    averageTaskDuration: 0,
-                    queueWaitTime: 0,
-                    errorRate: 0,
-                } satisfies ProfileMetrics);
-            return { profile, state, metrics };
-        });
-    }
-
-    getAllProfileStates(): ProfileState[] {
-        return this.profileManager.getAllProfileStates();
-    }
-
-    getProfileState(name: string): ProfileState | undefined {
-        return this.profileManager.getProfileState(name);
-    }
-
-    getProfileMetrics(name: string): ProfileMetrics | undefined {
-        return this.profileManager.getProfileMetrics(name);
-    }
-
-    getAllProfileMetrics(): Map<string, ProfileMetrics> {
-        return this.profileManager.getAllProfileMetrics();
-    }
-
-    getProfileTaskQueue(name: string): Task[] {
-        const queue = this.profileManager.getTaskQueue(name);
-        return queue
-            .map((entry) => TaskSchema.safeParse(entry))
-            .filter((entry) => entry.success)
-            .map((entry) => entry.data);
-    }
-
-    updateProfileStatus(name: string, isActive: boolean): boolean {
-        const state = this.profileManager.getProfileState(name);
-        if (!state) {
-            return false;
-        }
-        this.profileManager.updateProfileState(name, { isActive });
-        return true;
-    }
-
-    assignTaskToProfile(name: string, task: Task): boolean {
-        const profile = this.profileManager.getProfile(name);
-        if (!profile) {
-            return false;
-        }
-        this.profileManager.addToTaskQueue(name, task);
-        return true;
-    }
-
-    getBestProfileForTask(task: Task): ACPProfile | undefined {
-        if (task.assignedTo) {
-            const assignedProfile = this.profileManager.getProfile(task.assignedTo);
-            if (assignedProfile) {
-                return assignedProfile;
-            }
-        }
-        return this.profileManager.getBestProfileForTask(task);
-    }
-
     // ==================== DEPENDENCY VALIDATION ====================
 
 	/**
@@ -1028,453 +956,6 @@ export class ProductManager {
 			errors,
 			warnings,
 		};
-	}
-
-	// ==================== TASK PROCESSING ORCHESTRATION ====================
-
-	/**
-	 * Process tasks using dependency order and priority
-	 * This is the main task processing loop
-	 */
-	async processTasksLoop(): Promise<void> {
-		console.log("[PRODUCT-MANAGER] Starting task processing loop...");
-        if (this.processLoopStartedAt === 0) {
-            this.processLoopStartedAt = Date.now();
-        }
-
-		while (true) {
-			try {
-				// Get tasks ready for processing (todo status, dependencies satisfied)
-                const allTasks = await this.getAllTasks();
-                const workflowStep = await this.advanceWorkflow(allTasks);
-                let workflowState = workflowStep.state;
-                const readyTasks = this.getReadyTasksFrom(allTasks);
-                const inProgressTasks = this.getInProgressTasksFrom(allTasks);
-                if (
-                    inProgressTasks.length > 0 &&
-                    workflowState?.name !== "tests-completed" &&
-                    this.lastWorkflowTransition !== "tests-failed"
-                ) {
-                    this.workflowToken = { ...this.workflowToken, state: "tests-completed" };
-                    workflowState = WORKFLOW["tests-completed"] ?? workflowState;
-                }
-                const useInProgressTasks =
-                    workflowState?.name === "tests-completed" ||
-                    workflowStep.transition === "additional-implementation";
-                let candidateTasks = useInProgressTasks ? inProgressTasks : readyTasks;
-
-				if (candidateTasks.length === 0) {
-                    if (useInProgressTasks && readyTasks.length > 0) {
-                        console.log(
-                            "[PRODUCT-MANAGER] No in-progress tasks; falling back to ready tasks.",
-                        );
-                        candidateTasks = readyTasks;
-                    }
-                }
-
-                if (candidateTasks.length === 0) {
-                    const recovered = await this.recoverStaleInProgressTasks();
-                    if (recovered > 0) {
-                        console.log(
-                            `[PRODUCT-MANAGER] Recovered ${recovered} stale in-progress task(s); retrying loop.`,
-                        );
-                        continue;
-                    }
-                    const seeded = await this.seedTasksFromWorkflow(workflowState, allTasks);
-                    if (seeded) {
-                        continue;
-                    }
-					console.log("[PRODUCT-MANAGER] No tasks ready for processing. Waiting 10 seconds...");
-					await new Promise((resolve) => setTimeout(resolve, 10000));
-					continue;
-				}
-
-				console.log(`[PRODUCT-MANAGER] Processing ${candidateTasks.length} ready tasks`);
-                const workflowTask = workflowState
-                    ? this.selectReadyTaskForState(candidateTasks, workflowState)
-                    : null;
-                const task = workflowTask ?? candidateTasks[0];
-
-                if (!task) {
-                    console.log("[PRODUCT-MANAGER] No tasks selected after workflow evaluation.");
-                    await new Promise((resolve) => setTimeout(resolve, 10000));
-                    continue;
-                }
-
-				// Process tasks one by one (could be made parallel)
-                await this.processTask(task, workflowState, workflowStep.transition);
-
-				// Brief pause between processing cycles
-				await new Promise((resolve) => setTimeout(resolve, 3000));
-			} catch (error) {
-				console.error("[PRODUCT-MANAGER] Error in task processing loop:", error);
-				console.log("[PRODUCT-MANAGER] Waiting 10 seconds before retrying...");
-				await new Promise((resolve) => setTimeout(resolve, 10000));
-			}
-		}
-	}
-
-    private async seedTasksFromWorkflow(
-        workflowState: RuntimeState | null,
-        tasks: Task[],
-    ): Promise<boolean> {
-        const activeTasks = tasks.filter((task) => task.status !== "done");
-        if (activeTasks.length > 0) {
-            return false;
-        }
-        if (!this.taskSeedProvider) {
-            return false;
-        }
-
-        const seed = await this.taskSeedProvider({ workflowState, tasks });
-        if (!seed) {
-            return false;
-        }
-
-        const createdBy = seed.createdBy ?? "workflow";
-        const dependencies = seed.dependencies ?? [];
-        const task = await this.createTask(
-            seed.title,
-            seed.description,
-            seed.priority,
-            dependencies,
-            createdBy,
-            seed.assignedTo,
-            undefined,
-            undefined,
-            seed.type,
-        );
-
-        console.log(`[PRODUCT-MANAGER] Seeded workflow task: ${task.id}`);
-        return true;
-    }
-
-    private async recoverStaleInProgressTasks(): Promise<number> {
-        const inProgressTasks = await this.getTasksByStatus("in-progress");
-        if (inProgressTasks.length === 0) {
-            return 0;
-        }
-
-        const now = Date.now();
-        const hasActiveProcessing = this.activeTaskIds.size > 0;
-        const startupRecoveryWindowMs = 5 * 60 * 1000;
-        const elapsedSinceStart = now - this.processLoopStartedAt;
-        const recoveryThresholdMs =
-            !hasActiveProcessing && elapsedSinceStart <= startupRecoveryWindowMs
-                ? 60 * 1000
-                : 10 * 60 * 1000;
-        const staleTasks = inProgressTasks.filter((task) => {
-            if (!task.id || this.activeTaskIds.has(task.id)) {
-                return false;
-            }
-            if (!(task.updatedAt instanceof Date)) {
-                return true;
-            }
-            const ageMs = now - task.updatedAt.getTime();
-            return ageMs >= recoveryThresholdMs;
-        });
-
-        if (staleTasks.length === 0) {
-            return 0;
-        }
-
-        let recovered = 0;
-        for (const task of staleTasks) {
-            if (!task.id) {
-                continue;
-            }
-            try {
-                await this.updateTaskStatus(task.id, "todo", "system");
-                recovered += 1;
-            } catch (error) {
-                console.error(
-                    `[PRODUCT-MANAGER] Failed to recover task ${task.id}:`,
-                    error,
-                );
-            }
-        }
-
-        return recovered;
-    }
-
-	/**
-	 * Get tasks that are ready for processing
-	 */
-	private async getReadyTasks(): Promise<Task[]> {
-		const allTasks = await this.getAllTasks();
-		return this.getReadyTasksFrom(allTasks);
-	}
-
-    private getReadyTasksFrom(allTasks: Task[]): Task[] {
-        const todoTasks = allTasks.filter((task) => task.status === "todo");
-
-        // Sort by dependencies and priority
-        const sortedTasks = TaskDomainRules.sortTasksByPriorityAndDependencies(
-            todoTasks.map((task) => this.convertTaskToTaskEntity(task)),
-        );
-
-        // Filter tasks whose dependencies are all completed
-        const readyTasks = sortedTasks.filter((task) => {
-            return task.dependencies.every((depId: string) => {
-                const depTask = allTasks.find((t) => t.id === depId);
-                return !depTask || depTask.status === "done";
-            });
-        });
-
-        return readyTasks.map((task) => this.convertTaskEntityToTask(task));
-    }
-
-    private getWorkflowState(): RuntimeState | null {
-        const state = WORKFLOW[this.workflowToken.state];
-        return state ?? null;
-    }
-
-    private getWorkflowTransition(state: RuntimeState, tasks: Task[]): string | null {
-        if (state.name === "task-in-progress" && this.lastWorkflowTransition === "tests-failed") {
-            return "additional-implementation";
-        }
-        if (state.decider) {
-            const decided = state.decider(tasks);
-            if (decided) {
-                return decided;
-            }
-        }
-        if (state.defaultTransition) {
-            return state.defaultTransition;
-        }
-        const transitions = Object.keys(state.transitions);
-        return transitions.length > 0 ? transitions[0] : null;
-    }
-
-    private async advanceWorkflow(allTasks: Task[]): Promise<{
-        state: RuntimeState | null;
-        transition: string | null;
-    }> {
-        const currentState = this.getWorkflowState();
-        if (!currentState) {
-            return { state: null, transition: null };
-        }
-        if (currentState.name === "tests-completed") {
-            return { state: currentState, transition: null };
-        }
-        const transition = this.getWorkflowTransition(currentState, allTasks);
-        if (!transition) {
-            return { state: currentState, transition: null };
-        }
-        try {
-            const nextToken = await advanceToken(this.workflowToken, transition, WORKFLOW, {
-                tasks: allTasks,
-            });
-            const previousState = this.workflowToken.state;
-            this.workflowToken = nextToken;
-            if (previousState !== nextToken.state) {
-                console.log(
-                    `[WORKFLOW] Transitioned ${previousState} -> ${nextToken.state} via ${transition}`,
-                );
-            }
-            this.lastWorkflowTransition = transition;
-            return { state: WORKFLOW[nextToken.state] ?? null, transition };
-        } catch (error) {
-            console.warn("[WORKFLOW] Failed to advance workflow state:", error);
-            return { state: currentState, transition: null };
-        }
-    }
-
-    private matchesWorkflowTarget(task: Task, targetType: string): boolean {
-        if (task.type === targetType) {
-            return true;
-        }
-        if (targetType === "feature" && task.type === "task") {
-            const text = `${task.title} ${task.description}`.toLowerCase();
-            return text.includes("feature");
-        }
-        return false;
-    }
-
-    private selectReadyTaskForState(readyTasks: Task[], state: RuntimeState): Task | null {
-        if (!state.targetType) {
-            return readyTasks[0] ?? null;
-        }
-        const match = readyTasks.find((task) =>
-            this.matchesWorkflowTarget(task, state.targetType),
-        );
-        return match ?? null;
-    }
-
-    private getInProgressTasksFrom(allTasks: Task[]): Task[] {
-        const inProgressTasks = allTasks.filter((task) => task.status === "in-progress");
-        if (inProgressTasks.length === 0) {
-            return [];
-        }
-        const sortedTasks = TaskDomainRules.sortTasksByPriorityAndDependencies(
-            inProgressTasks.map((task) => this.convertTaskToTaskEntity(task)),
-        );
-        const readyTasks = sortedTasks.filter((task) => {
-            return task.dependencies.every((depId: string) => {
-                const depTask = allTasks.find((t) => t.id === depId);
-                return !depTask || depTask.status === "done";
-            });
-        });
-        return readyTasks.map((task) => this.convertTaskEntityToTask(task));
-    }
-
-    /**
-     * Process a single task
-     */
-    private async processTask(
-        task: Task,
-        workflowState: RuntimeState | null,
-        workflowTransition: string | null,
-    ): Promise<void> {
-        let modelName = "unknown-model";
-        console.log(
-            `[PRODUCT-MANAGER][${modelName}] Processing task: ${task.title} (id: ${task.id})`,
-        );
-
-        try {
-            // Mark as in-progress
-            await this.updateTaskStatus(task.id, "in-progress");
-            this.activeTaskIds.add(task.id);
-
-            const startTime = Date.now();
-            const execution = await this.taskExecutor({ task, workflowState });
-            const duration = Date.now() - startTime;
-
-            const qaTransition =
-                workflowState?.name === "tests-completed"
-                    ? execution.success
-                        ? "tests-passing"
-                        : "tests-failed"
-                    : null;
-            const logTransition = qaTransition ?? workflowTransition;
-            modelName = execution.modelName ?? modelName;
-            const actorName = execution.profileName || task.assignedTo || "system";
-            const actionLogEntry = this.createActionLogEntry(
-                actorName,
-                duration,
-                execution,
-                logTransition,
-            );
-            await this.appendActionLogEntry(task.id, actionLogEntry, task.actionLog);
-
-            if (!execution.success) {
-                throw new Error(execution.error);
-            }
-
-            if (workflowState?.name === "tests-completed") {
-                const transition = qaTransition ?? "tests-passing";
-                const nextToken = await advanceToken(this.workflowToken, transition, WORKFLOW);
-                this.workflowToken = nextToken;
-                this.lastWorkflowTransition = transition;
-                await this.updateTaskStatus(task.id, "done");
-                console.log(
-                    `[PRODUCT-MANAGER][${modelName}] QA approved task: ${task.title} (id: ${task.id})`,
-                );
-            } else {
-                this.workflowToken = { ...this.workflowToken, state: "tests-completed" };
-                this.lastWorkflowTransition = "run-tests";
-                console.log(
-                    `[PRODUCT-MANAGER][${modelName}] Task work completed; awaiting QA: ${task.title} (id: ${task.id})`,
-                );
-            }
-        } catch (error) {
-            console.error(
-                `[PRODUCT-MANAGER][${modelName}] Failed to process task: ${task.title} (id: ${task.id})`,
-                error,
-            );
-
-            if (workflowState?.name === "tests-completed") {
-                const nextToken = await advanceToken(this.workflowToken, "tests-failed", WORKFLOW);
-                this.workflowToken = nextToken;
-                this.lastWorkflowTransition = "tests-failed";
-                await this.updateTaskStatus(task.id, "in-progress");
-            } else {
-                // Mark as todo again for retry
-                await this.updateTaskStatus(task.id, "todo");
-            }
-        } finally {
-            this.activeTaskIds.delete(task.id);
-        }
-    }
-
-    private formatExecutionLine(text: string, fallback: string): string {
-        const line = text
-            .split("\n")
-            .map((part) => part.trim())
-            .find((part) => part.length > 0);
-        if (!line) {
-            return fallback;
-        }
-        const compact = line.replace(/\s+/g, " ");
-        const maxLength = 180;
-        const clipped =
-            compact.length > maxLength ? `${compact.slice(0, maxLength - 3)}...` : compact;
-        const trimmed = clipped.replace(/[.!?]+$/, "");
-        return trimmed.length > 0 ? trimmed : fallback;
-    }
-
-    private formatExecutionSummary(output: string): string {
-        const line = this.formatExecutionLine(output, "No output was returned");
-        return `Completed: ${line}.`;
-    }
-
-    private formatExecutionError(error: string): string {
-        const line = this.formatExecutionLine(error, "No error message was returned");
-        return `Failed: ${line}.`;
-    }
-
-    private createActionLogEntry(
-        profileName: string,
-        durationMs: number,
-        execution: TaskExecutionResult,
-        workflowTransition: string | null,
-    ): TaskActionLog {
-        const summary = execution.summary
-            ? execution.summary
-            : execution.success
-              ? this.formatExecutionSummary(execution.output)
-              : this.formatExecutionError(execution.error);
-        return TaskActionLogStruct.from({
-            id: `action-${randomUUID()}`,
-            summary,
-            profile: profileName,
-            durationMs,
-            createdAt: new Date(),
-            success: execution.success,
-            transition: workflowTransition ?? undefined,
-            prompt: execution.prompt,
-            modelName: execution.modelName,
-        });
-    }
-
-    private async appendActionLogEntry(
-        taskId: string,
-        entry: TaskActionLog,
-        fallbackLog?: TaskActionLog[],
-    ): Promise<void> {
-        try {
-            const currentTask = await this.getTask(taskId);
-            const currentLog = currentTask?.actionLog ?? fallbackLog ?? [];
-            await this.updateTask(taskId, { actionLog: [...currentLog, entry] }, "system");
-        } catch (error) {
-            console.warn(`[PRODUCT-MANAGER] Failed to append action log for ${taskId}:`, error);
-        }
-    }
-
-	/**
-	 * Simulate task execution (replace with actual execution logic)
-	 */
-	private async simulateTaskExecution(_task: Task): Promise<void> {
-		console.log(`[PRODUCT] Simulating execution for task ${_task.id}`);
-		// Simulate work being done
-		const processingTime = Math.random() * 5000 + 2000; // 2-7 seconds
-		await new Promise((resolve) => setTimeout(resolve, processingTime));
-
-		// Random chance of failure for demonstration
-		if (Math.random() < 0.1) {
-			// 10% failure rate
-			throw new Error("Simulated task execution failure");
-		}
 	}
 
 	// ==================== EVENT HANDLING ====================
@@ -1598,7 +1079,7 @@ export class ProductManager {
 			description: entity.description,
 			status: entity.status,
 			priority: entity.priority,
-			type: "task", // Default type, could be stored in entity if needed
+			type: entity.type ?? "task",
 			dependencies: entity.dependencies,
 			createdBy: entity.createdBy,
 			createdAt: entity.createdAt,

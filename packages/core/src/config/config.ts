@@ -51,6 +51,11 @@ export interface AppConfig {
 		origins: string[];
 		credentials: boolean;
 	};
+	environments: {
+		headerName: string;
+		default: string;
+		available: string[];
+	};
 }
 
 /**
@@ -106,6 +111,21 @@ export const defaultConfig: AppConfig = {
 		origins: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(",") : ["*"],
 		credentials: process.env.CORS_CREDENTIALS === "true",
 	},
+	environments: {
+		headerName:
+			process.env.ENVIRONMENT_HEADER
+			|| process.env.ISOMORPHIQ_ENVIRONMENT_HEADER
+			|| "Environment",
+		default:
+			process.env.DEFAULT_ENVIRONMENT
+			|| process.env.ISOMORPHIQ_DEFAULT_ENVIRONMENT
+			|| "production",
+		available: process.env.ISOMORPHIQ_ENVIRONMENTS
+			? process.env.ISOMORPHIQ_ENVIRONMENTS.split(",")
+			: process.env.ENVIRONMENTS
+				? process.env.ENVIRONMENTS.split(",")
+				: ["production", "integration"],
+	},
 };
 
 /**
@@ -128,18 +148,26 @@ export const ConfigValidator = {
 			errors.push("Database path is required");
 		}
 
-		// Validate auth configuration
-		if (!config.auth.jwtSecret) {
-			errors.push("JWT secret is required");
-		}
-		if (config.auth.jwtSecret.length < 32) {
-			errors.push("JWT secret must be at least 32 characters long");
-		}
-		if (!config.auth.jwtRefreshSecret) {
-			errors.push("JWT refresh secret is required");
-		}
-		if (config.auth.jwtRefreshSecret.length < 32) {
-			errors.push("JWT refresh secret must be at least 32 characters long");
+		// Validate auth configuration (strict in production or when explicitly requested)
+		const requireJwtSecrets =
+			process.env.ISOMORPHIQ_REQUIRE_JWT_SECRETS === "true"
+			|| process.env.NODE_ENV === "production";
+		const hasJwtSecrets =
+			(config.auth.jwtSecret && config.auth.jwtSecret.length > 0)
+			|| (config.auth.jwtRefreshSecret && config.auth.jwtRefreshSecret.length > 0);
+		if (requireJwtSecrets || hasJwtSecrets) {
+			if (!config.auth.jwtSecret) {
+				errors.push("JWT secret is required");
+			}
+			if (config.auth.jwtSecret.length < 32) {
+				errors.push("JWT secret must be at least 32 characters long");
+			}
+			if (!config.auth.jwtRefreshSecret) {
+				errors.push("JWT refresh secret is required");
+			}
+			if (config.auth.jwtRefreshSecret.length < 32) {
+				errors.push("JWT refresh secret must be at least 32 characters long");
+			}
 		}
 
 		// Validate password policy
@@ -160,6 +188,23 @@ export const ConfigValidator = {
 			errors.push(`Invalid log format: ${config.logging.format}`);
 		}
 
+		if (!config.environments.headerName || config.environments.headerName.trim().length === 0) {
+			errors.push("Environment header name must be provided");
+		}
+		if (!config.environments.available || config.environments.available.length === 0) {
+			errors.push("At least one environment must be configured");
+		}
+		if (!config.environments.default || config.environments.default.trim().length === 0) {
+			errors.push("Default environment must be provided");
+		}
+		if (
+			config.environments.default
+			&& config.environments.available
+			&& !config.environments.available.includes(config.environments.default)
+		) {
+			errors.push("Default environment must be listed in available environments");
+		}
+
 		return {
 			isValid: errors.length === 0,
 			errors,
@@ -167,6 +212,32 @@ export const ConfigValidator = {
 	},
 
 	sanitize(config: Partial<AppConfig>): AppConfig {
+		const normalizeEnvironment = (value: string | undefined): string => {
+			if (!value) return "";
+			return value.trim().toLowerCase();
+		};
+		const normalizeEnvironmentList = (values: string[] | undefined): string[] => {
+			if (!values || values.length === 0) return [];
+			return values
+				.map((value) => normalizeEnvironment(value))
+				.filter((value) => value.length > 0);
+		};
+		const envAvailable = normalizeEnvironmentList(
+			config.environments?.available ?? defaultConfig.environments.available,
+		);
+		const envDefault = normalizeEnvironment(
+			config.environments?.default ?? defaultConfig.environments.default,
+		);
+		const resolvedAvailable =
+			envAvailable.length > 0
+				? envAvailable.includes(envDefault)
+					? envAvailable
+					: [envDefault, ...envAvailable]
+				: [envDefault];
+		const resolvedHeaderName =
+			config.environments?.headerName?.trim()
+			|| defaultConfig.environments.headerName;
+
 		return {
 			server: {
 				...defaultConfig.server,
@@ -203,6 +274,11 @@ export const ConfigValidator = {
 			cors: {
 				...defaultConfig.cors,
 				...config.cors,
+			},
+			environments: {
+				headerName: resolvedHeaderName,
+				default: envDefault,
+				available: resolvedAvailable,
 			},
 		};
 	},
@@ -289,6 +365,10 @@ export class ConfigManager {
 
 	getCorsConfig() {
 		return this.config.cors;
+	}
+
+	getEnvironmentConfig() {
+		return this.config.environments;
 	}
 
 	isFeatureEnabled(feature: keyof AppConfig["features"]): boolean {

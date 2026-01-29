@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../../../tests/test-utils/env-fetch.ts";
 
 /**
  * Simple authentication test that works with current setup

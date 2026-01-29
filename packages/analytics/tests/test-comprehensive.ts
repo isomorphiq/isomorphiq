@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../../../tests/test-utils/env-fetch.ts";
 
 /**
  * Comprehensive test runner for analytics accuracy, dashboard functionality, and report generation

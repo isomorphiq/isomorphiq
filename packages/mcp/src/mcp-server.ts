@@ -1,10 +1,14 @@
 import { exec } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
     CallToolRequestSchema,
     ListResourcesRequestSchema,
@@ -16,14 +20,24 @@ import {
 
 // TCP client to communicate with the daemon
 class DaemonClient {
-	private port: number = 3001;
-	private host: string = "localhost";
+	private port: number;
+	private host: string;
 
-	async sendCommand<T = unknown, R = unknown>(command: string, data: T): Promise<R> {
+	constructor() {
+		const envPort = Number(process.env.TCP_PORT ?? process.env.DAEMON_PORT);
+		this.port = Number.isFinite(envPort) && envPort > 0 ? envPort : 3001;
+		this.host = process.env.DAEMON_HOST ?? "localhost";
+	}
+
+	async sendCommand<T = unknown, R = unknown>(
+		command: string,
+		data: T,
+		environment?: string,
+	): Promise<R> {
 		return new Promise((resolve, reject) => {
 			const client = createConnection({ port: this.port, host: this.host }, () => {
 				console.log("[MCP] Connected to daemon");
-				const message = `${JSON.stringify({ command, data })}\n`;
+				const message = `${JSON.stringify({ command, data, environment })}\n`;
 				client.write(message);
 			});
 
@@ -81,6 +95,77 @@ class DaemonClient {
 
 // Create daemon client
 const daemonClient = new DaemonClient();
+
+const resolveEnvironmentHeaderName = (): string =>
+	process.env.ENVIRONMENT_HEADER
+	|| process.env.ISOMORPHIQ_ENVIRONMENT_HEADER
+	|| "Environment";
+
+const resolveDefaultEnvironment = (): string =>
+	process.env.DEFAULT_ENVIRONMENT
+	|| process.env.ISOMORPHIQ_DEFAULT_ENVIRONMENT
+	|| "production";
+
+const normalizeEnvironmentName = (value: string): string => value.trim().toLowerCase();
+
+const readEnvironmentFromHeaders = (
+	headers: Record<string, string> | undefined,
+	headerName: string,
+): string | undefined => {
+	if (!headers) return undefined;
+	const key = headerName.toLowerCase();
+	const direct = headers[key];
+	if (direct && direct.trim().length > 0) {
+		return direct;
+	}
+	const match = Object.entries(headers).find(([name]) => name.toLowerCase() === key);
+	if (!match) return undefined;
+	const [, value] = match;
+	return value && value.trim().length > 0 ? value : undefined;
+};
+
+const resolveRequestEnvironment = (headers?: Record<string, string>): string => {
+	const headerName = resolveEnvironmentHeaderName();
+	const fromHeader = readEnvironmentFromHeaders(headers, headerName);
+	const isTestMode =
+		process.env.ISOMORPHIQ_TEST_MODE === "true" || process.env.NODE_ENV === "test";
+	const fromEnv =
+		process.env.ISOMORPHIQ_ENVIRONMENT
+		|| (isTestMode ? process.env.ISOMORPHIQ_TEST_ENVIRONMENT : undefined);
+	const raw = fromHeader || fromEnv || resolveDefaultEnvironment();
+	return normalizeEnvironmentName(raw);
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	value !== null && typeof value === "object" && !Array.isArray(value);
+
+const resolveDaemonResult = <T>(value: unknown): T => {
+	if (isRecord(value) && "success" in value) {
+		const success = Boolean(value.success);
+		if (!success) {
+			const errorValue = value.error;
+			const message =
+				typeof errorValue === "string"
+					? errorValue
+					: isRecord(errorValue) && typeof errorValue.message === "string"
+						? errorValue.message
+						: "Daemon command failed";
+			throw new Error(message);
+		}
+		return value.data as T;
+	}
+	return value as T;
+};
+
+const resolveHeadersFromExtra = (extra: unknown): Record<string, string> | undefined => {
+	if (!isRecord(extra)) return undefined;
+	const requestInfo = extra.requestInfo;
+	if (!isRecord(requestInfo)) return undefined;
+	const headers = requestInfo.headers;
+	if (!isRecord(headers)) return undefined;
+	const entries = Object.entries(headers).filter(([, value]) => typeof value === "string");
+	return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+};
 const gbnfResourcePath = resolve(process.cwd(), "resources", "mcp-tool-calls.gbnf");
 const gbnfResourceUri = "file://resources/mcp-tool-calls.gbnf";
 const mcpResources: Resource[] = [
@@ -148,6 +233,42 @@ const tools: Tool[] = [
 					description: "The priority level of the task",
 					default: "medium",
 				},
+				type: {
+					type: "string",
+					enum: [
+						"task",
+						"feature",
+						"story",
+						"implementation",
+						"integration",
+						"testing",
+						"research",
+					],
+					description: "The task type",
+				},
+				createdBy: {
+					type: "string",
+					description: "Optional creator identifier",
+				},
+				assignedTo: {
+					type: "string",
+					description: "Optional assignee",
+				},
+				dependencies: {
+					type: "array",
+					items: { type: "string" },
+					description: "Optional dependency task IDs",
+				},
+				collaborators: {
+					type: "array",
+					items: { type: "string" },
+					description: "Optional collaborator user IDs",
+				},
+				watchers: {
+					type: "array",
+					items: { type: "string" },
+					description: "Optional watcher user IDs",
+				},
 			},
 			required: ["title", "description"],
 		},
@@ -186,7 +307,7 @@ const tools: Tool[] = [
 				},
 				status: {
 					type: "string",
-					enum: ["todo", "in-progress", "done"],
+					enum: ["todo", "in-progress", "done", "invalid"],
 					description: "The new status of the task",
 				},
 			},
@@ -413,7 +534,246 @@ const tools: Tool[] = [
 			properties: {},
 		},
 	},
-];
+	{
+		name: "search_tasks",
+		description: "Search tasks with advanced filtering, sorting, and pagination",
+		inputSchema: {
+			type: "object",
+			properties: {
+				query: {
+					type: "object",
+					description: "Search query with filters and options",
+					properties: {
+						q: {
+							type: "string",
+							description: "Text search term to match in title, description, assignedTo, or createdBy",
+						},
+						status: {
+							type: "array",
+							items: { type: "string", enum: ["todo", "in-progress", "done", "invalid"] },
+							description: "Filter by task status",
+						},
+						priority: {
+							type: "array",
+							items: { type: "string", enum: ["low", "medium", "high"] },
+							description: "Filter by task priority",
+						},
+						type: {
+							type: "array",
+							items: {
+								type: "string",
+								enum: [
+									"feature",
+									"story",
+									"task",
+									"implementation",
+									"integration",
+									"testing",
+									"research",
+								],
+							},
+							description: "Filter by task type",
+						},
+						assignedTo: {
+							type: "array",
+							items: { type: "string" },
+							description: "Filter by assigned users",
+						},
+						createdBy: {
+							type: "array",
+							items: { type: "string" },
+							description: "Filter by creator users",
+						},
+						collaborators: {
+							type: "array",
+							items: { type: "string" },
+							description: "Filter by collaborators",
+						},
+						watchers: {
+							type: "array",
+							items: { type: "string" },
+							description: "Filter by watchers",
+						},
+						dateFrom: {
+							type: "string",
+							description: "Filter tasks created after this date (ISO format)",
+						},
+						dateTo: {
+							type: "string",
+							description: "Filter tasks created before this date (ISO format)",
+						},
+						updatedFrom: {
+							type: "string",
+							description: "Filter tasks updated after this date (ISO format)",
+						},
+						updatedTo: {
+							type: "string",
+							description: "Filter tasks updated before this date (ISO format)",
+						},
+						tags: {
+							type: "array",
+							items: { type: "string" },
+							description: "Filter by tags",
+						},
+						dependencies: {
+							type: "array",
+							items: { type: "string" },
+							description: "Filter by dependency task IDs",
+						},
+						hasDependencies: {
+							type: "boolean",
+							description: "Filter tasks with or without dependencies",
+						},
+						sort: {
+							type: "object",
+							description: "Sort options",
+							properties: {
+								field: {
+									type: "string",
+									enum: ["relevance", "title", "createdAt", "updatedAt", "priority", "status"],
+									description: "Field to sort by",
+								},
+								direction: {
+									type: "string",
+									enum: ["asc", "desc"],
+									description: "Sort direction",
+								},
+							},
+							required: ["field", "direction"],
+						},
+						limit: {
+							type: "number",
+							description: "Maximum number of results to return",
+							default: 50,
+						},
+						offset: {
+							type: "number",
+							description: "Number of results to skip",
+							default: 0,
+						},
+					},
+				},
+			},
+			required: [],
+		},
+	},
+	{
+		name: "create_saved_search",
+		description: "Create a saved search for later use",
+		inputSchema: {
+			type: "object",
+			properties: {
+				name: {
+					type: "string",
+					description: "Name of the saved search",
+				},
+				description: {
+					type: "string",
+					description: "Optional description of what this search finds",
+				},
+				query: {
+					type: "object",
+					description: "Search query to save (same format as search_tasks query)",
+				},
+				isPublic: {
+					type: "boolean",
+					description: "Whether this saved search is visible to all users",
+					default: false,
+				},
+				createdBy: {
+					type: "string",
+					description: "User creating this saved search",
+				},
+			},
+			required: ["name", "query"],
+		},
+	},
+	{
+		name: "get_saved_search",
+		description: "Get a specific saved search by ID",
+		inputSchema: {
+			type: "object",
+			properties: {
+				id: {
+					type: "string",
+					description: "ID of the saved search to retrieve",
+				},
+			},
+			required: ["id"],
+		},
+	},
+	{
+		name: "list_saved_searches",
+		description: "List all saved searches, optionally filtered by creator",
+		inputSchema: {
+			type: "object",
+			properties: {
+				createdBy: {
+					type: "string",
+					description: "Optional filter to only show searches by specific user",
+				},
+			},
+		},
+	},
+	{
+		name: "update_saved_search",
+		description: "Update an existing saved search",
+		inputSchema: {
+			type: "object",
+			properties: {
+				id: {
+					type: "string",
+					description: "ID of the saved search to update",
+				},
+				name: {
+					type: "string",
+					description: "New name for the saved search",
+				},
+				description: {
+					type: "string",
+					description: "New description for the saved search",
+				},
+				query: {
+					type: "object",
+					description: "New search query",
+				},
+				isPublic: {
+					type: "boolean",
+					description: "New visibility setting",
+				},
+			},
+			required: ["id"],
+		},
+	},
+	{
+		name: "delete_saved_search",
+		description: "Delete a saved search",
+		inputSchema: {
+			type: "object",
+			properties: {
+				id: {
+					type: "string",
+					description: "ID of the saved search to delete",
+				},
+			},
+			required: ["id"],
+		},
+	},
+	{
+		name: "execute_saved_search",
+		description: "Execute a saved search and return the results",
+		inputSchema: {
+			type: "object",
+			properties: {
+				id: {
+					type: "string",
+					description: "ID of the saved search to execute",
+				},
+			},
+			required: ["id"],
+		},
+	},
+ ];
 
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
     return { resources: mcpResources };
@@ -442,8 +802,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 // Handle tool calls
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 	const { name, arguments: args } = request.params;
+	const environment = resolveRequestEnvironment(resolveHeadersFromExtra(extra));
+	const sendCommand = async <T = unknown, R = unknown>(command: string, data: T): Promise<R> => {
+		const response = await daemonClient.sendCommand(command, data, environment);
+		return resolveDaemonResult<R>(response);
+	};
 
 	if (!args) {
 		return {
@@ -472,10 +837,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "create_task": {
-				const newTask = await daemonClient.sendCommand("create_task", {
+				const newTask = await sendCommand("create_task", {
 					title: args.title as string,
 					description: args.description as string,
 					priority: (args.priority as "low" | "medium" | "high") || "medium",
+					type: args.type as string | undefined,
+					createdBy: args.createdBy as string | undefined,
+					assignedTo: args.assignedTo as string | undefined,
+					dependencies: args.dependencies as string[] | undefined,
+					collaborators: args.collaborators as string[] | undefined,
+					watchers: args.watchers as string[] | undefined,
 				});
 				return {
 					content: [
@@ -488,7 +859,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "list_tasks": {
-				const tasks = await daemonClient.sendCommand("list_tasks", {});
+				const tasks = await sendCommand("list_tasks", {});
 				const taskList = Array.isArray(tasks) ? tasks : [];
 				return {
 					content: [
@@ -501,7 +872,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "get_task": {
-				const task = await daemonClient.sendCommand("get_task", { id: args.id as string });
+				const task = await sendCommand("get_task", { id: args.id as string });
 				if (!task) {
 					throw new Error(`Task with ID ${args.id} not found`);
 				}
@@ -516,7 +887,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "update_task_status": {
-				const updatedTask = await daemonClient.sendCommand("update_task_status", {
+				const updatedTask = await sendCommand("update_task_status", {
 					id: args.id as string,
 					status: args.status as string,
 				});
@@ -531,7 +902,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "update_task_priority": {
-				const priorityUpdatedTask = await daemonClient.sendCommand("update_task_priority", {
+				const priorityUpdatedTask = await sendCommand("update_task_priority", {
 					id: args.id as string,
 					priority: args.priority as string,
 				});
@@ -546,7 +917,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "delete_task":
-				await daemonClient.sendCommand("delete_task", { id: args.id as string });
+				await sendCommand("delete_task", { id: args.id as string });
 				return {
 					content: [
 						{
@@ -557,7 +928,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 				};
 
 			case "restart_daemon":
-				await daemonClient.sendCommand("restart", {});
+				await sendCommand("restart", {});
 				return {
 					content: [
 						{
@@ -592,7 +963,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "create_template": {
-				const newTemplate = await daemonClient.sendCommand("create_template", {
+				const newTemplate = await sendCommand("create_template", {
 					name: args.name as string,
 					description: args.description as string,
 					category: args.category as string,
@@ -611,7 +982,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "list_templates": {
-				const templates = await daemonClient.sendCommand("list_templates", {});
+				const templates = await sendCommand("list_templates", {});
 				const templateList = Array.isArray(templates) ? templates : [];
 				return {
 					content: [
@@ -624,7 +995,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "get_template": {
-				const template = await daemonClient.sendCommand("get_template", { id: args.id as string });
+				const template = await sendCommand("get_template", { id: args.id as string });
 				if (!template) {
 					throw new Error(`Template with ID ${args.id} not found`);
 				}
@@ -639,7 +1010,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "create_task_from_template": {
-				const taskFromTemplate = await daemonClient.sendCommand("create_task_from_template", {
+				const taskFromTemplate = await sendCommand("create_task_from_template", {
 					templateId: args.templateId as string,
 					variables: args.variables as Record<string, unknown>,
 					subtasks: (args.subtasks as boolean) ?? true,
@@ -655,7 +1026,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "initialize_templates": {
-				const initResult = await daemonClient.sendCommand("initialize_templates", {});
+				const initResult = await sendCommand("initialize_templates", {});
 				return {
 					content: [
 						{
@@ -667,7 +1038,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "create_automation_rule": {
-				const newAutomationRule = await daemonClient.sendCommand("create_automation_rule", {
+				const newAutomationRule = await sendCommand("create_automation_rule", {
 					name: args.name as string,
 					description: args.description as string,
 					trigger: args.trigger as object,
@@ -685,7 +1056,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 				case "list_automation_rules": {
-					const automationRules = await daemonClient.sendCommand("list_automation_rules", {});
+					const automationRules = await sendCommand("list_automation_rules", {});
 					const ruleList = Array.isArray(automationRules) ? automationRules : [];
 					return {
 						content: [
@@ -698,7 +1069,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 				}
 
 			case "update_automation_rule": {
-				const updatedAutomationRule = await daemonClient.sendCommand("update_automation_rule", {
+				const updatedAutomationRule = await sendCommand("update_automation_rule", {
 					id: args.id as string,
 					updates: args.updates as object,
 				});
@@ -713,7 +1084,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 			}
 
 			case "delete_automation_rule":
-				await daemonClient.sendCommand("delete_automation_rule", { id: args.id as string });
+				await sendCommand("delete_automation_rule", { id: args.id as string });
 				return {
 					content: [
 						{
@@ -724,12 +1095,118 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 				};
 
 			case "reload_automation_rules": {
-				const reloadResult = await daemonClient.sendCommand("reload_automation_rules", {});
+				const reloadResult = await sendCommand("reload_automation_rules", {});
 				return {
 					content: [
 						{
 							type: "text",
 							text: `Automation rules reloaded: ${JSON.stringify(reloadResult, null, 2)}`,
+						},
+					],
+				};
+			}
+
+			case "search_tasks": {
+				const searchResult = await sendCommand("search_tasks", {
+					query: args.query as object,
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Search results: ${JSON.stringify(searchResult, null, 2)}`,
+						},
+					],
+				};
+			}
+
+			case "create_saved_search": {
+				const savedSearch = await sendCommand("create_saved_search", {
+					name: args.name as string,
+					description: args.description as string,
+					query: args.query as object,
+					isPublic: args.isPublic as boolean,
+					createdBy: args.createdBy as string,
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Saved search created: ${JSON.stringify(savedSearch, null, 2)}`,
+						},
+					],
+				};
+			}
+
+			case "get_saved_search": {
+				const savedSearch = await sendCommand("get_saved_search", {
+					id: args.id as string,
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Saved search: ${JSON.stringify(savedSearch, null, 2)}`,
+						},
+					],
+				};
+			}
+
+			case "list_saved_searches": {
+				const savedSearches = await sendCommand("list_saved_searches", {
+					createdBy: args.createdBy as string,
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Saved searches: ${JSON.stringify(savedSearches, null, 2)}`,
+						},
+					],
+				};
+			}
+
+			case "update_saved_search": {
+				const savedSearch = await sendCommand("update_saved_search", {
+					id: args.id as string,
+					name: args.name as string,
+					description: args.description as string,
+					query: args.query as object,
+					isPublic: args.isPublic as boolean,
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Saved search updated: ${JSON.stringify(savedSearch, null, 2)}`,
+						},
+					],
+				};
+			}
+
+			case "delete_saved_search": {
+				const deleteResult = await sendCommand("delete_saved_search", {
+					id: args.id as string,
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Saved search deleted: ${JSON.stringify(deleteResult, null, 2)}`,
+						},
+					],
+				};
+			}
+
+			case "execute_saved_search": {
+				const searchResult = await sendCommand("execute_saved_search", {
+					id: args.id as string,
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Saved search executed: ${JSON.stringify(searchResult, null, 2)}`,
 						},
 					],
 				};
@@ -751,11 +1228,176 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 	}
 });
 
+export type McpServerOptions = {
+	transport?: "stdio" | "http";
+	host?: string;
+	port?: number;
+	path?: string;
+};
+
+const resolveHttpOptions = (options: McpServerOptions): { host: string; port: number; path: string } => {
+	const host =
+		options.host
+		?? process.env.ISOMORPHIQ_MCP_HTTP_HOST
+		?? process.env.MCP_HTTP_HOST
+		?? "localhost";
+	const portRaw =
+		options.port?.toString()
+		?? process.env.ISOMORPHIQ_MCP_HTTP_PORT
+		?? process.env.MCP_HTTP_PORT
+		?? "3100";
+	const port = Number.parseInt(portRaw, 10);
+	const pathValue =
+		options.path
+		?? process.env.ISOMORPHIQ_MCP_HTTP_PATH
+		?? process.env.MCP_HTTP_PATH
+		?? "/mcp";
+	const normalizedPath = pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
+	const resolvedPort = Number.isFinite(port) && port > 0 ? port : 3100;
+	return { host, port: resolvedPort, path: normalizedPath };
+};
+
+const readRequestBody = async (req: http.IncomingMessage): Promise<string> => {
+	return new Promise((resolve, reject) => {
+		let data = "";
+		req.on("data", (chunk) => {
+			data += chunk.toString();
+		});
+		req.on("end", () => resolve(data));
+		req.on("error", (error) => reject(error));
+	});
+};
+
+const handleHttpRequest = async (
+	req: http.IncomingMessage,
+	res: http.ServerResponse,
+	transport: StreamableHTTPServerTransport,
+	path: string,
+): Promise<void> => {
+	const host = req.headers.host ?? "localhost";
+	const url = new URL(req.url ?? "", `http://${host}`);
+	if (url.pathname === "/health") {
+		res.writeHead(200, { "Content-Type": "application/json" });
+		res.end(JSON.stringify({ ok: true }));
+		return;
+	}
+	if (url.pathname !== path) {
+		res.statusCode = 404;
+		res.end("Not Found");
+		return;
+	}
+	if (req.method === "OPTIONS") {
+		res.writeHead(204, {
+			"Access-Control-Allow-Origin": "*",
+			"Access-Control-Allow-Headers": "*",
+			"Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+		});
+		res.end();
+		return;
+	}
+	try {
+		if (req.method === "POST") {
+			const bodyText = await readRequestBody(req);
+			const parsedBody = bodyText.trim().length > 0 ? JSON.parse(bodyText) : undefined;
+			await transport.handleRequest(req, res, parsedBody);
+			return;
+		}
+		await transport.handleRequest(req, res, undefined);
+	} catch (error) {
+		console.error("[MCP] HTTP transport error:", error);
+		if (!res.headersSent) {
+			res.statusCode = 500;
+			res.end("Internal Server Error");
+		}
+	}
+};
+
 // Start the server
-export async function startMcpServer(): Promise<void> {
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-    console.error("Task Manager MCP server started");
+export async function startMcpServer(options: McpServerOptions = {}): Promise<void> {
+	const transport =
+		options.transport
+		?? process.env.ISOMORPHIQ_MCP_TRANSPORT
+		?? process.env.MCP_TRANSPORT
+		?? "stdio";
+
+	if (transport === "sse") {
+		const { host, port, path } = resolveHttpOptions(options);
+		const sessionTransports = new Map<string, SSEServerTransport>();
+		const messagePath = `${path.replace(/\/$/, "")}/messages`;
+		const httpServer = http.createServer(async (req, res) => {
+			const hostHeader = req.headers.host ?? host;
+			const url = new URL(req.url ?? "", `http://${hostHeader}`);
+			if (url.pathname === "/health") {
+				res.writeHead(200, { "Content-Type": "application/json" });
+				res.end(JSON.stringify({ ok: true }));
+				return;
+			}
+			if (req.method === "GET" && url.pathname === path) {
+				try {
+					const sseTransport = new SSEServerTransport(messagePath, res);
+					const sessionId = sseTransport.sessionId;
+					sessionTransports.set(sessionId, sseTransport);
+					sseTransport.onclose = () => {
+						sessionTransports.delete(sessionId);
+					};
+					await server.connect(sseTransport);
+				} catch (error) {
+					console.error("[MCP] SSE transport error:", error);
+					if (!res.headersSent) {
+						res.statusCode = 500;
+						res.end("Error establishing SSE stream");
+					}
+				}
+				return;
+			}
+			if (req.method === "POST" && url.pathname === messagePath) {
+				const sessionId = url.searchParams.get("sessionId") ?? "";
+				const sseTransport = sessionTransports.get(sessionId);
+				if (!sseTransport) {
+					res.statusCode = 404;
+					res.end("Session not found");
+					return;
+				}
+				try {
+					await sseTransport.handlePostMessage(req, res, undefined);
+				} catch (error) {
+					console.error("[MCP] SSE post error:", error);
+					if (!res.headersSent) {
+						res.statusCode = 500;
+						res.end("Error handling message");
+					}
+				}
+				return;
+			}
+			res.statusCode = 404;
+			res.end("Not Found");
+		});
+		await new Promise<void>((resolve) => {
+			httpServer.listen(port, host, () => resolve());
+		});
+		console.error(`Task Manager MCP SSE server started on http://${host}:${port}${path}`);
+		return;
+	}
+
+	if (transport === "http") {
+		const { host, port, path } = resolveHttpOptions(options);
+		const httpTransport = new StreamableHTTPServerTransport({
+			sessionIdGenerator: () => randomUUID(),
+		});
+		await server.connect(httpTransport);
+		const httpServer = http.createServer((req, res) => {
+			void handleHttpRequest(req, res, httpTransport, path);
+		});
+		await new Promise<void>((resolve) => {
+			httpServer.listen(port, host, () => resolve());
+		});
+		console.error(`Task Manager MCP HTTP server started on http://${host}:${port}${path}`);
+		return;
+	}
+
+	const stdioTransport = new StdioServerTransport();
+	await server.connect(stdioTransport);
+	console.error("Task Manager MCP server started (stdio)");
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

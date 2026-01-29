@@ -5,6 +5,7 @@
 	"type": "module",
 	"main": "index.js",
 	"workspaces": [
+		"packages/types",
 		"packages/*",
 		"packages/api-prelude",
 		"packages/http-server",
@@ -24,11 +25,12 @@
 		"lint": "yarn workspaces foreach -ptA run lint",
 		"test": "yarn workspaces foreach -ptA run test",
 		"start-mcp": "yarn workspace @isomorphiq/mcp start",
+		"supervisor": "yarn workspace @isomorphiq/supervisor start",
 		"daemon": "yarn workspace @isomorphiq/daemon start",
 		"gateway": "yarn workspace @isomorphiq/gateway start",
 		"web": "rsbuild dev",
-		"start:dev": "bash -c \"export DB_PATH=$(pwd)/db; export DAEMON_HTTP_PORT=3004; export GATEWAY_PORT=3003; yarn run start-mcp & yarn run daemon & yarn run gateway & yarn run web; wait\"",
-		"start": "yarn run start:dev",
+		"start": "node --experimental-strip-types scripts/start.ts",
+		"start:nointeractive": "node --experimental-strip-types scripts/start.ts --interactive=false",
 		"format": "biome format --write .",
 		"clean": "rm -rf dist"
 	},

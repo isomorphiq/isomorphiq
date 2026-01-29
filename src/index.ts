@@ -807,6 +807,7 @@ export class ProductManager {
 		try {
 			// Create ACP connection
 			connectionResult = await ACPConnectionManager.createConnection();
+			connectionResult.taskClient.profileName = profileName;
 
 			// Send prompt
 			const promptResult = await ACPConnectionManager.sendPrompt(
@@ -1672,7 +1673,9 @@ export class ProductManager {
 			"feature": 0,
 			"story": 0,
 			"task": 0,
+			"implementation": 0,
 			"integration": 0,
+			"testing": 0,
 			"research": 0,
 		};
 

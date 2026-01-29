@@ -5,15 +5,20 @@ import type {
     UpdateSavedSearchInput,
 } from "@isomorphiq/tasks";
 import type { User } from "@isomorphiq/auth";
-import { ProductManager } from "@isomorphiq/tasks";
+import type { ProductManager } from "@isomorphiq/tasks";
 import { getUserManager } from "@isomorphiq/auth";
 import {
     authenticateToken,
     requirePermission,
     type AuthContextRequest,
 } from "@isomorphiq/auth";
+import { normalizeProductManagerResolver, type ProductManagerResolver } from "./route-helpers.ts";
 
-export function registerSearchRoutes(app: express.Application, pm: ProductManager) {
+export function registerSearchRoutes(
+    app: express.Application,
+    pmOrResolver: ProductManager | ProductManagerResolver,
+) {
+    const resolvePm = normalizeProductManagerResolver(pmOrResolver);
     // POST /api/search/advanced - Advanced task search with filtering
     app.post("/api/search/advanced", authenticateToken, async (req: AuthContextRequest, res, next) => {
         try {
@@ -36,6 +41,7 @@ export function registerSearchRoutes(app: express.Application, pm: ProductManage
                 searchQuery.collaborators = [user.id];
             }
 
+            const pm = resolvePm(req);
             const searchResult = await pm.searchTasks(searchQuery);
             res.json(searchResult);
         } catch (error) {
@@ -58,6 +64,7 @@ export function registerSearchRoutes(app: express.Application, pm: ProductManage
                 return res.json({ suggestions: [] });
             }
 
+            const pm = resolvePm(req);
             const allTasks = await pm.getAllTasks();
 
             const userManager = getUserManager();
@@ -87,6 +94,7 @@ export function registerSearchRoutes(app: express.Application, pm: ProductManage
 
             console.log(`[HTTP API] GET /api/saved-searches - Getting saved searches for user: ${user.username}`);
 
+            const pm = resolvePm(req);
             const savedSearches = await pm.getSavedSearches(user.id);
             res.json({ savedSearches, count: savedSearches.length });
         } catch (error) {
@@ -109,6 +117,7 @@ export function registerSearchRoutes(app: express.Application, pm: ProductManage
 
             console.log(`[HTTP API] GET /api/saved-searches/${id} - Getting saved search`);
 
+            const pm = resolvePm(req);
             const savedSearch = await pm.getSavedSearch(id, user.id);
             if (!savedSearch) {
                 return res.status(404).json({ error: "Saved search not found" });
@@ -145,6 +154,7 @@ export function registerSearchRoutes(app: express.Application, pm: ProductManage
                     return res.status(400).json({ error: "Search query is required" });
                 }
 
+                const pm = resolvePm(req);
                 const savedSearch = await pm.createSavedSearch(searchInput, user.id);
                 res.status(201).json({ savedSearch });
             } catch (error) {
@@ -175,6 +185,7 @@ export function registerSearchRoutes(app: express.Application, pm: ProductManage
                     `[HTTP API] PUT /api/saved-searches/${id} - Updating saved search by user: ${user.username}`,
                 );
 
+                const pm = resolvePm(req);
                 const updatedSearch = await pm.updateSavedSearch({ id, ...updateInput }, user.id);
                 res.json({ savedSearch: updatedSearch });
             } catch (error) {
@@ -204,6 +215,7 @@ export function registerSearchRoutes(app: express.Application, pm: ProductManage
                     `[HTTP API] DELETE /api/saved-searches/${id} - Deleting saved search by user: ${user.username}`,
                 );
 
+                const pm = resolvePm(req);
                 await pm.deleteSavedSearch(id, user.id);
                 res.json({
                     success: true,

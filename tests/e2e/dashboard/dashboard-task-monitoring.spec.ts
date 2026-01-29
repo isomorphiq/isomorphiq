@@ -13,7 +13,9 @@ describe("Dashboard Integration Tests", () => {
 	let baseUrl: string;
 
 	beforeEach(async () => {
-		productManager = new ProductManager();
+		productManager = {
+			getAllTasks: async () => [],
+		} as unknown as ProductManager;
 		webSocketManager = new WebSocketManager({ path: "/ws" });
 		dashboardServer = new DashboardServer(productManager, webSocketManager);
 		

@@ -1,7 +1,7 @@
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
 import type { WorkflowDefinition, WorkflowStatistics } from "@isomorphiq/workflow/types";
-import { WorkflowEditor } from "./WorkflowEditor.tsx";
+import { WorkflowEditor } from "./WorkflowEditor";
 
 type WorkflowListProps = Record<string, never>;
 

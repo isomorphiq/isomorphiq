@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import "./env-fetch.ts";
 
 type Matcher = {
     toBe: (expected: unknown) => void;
@@ -16,6 +17,9 @@ type Matcher = {
     toBeLessThanOrEqual: (expected: number) => void;
     toBeInstanceOf: (expected: new (...args: unknown[]) => unknown) => void;
     toThrow: (expected?: string | RegExp) => void;
+    rejects: {
+        toThrow: (expected?: string | RegExp) => Promise<void>;
+    };
 };
 
 type Expectation = Matcher & { not: Matcher };
@@ -68,7 +72,7 @@ const createMatchers = (value: unknown, negated: boolean): Matcher => {
                 assertCondition(false, "Expected an object to check properties on");
                 return;
             }
-            const hasProp = Object.hasOwn(value, prop);
+            const hasProp = Object.prototype.hasOwnProperty.call(value, prop);
             if (expected === undefined) {
                 assertCondition(hasProp, `Expected object to have property "${prop}"`);
                 return;
@@ -121,7 +125,7 @@ const createMatchers = (value: unknown, negated: boolean): Matcher => {
             const matches = value instanceof expected;
             assertCondition(matches, "Expected value to be instance of constructor");
         },
-        toThrow: (expected?: string | RegExp) => {
+        toThrow: (expected?: string | RegExp): void => {
             if (typeof value !== "function") {
                 assertCondition(false, "Expected a function to test for throws");
                 return;
@@ -141,6 +145,31 @@ const createMatchers = (value: unknown, negated: boolean): Matcher => {
             const matches = threw
                 && (typeof expected === "string" ? message.includes(expected) : expected.test(message));
             assertCondition(matches, "Expected function to throw matching error");
+        },
+        rejects: {
+            toThrow: (expected?: string | RegExp): Promise<void> => {
+                if (typeof value !== "function" || !(value instanceof Promise)) {
+                    assertCondition(false, "Expected a promise to test for rejection");
+                    return Promise.reject(new Error("Expected a promise to test for rejection"));
+                }
+                return value.then(
+                    () => {
+                        assertCondition(false, "Expected promise to reject");
+                        throw new Error("Expected promise to reject");
+                    },
+                    (error) => {
+                        const message = error instanceof Error ? error.message : String(error);
+                        if (expected === undefined) {
+                            assertCondition(true, "Expected promise to reject");
+                            return;
+                        }
+                        const matches = typeof expected === "string" 
+                            ? message.includes(expected) 
+                            : expected.test(message);
+                        assertCondition(matches, "Expected promise to reject with matching error");
+                    }
+                );
+            },
         },
     };
 };

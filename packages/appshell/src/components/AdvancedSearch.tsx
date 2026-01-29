@@ -374,7 +374,9 @@ export function AdvancedSearch({ onSearch, searchResult, isLoading }: AdvancedSe
 								<option value="feature">Feature</option>
 								<option value="story">Story</option>
 								<option value="task">Task</option>
+								<option value="implementation">Implementation</option>
 								<option value="integration">Integration</option>
+								<option value="testing">Testing</option>
 								<option value="research">Research</option>
 							</select>
 						</div>

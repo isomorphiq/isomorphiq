@@ -48,20 +48,47 @@ export interface TaskStatusUpdate {
 	task: Task;
 }
 
+const resolveDefaultPort = (): number => {
+	const envPort = Number(process.env.TCP_PORT ?? process.env.DAEMON_PORT);
+	return Number.isFinite(envPort) && envPort > 0 ? envPort : 3001;
+};
+
+const resolveDefaultHost = (): string => process.env.DAEMON_HOST ?? "localhost";
+
+const resolveDefaultEnvironment = (): string => {
+	const configured =
+		process.env.ISOMORPHIQ_ENVIRONMENT ?? process.env.ISOMORPHIQ_TEST_ENVIRONMENT;
+	if (configured && configured.trim().length > 0) {
+		return configured.trim().toLowerCase();
+	}
+	const isTest = process.env.NODE_ENV === "test" || process.env.ISOMORPHIQ_TEST_MODE === "true";
+	return isTest ? "integration" : "production";
+};
+
 export class DaemonTcpClient {
 	private port: number;
 	private host: string;
 	private wsConnection: WebSocket | null = null;
+	private environment: string;
 
-	constructor(port: number = 3001, host: string = "localhost") {
+	constructor(
+		port: number = resolveDefaultPort(),
+		host: string = resolveDefaultHost(),
+		environment: string = resolveDefaultEnvironment(),
+	) {
 		this.port = port;
 		this.host = host;
+		this.environment = environment;
 	}
 
-	async sendCommand<T = unknown, R = unknown>(command: string, data: T): Promise<Result<R>> {
+	async sendCommand<T = unknown, R = unknown>(
+		command: string,
+		data: T,
+		environment: string = this.environment,
+	): Promise<Result<R>> {
 		return new Promise((resolve, reject) => {
 			const client = createConnection({ port: this.port, host: this.host }, () => {
-				const message = `${JSON.stringify({ command, data })}\n`;
+				const message = `${JSON.stringify({ command, data, environment })}\n`;
 				client.write(message);
 			});
 

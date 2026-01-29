@@ -1,14 +1,23 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, beforeEach, afterEach, before, after } from "node:test";
 import { expect } from "../../test-utils/expect.ts";
 import { DaemonTcpClient } from "./tcp-client.ts";
+import { startTestDaemon, type TestDaemonHandle } from "../../integration/daemon-test-harness.ts";
 
 describe("TCP API Integration Tests", () => {
 	let tcpClient: DaemonTcpClient;
-	const TEST_PORT = 3001;
 	const TEST_HOST = "localhost";
+	let daemon: TestDaemonHandle;
+
+	before(async () => {
+		daemon = await startTestDaemon();
+	});
+
+	after(async () => {
+		await daemon.cleanup();
+	});
 
 	beforeEach(() => {
-		tcpClient = new DaemonTcpClient(TEST_PORT, TEST_HOST);
+		tcpClient = new DaemonTcpClient(daemon.tcpPort, TEST_HOST);
 	});
 
 	afterEach(() => {

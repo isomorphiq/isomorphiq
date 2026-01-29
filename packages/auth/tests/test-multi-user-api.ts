@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../../../tests/test-utils/env-fetch.ts";
 
 import { ProductManager } from "@isomorphiq/tasks";
 import { UserManager } from "@isomorphiq/auth";
@@ -13,7 +14,7 @@ async function testMultiUserAPI() {
 		const userManager = new UserManager();
 
 		// Start HTTP API server
-		const server = await startHttpServer(pm, 3004);
+		const server = await startHttpServer({ resolveProductManager: () => pm }, 3004);
 		console.log("✅ HTTP API server started on port 3004");
 
 		// Create test users

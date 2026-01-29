@@ -4,7 +4,9 @@ const colors: Record<Task["type"] | "unknown", { bg: string; text: string }> = {
 	feature: { bg: "#dbeafe", text: "#1d4ed8" },
 	story: { bg: "#fef3c7", text: "#b45309" },
 	task: { bg: "#ecfdf3", text: "#15803d" },
+	implementation: { bg: "#e0f2fe", text: "#0369a1" },
 	integration: { bg: "#f0f9ff", text: "#0ea5e9" },
+	testing: { bg: "#fee2e2", text: "#b91c1c" },
 	research: { bg: "#f3e8ff", text: "#7c3aed" },
 	unknown: { bg: "#e5e7eb", text: "#374151" },
 };

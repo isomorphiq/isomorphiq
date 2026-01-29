@@ -4,10 +4,12 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "./App.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
+import { patchFetchWithEnvironment } from "./environment.ts";
 
 const container = document.getElementById("root");
 
 if (container) {
+	patchFetchWithEnvironment();
 	const root = createRoot(container);
 	root.render(
 		<JotaiProvider>

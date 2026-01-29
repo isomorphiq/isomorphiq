@@ -169,7 +169,15 @@ class TestSuite {
 			);
 			assert(["low", "medium", "high"].includes(task.priority), "Task should have valid priority");
 			assert(
-				["feature", "story", "task", "integration", "research"].includes(task.type),
+				[
+					"feature",
+					"story",
+					"task",
+					"implementation",
+					"integration",
+					"testing",
+					"research",
+				].includes(task.type),
 				"Task should have valid type",
 			);
 			assert(Array.isArray(task.dependencies), "Dependencies should be an array");
@@ -543,7 +551,15 @@ class TestSuite {
 
 	// Test 20: Task type inference and validation
 	async testTaskTypes(): Promise<void> {
-		const types: TaskType[] = ["feature", "story", "task", "integration", "research"];
+		const types: TaskType[] = [
+			"feature",
+			"story",
+			"task",
+			"implementation",
+			"integration",
+			"testing",
+			"research",
+		];
 
 		for (const type of types) {
 			const task = await this.pm.createTask(

@@ -591,6 +591,19 @@ return this.sendNotification(notification);
             variables.taskUpdatedAt = new Date(data.task.updatedAt).toLocaleString();
         }
 
+        // Handle digest-specific variables
+        if (data.data) {
+            if (data.data.digestType) {
+                variables.digestType = data.data.digestType;
+            }
+            if (data.data.date) {
+                variables.date = new Date(data.data.date).toLocaleDateString();
+            }
+            if (data.data.tasks && Array.isArray(data.data.tasks)) {
+                variables.taskCount = data.data.tasks.length.toString();
+            }
+        }
+
         const title = this.replaceVariables(template.subject, variables);
         const message = this.replaceVariables(template.body, variables);
 

@@ -2,8 +2,8 @@ import { z } from "zod";
 import { impl, method, struct, trait } from "@tsimpl/runtime";
 import type { StructSelf } from "@tsimpl/runtime";
 import type { Self } from "@tsimpl/core";
-import { TaskPrioritySchema, TaskSchema, TaskStatusSchema } from "@isomorphiq/tasks/types";
-import type { Task } from "@isomorphiq/tasks/types";
+import { TaskPrioritySchema, TaskSchema, TaskStatusSchema } from "@isomorphiq/types";
+import type { Task } from "@isomorphiq/types";
 import type { WebSocket } from "ws";
 
 export const WebSocketEventTypeSchema = z.enum([

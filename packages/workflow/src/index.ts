@@ -26,5 +26,8 @@ export {
     getNextStateFrom,
     WORKFLOW,
 } from "./workflow.ts";
+export { isWorkflowTaskActionable, isWorkflowTaskTextComplete } from "./task-readiness.ts";
+export { ProfileWorkflowRunner } from "./profile-workflow-runner.ts";
+export * from "./task-validity.ts";
 export * from "./approval-types.ts";
 export * from "./types.ts";

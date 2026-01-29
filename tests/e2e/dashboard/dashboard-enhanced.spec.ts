@@ -10,7 +10,9 @@ describe("DashboardServer", () => {
 	let webSocketManager: WebSocketManager;
 
 	beforeEach(() => {
-		productManager = new ProductManager();
+		productManager = {
+			getAllTasks: async () => [],
+		} as unknown as ProductManager;
 		webSocketManager = new WebSocketManager({ path: "/ws" });
 		dashboardServer = new DashboardServer(productManager, webSocketManager);
 	});

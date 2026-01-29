@@ -16,11 +16,14 @@
         "typecheck": "tsc --noEmit -p tsconfig.json",
         "lint": "echo \"Lint not configured yet for @isomorphiq/cli\"",
         "test": "echo \"Tests not configured yet for @isomorphiq/cli\"",
-        "start": "node --experimental-strip-types src/cli-client.ts"
+        "start": "node --experimental-strip-types src/ink-ui.ts",
+        "start:client": "node --experimental-strip-types src/cli-client.ts"
     },
     "dependencies": {
         "@isomorphiq/auth": "workspace:*",
         "@isomorphiq/core": "workspace:*",
-        "@isomorphiq/tasks": "workspace:*"
+        "@isomorphiq/tasks": "workspace:*",
+        "ink": "^4.3.0",
+        "react": "^18.3.1"
     }
 }

@@ -202,7 +202,15 @@ const performSearch = async (query: SearchQuery): Promise<SearchResult> => {
 	// Generate facets
 	const statusCounts = { "todo": 0, "in-progress": 0, "done": 0 };
 	const priorityCounts = { "high": 0, "medium": 0, "low": 0 };
-	const typeCounts = { "feature": 0, "story": 0, "task": 0, "integration": 0, "research": 0 };
+	const typeCounts = {
+		"feature": 0,
+		"story": 0,
+		"task": 0,
+		"implementation": 0,
+		"integration": 0,
+		"testing": 0,
+		"research": 0,
+	};
 	const assignedToCounts: Record<string, number> = {};
 	const createdByCounts: Record<string, number> = {};
 

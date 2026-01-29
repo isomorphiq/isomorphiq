@@ -1,8 +1,8 @@
 import type { WebSocketEvent } from "@isomorphiq/realtime/types";
 import type { Task, TaskFilters, TaskSort } from "@isomorphiq/tasks/types";
 import { atom, type Atom } from "jotai";
-import { trpc } from "./trpc.ts";
-export * from "./atoms/themeAtoms.ts";
+import { trpc } from "./trpc";
+export * from "./atoms/themeAtoms";
 
 // Base atoms powered by tRPC (auto fetch)
 const baseTasksAtom = (trpc.tasks as {

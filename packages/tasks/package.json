@@ -31,6 +31,7 @@
         "@isomorphiq/persistence-level": "workspace:*",
         "@isomorphiq/realtime": "workspace:*",
         "@isomorphiq/search": "workspace:*",
+        "@isomorphiq/types": "workspace:*",
         "@isomorphiq/user-profile": "workspace:*",
         "@isomorphiq/workflow": "workspace:*",
         "@tsimpl/core": "0.1.1",

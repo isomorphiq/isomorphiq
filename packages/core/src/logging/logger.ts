@@ -45,8 +45,10 @@ export class FileLogger implements ILogger {
 	private maxFiles: number;
 	private currentFileSize: number = 0;
 	private defaultContext: string;
+	private config: AppConfig["logging"];
 
-	constructor(private config: AppConfig["logging"], context: string = "App") {
+	constructor(config: AppConfig["logging"], context: string = "App") {
+		this.config = config;
 		this.logFile = config.file || "app.log";
 		this.maxFileSize = config.maxFileSize || 10 * 1024 * 1024; // 10MB
 		this.maxFiles = config.maxFiles || 5;

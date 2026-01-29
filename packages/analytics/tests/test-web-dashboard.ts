@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../../../tests/test-utils/env-fetch.ts";
 
 /**
  * Comprehensive Web Dashboard Test Suite
@@ -52,7 +53,7 @@ class WebDashboardTester {
 
 	private async startTestServer(): Promise<void> {
 		try {
-			this.server = await startHttpServer(this.pm, 3003);
+			this.server = await startHttpServer({ resolveProductManager: () => this.pm }, 3003);
 			console.log("✅ Test server started on port 3003");
 		} catch (_error) {
 			// Server might already be running

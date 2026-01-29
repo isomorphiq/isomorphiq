@@ -36,6 +36,7 @@
     "dependencies": {
         "@isomorphiq/acp": "workspace:*",
         "@isomorphiq/core": "workspace:*",
+        "@isomorphiq/types": "workspace:*",
         "@isomorphiq/user-profile": "workspace:*",
         "@tsimpl/core": "0.1.1",
         "@tsimpl/runtime": "0.1.1",

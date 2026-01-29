@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import type { Result } from "@isomorphiq/core";
 import { ValidationError } from "@isomorphiq/core";
 import { struct } from "@tsimpl/runtime";
@@ -105,7 +106,7 @@ export const TaskDomainRules = {
     },
 
     validateStatus(status: TaskStatus): Result<void> {
-        const validStatuses: TaskStatus[] = ["todo", "in-progress", "done"];
+        const validStatuses: TaskStatus[] = ["todo", "in-progress", "done", "invalid"];
         if (!validStatuses.includes(status)) {
             return {
                 success: false,
@@ -162,9 +163,10 @@ export const TaskDomainRules = {
 
     canTransitionStatus(from: TaskStatus, to: TaskStatus): boolean {
         const validTransitions: Record<TaskStatus, TaskStatus[]> = {
-            todo: ["in-progress", "done"],
-            "in-progress": ["done", "todo"],
+            todo: ["in-progress", "done", "invalid"],
+            "in-progress": ["done", "todo", "invalid"],
             done: ["todo", "in-progress"],
+            invalid: ["todo", "in-progress"],
         };
         return validTransitions[from].includes(to);
     },
@@ -273,7 +275,7 @@ export const TaskFactory = {
 
         const now = new Date();
         const task: TaskEntity = {
-            id: `task-${Date.now()}`,
+            id: `task-${randomUUID()}`,
             title: input.title,
             description: input.description,
             status: "todo",
