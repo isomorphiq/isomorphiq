@@ -4,6 +4,7 @@ import type { PluginMetadata, ProfilePlugin } from "./plugin-system.ts";
 
 /**
  * Simple filesystem plugin loader.
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class FileSystemPluginLoader {
     private pluginsDirectory: string;
@@ -43,3 +44,4 @@ export class FileSystemPluginLoader {
 function pathToFileUrl(filePath: string): URL {
     return new URL(`file://${path.resolve(filePath)}`);
 }
+

@@ -1,4 +1,4 @@
-import { type Task } from "../web/tcp-client.ts";
+import type { Task } from "@isomorphiq/dashboard";
 import { DeadlockDetector } from "./cas-deadlock-detector.ts";
 
 export interface PriorityStatusDependency {
@@ -23,6 +23,9 @@ export interface DependencyGraph {
     levels: Map<string, number>;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class PriorityStatusDeadlockDetector extends DeadlockDetector {
     private dependencyGraph: DependencyGraph;
     private levelZeroDependencies: Map<string, PriorityStatusDependency[]> = new Map();

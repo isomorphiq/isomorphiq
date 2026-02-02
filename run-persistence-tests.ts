@@ -16,6 +16,9 @@ interface TestSuite {
     critical: boolean;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class PersistenceTestRunner {
     private testSuites: TestSuite[] = [
         {

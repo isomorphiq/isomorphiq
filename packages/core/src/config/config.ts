@@ -286,6 +286,7 @@ export const ConfigValidator = {
 
 /**
  * Configuration manager
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class ConfigManager {
 	private static instance: ConfigManager;
@@ -375,3 +376,4 @@ export class ConfigManager {
 		return this.config.features[feature];
 	}
 }
+

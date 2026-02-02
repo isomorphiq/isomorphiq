@@ -1,9 +1,10 @@
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 import path from "node:path";
 
 /**
  * Comprehensive priority update consistency testing
  * Tests that priority updates work correctly across the entire system
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class PriorityConsistencyTester {
 	private pm: ProductManager;
@@ -236,3 +237,4 @@ export async function runPriorityConsistencyTests(): Promise<void> {
 if (import.meta.main) {
 	await runPriorityConsistencyTests();
 }
+

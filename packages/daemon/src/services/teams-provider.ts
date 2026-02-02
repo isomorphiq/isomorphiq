@@ -27,6 +27,9 @@ export interface TeamsMessage {
 }
 
 // Microsoft Teams webhook provider
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class TeamsWebhookProvider implements TeamsProvider {
     async sendMessage(
         webhookUrl: string, 
@@ -124,6 +127,9 @@ export class TeamsWebhookProvider implements TeamsProvider {
 }
 
 // Mock Teams provider for testing
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class MockTeamsProvider implements TeamsProvider {
     private sentMessages: Array<{
         webhookUrl: string;

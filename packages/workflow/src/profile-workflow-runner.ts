@@ -1,7 +1,10 @@
 import { createToken, type WorkflowToken } from "./workflow-engine.ts";
 import type { RuntimeState, WorkflowStateName } from "./workflow-factory.ts";
 import { getNextStateFrom, WORKFLOW } from "./workflow.ts";
+import { isWorkflowTaskTextComplete } from "./task-readiness.ts";
 import type { WorkflowTask, WorkflowTaskExecutor } from "./agent-runner.ts";
+import { createContextClient, type ContextClient } from "@isomorphiq/context";
+import type { TaskStatus } from "@isomorphiq/types";
 
 export type ProfileWorkflowRunnerOptions = {
     taskProvider: () => Promise<WorkflowTask[]>;
@@ -9,12 +12,31 @@ export type ProfileWorkflowRunnerOptions = {
     initialState?: WorkflowStateName;
     environment?: string;
     pollIntervalMs?: number;
+    contextId?: string;
+    updateTaskStatus?: (id: string, status: TaskStatus, updatedBy?: string) => Promise<void>;
 };
+
+type WorkflowContextToken = {
+    contextId: string;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === "object" && !Array.isArray(value);
+
+const normalizeContextData = (value: unknown): Record<string, unknown> =>
+    isRecord(value) ? value : {};
 
 const sleep = (durationMs: number): Promise<void> =>
     new Promise((resolve) => setTimeout(resolve, durationMs));
 
 const normalizeTaskType = (value: string | undefined): string => (value ?? "").trim().toLowerCase();
+const normalizeTaskStatus = (value: string | undefined): string =>
+    (value ?? "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+
+const isActiveStatus = (value: string | undefined): boolean => {
+    const status = normalizeTaskStatus(value);
+    return status === "todo" || status === "in-progress";
+};
 
 const isImplementationTaskType = (value: string | undefined): boolean => {
     const type = normalizeTaskType(value);
@@ -39,10 +61,466 @@ const priorityScore = (priority: string | undefined): number => {
     }
 };
 
+const parseTestStatusLine = (value: string): "passed" | "failed" | null => {
+    const match = value.match(/test status\s*:\s*(passed|failed)/i);
+    if (!match) {
+        return null;
+    }
+    return match[1].toLowerCase() === "passed" ? "passed" : "failed";
+};
+
+const normalizeTextLines = (value: string): string[] =>
+    value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+const extractInlineList = (lines: string[], label: string): string[] => {
+    const prefix = label.toLowerCase();
+    const line = lines.find((entry) => entry.toLowerCase().startsWith(prefix));
+    if (!line) {
+        return [];
+    }
+    const remainder = line.slice(label.length).replace(/^:\s*/, "").trim();
+    if (remainder.length === 0) {
+        return [];
+    }
+    return remainder
+        .split(/,|\s*\|\s*|\s*;\s*/)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+};
+
+const extractListAfterLabel = (lines: string[], label: string): string[] => {
+    const prefix = label.toLowerCase();
+    const index = lines.findIndex((entry) => entry.toLowerCase().startsWith(prefix));
+    if (index < 0) {
+        return [];
+    }
+    const items = lines
+        .slice(index + 1)
+        .filter((entry) => entry.startsWith("-"))
+        .map((entry) => entry.replace(/^-+\s*/, "").trim())
+        .filter((entry) => entry.length > 0);
+    return items;
+};
+
+const extractInlineValue = (lines: string[], label: string): string => {
+    const prefix = label.toLowerCase();
+    const line = lines.find((entry) => entry.toLowerCase().startsWith(prefix));
+    if (!line) {
+        return "";
+    }
+    return line.slice(label.length).replace(/^:\s*/, "").trim();
+};
+
+const inferTestReportFromExecution = (
+    execution: { summary?: string; output?: string; error?: string } | null | undefined,
+): { testStatus?: "passed" | "failed"; testReport?: Record<string, unknown> } => {
+    const combined = [execution?.summary, execution?.output, execution?.error]
+        .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        .join("\n");
+    if (combined.length === 0) {
+        return {};
+    }
+    const status = parseTestStatusLine(combined);
+    const lines = normalizeTextLines(combined);
+    const failedTests = [
+        ...extractInlineList(lines, "Failed tests"),
+        ...extractListAfterLabel(lines, "Failed tests"),
+    ].filter((value, index, list) => list.indexOf(value) === index);
+    const reproSteps = [
+        ...extractInlineList(lines, "Repro steps"),
+        ...extractListAfterLabel(lines, "Repro steps"),
+        ...extractInlineList(lines, "Repro commands"),
+        ...extractListAfterLabel(lines, "Repro commands"),
+    ].filter((value, index, list) => list.indexOf(value) === index);
+    const suspectedRootCause =
+        extractInlineValue(lines, "Suspected root cause")
+        || extractInlineValue(lines, "Root cause");
+    const notes = extractInlineValue(lines, "Notes");
+    const hasReport =
+        failedTests.length > 0
+        || reproSteps.length > 0
+        || suspectedRootCause.length > 0
+        || notes.length > 0;
+    return {
+        ...(status ? { testStatus: status } : {}),
+        ...(hasReport
+            ? {
+                testReport: {
+                    failedTests,
+                    reproSteps,
+                    suspectedRootCause,
+                    notes,
+                },
+            }
+            : {}),
+    };
+};
+
+const dependenciesSatisfied = (task: WorkflowTask, tasks: WorkflowTask[]): boolean => {
+    const deps = task.dependencies ?? [];
+    if (deps.length === 0) {
+        return true;
+    }
+    return deps.every((depId) => {
+        const depTask = tasks.find((candidate) => candidate.id === depId);
+        return !depTask || depTask.status === "done" || depTask.status === "invalid";
+    });
+};
+
+const formatTaskLine = (task: WorkflowTask): string => {
+    const id = task.id ?? "unknown";
+    const title = (task.title ?? "Untitled").trim();
+    const type = normalizeTaskType(task.type) || "unknown";
+    const status = normalizeTaskStatus(task.status) || "unknown";
+    const priority = (task.priority ?? "unspecified").toLowerCase();
+    const dependencies = task.dependencies ?? [];
+    const depsCount = Array.isArray(dependencies) ? dependencies.length : 0;
+    return `- ${id} | ${title} | ${type} | ${status} | ${priority} | deps=${depsCount}`;
+};
+
+const summarizeTaskList = (
+    tasks: WorkflowTask[],
+    limit: number,
+): { lines: string[]; truncated: boolean } => {
+    const clipped = tasks.slice(0, Math.max(limit, 0));
+    return {
+        lines: clipped.map((task) => formatTaskLine(task)),
+        truncated: tasks.length > clipped.length,
+    };
+};
+
+const buildPrefetchedListTasksOutput = (
+    transition: string,
+    tasks: WorkflowTask[],
+): string | null => {
+    const normalizedTransition = transition.trim().toLowerCase();
+    const baseOutput = (filtered: WorkflowTask[]): string => {
+        const { lines, truncated } = summarizeTaskList(filtered, 25);
+        const header = `Found ${filtered.length} tasks${truncated ? ` (showing first ${lines.length})` : ""}:`;
+        const truncationNote = truncated
+            ? "Note: list truncated; call list_tasks for the full set if needed."
+            : "";
+        return [header, ...lines, truncationNote].filter((line) => line.length > 0).join("\n");
+    };
+
+    if (normalizedTransition === "prioritize-features") {
+        const filtered = tasks.filter(
+            (task) =>
+                normalizeTaskType(task.type) === "feature" && isActiveStatus(task.status),
+        );
+        const filters = { type: "feature", status: ["todo", "in-progress"] };
+        return `Prefetched list_tasks output (filters ${JSON.stringify(filters)}):\n${baseOutput(filtered)}`;
+    }
+    if (normalizedTransition === "prioritize-themes") {
+        const filtered = tasks.filter(
+            (task) =>
+                normalizeTaskType(task.type) === "theme" && isActiveStatus(task.status),
+        );
+        const filters = { type: "theme", status: ["todo", "in-progress"] };
+        return `Prefetched list_tasks output (filters ${JSON.stringify(filters)}):\n${baseOutput(filtered)}`;
+    }
+    if (normalizedTransition === "prioritize-initiatives") {
+        const filtered = tasks.filter(
+            (task) =>
+                normalizeTaskType(task.type) === "initiative" && isActiveStatus(task.status),
+        );
+        const filters = { type: "initiative", status: ["todo", "in-progress"] };
+        return `Prefetched list_tasks output (filters ${JSON.stringify(filters)}):\n${baseOutput(filtered)}`;
+    }
+    if (normalizedTransition === "prioritize-stories") {
+        const filtered = tasks.filter(
+            (task) =>
+                normalizeTaskType(task.type) === "story" && isActiveStatus(task.status),
+        );
+        const filters = { type: "story", status: ["todo", "in-progress"] };
+        return `Prefetched list_tasks output (filters ${JSON.stringify(filters)}):\n${baseOutput(filtered)}`;
+    }
+    if (normalizedTransition === "refine-into-tasks" || normalizedTransition === "need-more-tasks") {
+        return `Prefetched list_tasks output (no filters):\n${baseOutput(tasks)}`;
+    }
+    return null;
+};
+
+const normalizeStringArray = (value: unknown): string[] => {
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        return trimmed.length > 0 ? [trimmed] : [];
+    }
+    if (Array.isArray(value)) {
+        return value
+            .filter((entry): entry is string => typeof entry === "string")
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0);
+    }
+    return [];
+};
+
+const appendSection = (lines: string[], label: string, items: string[]): string[] => {
+    if (items.length === 0) {
+        return lines;
+    }
+    return [...lines, `${label}:`, ...items.map((item) => `- ${item}`)];
+};
+
+const buildTestReportSection = (
+    context: Record<string, unknown>,
+    lastTestResult: unknown,
+): string | null => {
+    const rawStatus = typeof context.testStatus === "string" ? context.testStatus.trim() : "";
+    const report =
+        context.testReport && typeof context.testReport === "object"
+            ? (context.testReport as Record<string, unknown>)
+            : null;
+    const failedTests = normalizeStringArray(report?.failedTests);
+    const reproSteps = normalizeStringArray(report?.reproSteps);
+    const suspectedRootCause =
+        typeof report?.suspectedRootCause === "string" ? report.suspectedRootCause.trim() : "";
+    const notes = typeof report?.notes === "string" ? report.notes.trim() : "";
+
+    const lastResultRecord =
+        lastTestResult && typeof lastTestResult === "object"
+            ? (lastTestResult as Record<string, unknown>)
+            : null;
+    const lastSummary =
+        typeof lastResultRecord?.summary === "string" ? lastResultRecord.summary.trim() : "";
+    const lastError =
+        typeof lastResultRecord?.error === "string" ? lastResultRecord.error.trim() : "";
+    const lastOutput =
+        typeof lastResultRecord?.output === "string" ? lastResultRecord.output.trim() : "";
+
+    let lines: string[] = [];
+    if (rawStatus.length > 0) {
+        lines = [...lines, `Test status: ${rawStatus}`];
+    }
+    lines = appendSection(lines, "Failed tests", failedTests);
+    lines = appendSection(lines, "Repro steps", reproSteps);
+    if (suspectedRootCause.length > 0) {
+        lines = [...lines, `Suspected root cause: ${suspectedRootCause}`];
+    }
+    if (notes.length > 0) {
+        lines = [...lines, `Notes: ${notes}`];
+    }
+    if (lastSummary.length > 0) {
+        lines = [...lines, `Last test summary: ${lastSummary}`];
+    }
+    if (lastError.length > 0) {
+        lines = [...lines, `Last test error: ${lastError}`];
+    }
+    if (lastOutput.length > 0) {
+        lines = [...lines, `Last test output:\n${lastOutput}`];
+    }
+    if (lines.length === 0 && (lastSummary.length > 0 || lastError.length > 0 || lastOutput.length > 0)) {
+        const outputLines =
+            lastSummary.length > 0
+                ? [`Last test summary: ${lastSummary}`]
+                : [];
+        const errorLines = lastError.length > 0 ? [`Last test error: ${lastError}`] : [];
+        const outputBlock = lastOutput.length > 0 ? [`Last test output:\n${lastOutput}`] : [];
+        lines = [...outputLines, ...errorLines, ...outputBlock];
+    }
+
+    return lines.length > 0 ? lines.join("\n") : null;
+};
+
+const buildDependencyStatusLines = (
+    dependencies: string[],
+    taskMap: Map<string, WorkflowTask>,
+): string[] =>
+    dependencies.map((dependencyId) => {
+        const dependency = taskMap.get(dependencyId);
+        const status = normalizeTaskStatus(dependency?.status) || "unknown";
+        const title = dependency?.title ? ` (${dependency.title.trim()})` : "";
+        return `- ${dependencyId}: ${status}${title}`;
+    });
+
+const extractLastActionSummary = (task: WorkflowTask): string | null => {
+    const entries = task.actionLog ?? [];
+    if (!Array.isArray(entries) || entries.length === 0) {
+        return null;
+    }
+    const last = entries[entries.length - 1];
+    const summary = last?.summary?.trim() ?? "";
+    const transition = last?.transition?.trim() ?? "";
+    if (summary.length === 0 && transition.length === 0) {
+        return null;
+    }
+    return transition.length > 0 && summary.length > 0
+        ? `${transition}: ${summary}`
+        : transition.length > 0
+            ? transition
+            : summary;
+};
+
+const buildSelectedTaskContext = (
+    task: WorkflowTask,
+    tasks: WorkflowTask[],
+    options?: { includeDescription?: boolean },
+): string => {
+    const hasId = (entry: WorkflowTask): entry is WorkflowTask & { id: string } =>
+        typeof entry.id === "string" && entry.id.length > 0;
+    const taskId = task.id ?? "unknown";
+    const taskTitle = (task.title ?? "Untitled").trim();
+    const descriptionRaw = (task.description ?? "").trim();
+    const description = descriptionRaw.length > 0
+        ? descriptionRaw.length > 600
+            ? `${descriptionRaw.slice(0, 597)}...`
+            : descriptionRaw
+        : "";
+    const taskType = normalizeTaskType(task.type) || "unknown";
+    const taskStatus = normalizeTaskStatus(task.status) || "unknown";
+    const taskPriority = (task.priority ?? "unspecified").toLowerCase();
+    const dependencies = task.dependencies ?? [];
+    const dependencyList = Array.isArray(dependencies) ? dependencies : [];
+    const taskMap = new Map(
+        tasks.filter(hasId).map((entry) => [entry.id, entry]),
+    );
+    const dependencyLines = dependencyList.length > 0
+        ? ["Dependencies:", ...buildDependencyStatusLines(dependencyList, taskMap)]
+        : ["Dependencies: none"];
+    const lastAction = extractLastActionSummary(task);
+    const lastActionLine = lastAction ? [`Last action: ${lastAction}`] : [];
+    const descriptionLines =
+        options?.includeDescription && description.length > 0
+            ? [`Description: ${description}`]
+            : [];
+    return [
+        `ID: ${taskId}`,
+        `Title: ${taskTitle}`,
+        `Type: ${taskType}`,
+        `Status: ${taskStatus}`,
+        `Priority: ${taskPriority}`,
+        ...descriptionLines,
+        ...dependencyLines,
+        ...lastActionLine,
+    ].join("\n");
+};
+
+const TRANSITIONS_NEEDING_CONTEXT = new Set([
+    "define-initiatives",
+    "retry-initiative-research",
+    "retry-product-research",
+    "research-new-features",
+    "do-ux-research",
+    "refine-into-tasks",
+    "need-more-tasks",
+    "begin-implementation",
+    "close-invalid-task",
+    "run-tests",
+    "tests-failed",
+    "tests-passing",
+]);
+
+const TRANSITIONS_NEEDING_DESCRIPTION = new Set([
+    "define-initiatives",
+    "retry-initiative-research",
+    "retry-product-research",
+    "research-new-features",
+    "do-ux-research",
+    "refine-into-tasks",
+    "need-more-tasks",
+    "begin-implementation",
+    "close-invalid-task",
+    "run-tests",
+    "tests-failed",
+    "tests-passing",
+]);
+
+const selectInvalidTaskForClosure = (tasks: WorkflowTask[]): WorkflowTask | null => {
+    const candidates = tasks.filter(
+        (task) => isImplementationTaskType(task.type) && task.status === "todo",
+    );
+    if (candidates.length === 0) {
+        return null;
+    }
+    const invalid = candidates.filter((task) => !isWorkflowTaskTextComplete(task));
+    if (invalid.length === 0) {
+        return null;
+    }
+    const sorted = [...invalid].sort((left, right) => {
+        const leftScore = priorityScore(left.priority);
+        const rightScore = priorityScore(right.priority);
+        if (leftScore !== rightScore) {
+            return rightScore - leftScore;
+        }
+        const leftTitle = left.title ?? "";
+        const rightTitle = right.title ?? "";
+        return leftTitle.localeCompare(rightTitle);
+    });
+    return sorted[0] ?? null;
+};
+
+const selectInProgressImplementationTask = (tasks: WorkflowTask[]): WorkflowTask | null => {
+    const candidates = tasks.filter(
+        (task) => isImplementationTaskType(task.type) && task.status === "in-progress",
+    );
+    if (candidates.length === 0) {
+        return null;
+    }
+    const sorted = [...candidates].sort((left, right) => {
+        const leftScore = priorityScore(left.priority);
+        const rightScore = priorityScore(right.priority);
+        if (leftScore !== rightScore) {
+            return rightScore - leftScore;
+        }
+        const leftTitle = left.title ?? "";
+        const rightTitle = right.title ?? "";
+        return leftTitle.localeCompare(rightTitle);
+    });
+    return sorted[0] ?? null;
+};
+
+const deriveStateFromTasks = (
+    tasks: WorkflowTask[],
+): { state: WorkflowStateName; currentTaskId?: string } | null => {
+    const inProgress = selectInProgressImplementationTask(tasks);
+    if (inProgress?.id) {
+        return { state: "task-in-progress", currentTaskId: inProgress.id };
+    }
+    const actionableImplementation = tasks.some(
+        (task) =>
+            isImplementationTaskType(task.type)
+            && task.status === "todo"
+            && dependenciesSatisfied(task, tasks),
+    );
+    if (actionableImplementation) {
+        return { state: "tasks-prepared" };
+    }
+    const hasStories = tasks.some(
+        (task) => normalizeTaskType(task.type) === "story" && isActiveStatus(task.status),
+    );
+    if (hasStories) {
+        return { state: "stories-prioritized" };
+    }
+    const hasFeatures = tasks.some(
+        (task) => normalizeTaskType(task.type) === "feature" && isActiveStatus(task.status),
+    );
+    if (hasFeatures) {
+        return { state: "features-prioritized" };
+    }
+    const hasInitiatives = tasks.some(
+        (task) => normalizeTaskType(task.type) === "initiative" && isActiveStatus(task.status),
+    );
+    if (hasInitiatives) {
+        return { state: "initiatives-prioritized" };
+    }
+    const hasThemes = tasks.some(
+        (task) => normalizeTaskType(task.type) === "theme" && isActiveStatus(task.status),
+    );
+    if (hasThemes) {
+        return { state: "themes-prioritized" };
+    }
+    return null;
+};
+
 const selectTaskForState = (
     tasks: WorkflowTask[],
     state: RuntimeState | null,
     targetTypeOverride?: string,
+    preferredTaskId?: string,
+    preferPreferredTask?: boolean,
 ): WorkflowTask | null => {
     if (tasks.length === 0) {
         return null;
@@ -57,6 +535,13 @@ const selectTaskForState = (
     }
 
     const normalizedTarget = normalizeTaskType(targetType);
+    const requiresDependencies =
+        normalizedTarget === "implementation"
+        || normalizedTarget === "task"
+        || normalizedTarget === "testing"
+        || normalizedTarget === "integration";
+    const isDependencyEligible = (task: WorkflowTask): boolean =>
+        !requiresDependencies || dependenciesSatisfied(task, tasks);
     const matchesTarget = (task: WorkflowTask): boolean => {
         const normalizedType = normalizeTaskType(task.type);
         if (normalizedTarget === "implementation" || normalizedTarget === "task") {
@@ -68,12 +553,33 @@ const selectTaskForState = (
         return normalizedType === normalizedTarget;
     };
 
-    const candidates = activeTasks.filter(matchesTarget);
-    if (candidates.length === 0) {
+    const preferredTask =
+        preferredTaskId
+            ? activeTasks.find((task) => task.id === preferredTaskId)
+            : undefined;
+    if (
+        preferredTask
+        && (preferPreferredTask || matchesTarget(preferredTask))
+        && (preferredTask.status === "in-progress" || isDependencyEligible(preferredTask))
+    ) {
+        return preferredTask;
+    }
+
+    const candidates = activeTasks.filter(
+        (task) => matchesTarget(task) && isDependencyEligible(task),
+    );
+    const fallbackCandidates =
+        candidates.length === 0 && normalizedTarget === "testing"
+            ? activeTasks.filter(
+                (task) => isImplementationTaskType(task.type) && isDependencyEligible(task),
+            )
+            : [];
+    const eligibleCandidates = candidates.length > 0 ? candidates : fallbackCandidates;
+    if (eligibleCandidates.length === 0) {
         return null;
     }
 
-    const sorted = [...candidates].sort((left, right) => {
+    const sorted = [...eligibleCandidates].sort((left, right) => {
         const leftScore = priorityScore(left.priority);
         const rightScore = priorityScore(right.priority);
         if (leftScore !== rightScore) {
@@ -92,24 +598,32 @@ const resolveTargetTypeForTransition = (
     transition: string,
 ): string | undefined => {
     const overrides: Record<string, string> = {
-        "retry-product-research": "feature",
-        "research-new-features": "feature",
+        "retry-theme-research": "theme",
+        "research-new-themes": "theme",
+        "prioritize-themes": "theme",
+        "define-initiatives": "theme",
+        "retry-initiative-research": "theme",
+        "prioritize-initiatives": "initiative",
+        "retry-product-research": "initiative",
+        "research-new-features": "initiative",
         "prioritize-features": "feature",
         "do-ux-research": "feature",
         "prioritize-stories": "story",
         "refine-into-tasks": "story",
         "need-more-tasks": "story",
         "begin-implementation": "implementation",
-        "additional-implementation": "implementation",
         "run-tests": "testing",
         "tests-passing": "testing",
-        "tests-failed": "testing",
+        "tests-failed": "implementation",
     };
     return overrides[transition] ?? state.targetType;
 };
 
 const canRunWithoutTask = (transition: string): boolean =>
-    transition === "retry-product-research" || transition === "research-new-features";
+    transition === "retry-theme-research"
+    || transition === "research-new-themes"
+    || transition === "retry-product-research"
+    || transition === "research-new-features";
 
 const buildVirtualTask = (transition: string, targetType: string | undefined): WorkflowTask => ({
     title: `Workflow context (${transition})`,
@@ -119,55 +633,123 @@ const buildVirtualTask = (transition: string, targetType: string | undefined): W
     type: targetType ?? "task",
 });
 
-const resolveTransition = (
+type TransitionResult = {
+    transition: string;
+    isDecider: boolean;
+};
+
+const resolveTransition = async (
     state: RuntimeState,
     tasks: WorkflowTask[],
     context: Record<string, unknown>,
-): Promise<string | null> | string | null => {
-    if (state.decider) {
-        return state.decider(tasks, context);
-    }
-    if (state.defaultTransition) {
-        return state.defaultTransition;
-    }
+): Promise<TransitionResult | null> => {
     const transitions = Object.keys(state.transitions);
-    return transitions.length > 0 ? transitions[0] : null;
+    const isValid = (transition: string | null | undefined): transition is string =>
+        typeof transition === "string" &&
+        transition.length > 0 &&
+        Boolean(state.transitions[transition]);
+
+    const deciderChoice = state.decider ? await state.decider(tasks, context) : null;
+    if (isValid(deciderChoice)) {
+        return { transition: deciderChoice, isDecider: true };
+    }
+    if (deciderChoice) {
+        console.warn(
+            `[WORKFLOW] Invalid transition '${deciderChoice}' for state ${state.name}; falling back.`,
+        );
+    }
+
+    if (isValid(state.defaultTransition)) {
+        return { transition: state.defaultTransition, isDecider: false };
+    }
+
+    return transitions.length > 0 ? { transition: transitions[0], isDecider: false } : null;
 };
 
 const resolveProfileForTransition = (state: RuntimeState, transition: string): string => {
     const overrides: Record<string, string> = {
+        "retry-theme-research": "portfolio-manager",
+        "research-new-themes": "portfolio-manager",
+        "prioritize-themes": "portfolio-manager",
+        "define-initiatives": "portfolio-manager",
+        "retry-initiative-research": "portfolio-manager",
+        "prioritize-initiatives": "portfolio-manager",
+        "request-theme": "portfolio-manager",
         "retry-product-research": "product-manager",
         "research-new-features": "product-manager",
         "prioritize-features": "product-manager",
         "do-ux-research": "ux-specialist",
-        "prioritize-stories": "ux-specialist",
+        "prioritize-stories": "project-manager",
         "request-feature": "ux-specialist",
         "refine-into-tasks": "refinement",
-        "need-more-tasks": "refinement",
+        "need-more-tasks": "principal-architect",
+        "close-invalid-task": "project-manager",
         "refine-task": "refinement",
-        "begin-implementation": "development",
-        "additional-implementation": "development",
+        "begin-implementation": "senior-developer",
         "run-tests": "qa-specialist",
         "tests-passing": "qa-specialist",
-        "tests-failed": "qa-specialist",
+        "tests-failed": "senior-developer",
         "pick-up-next-task": "development",
     };
     return overrides[transition] ?? state.profile;
 };
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ProfileWorkflowRunner {
     private taskProvider: () => Promise<WorkflowTask[]>;
     private taskExecutor: WorkflowTaskExecutor;
-    private token: WorkflowToken<Record<string, unknown>>;
+    private token: WorkflowToken<WorkflowContextToken>;
     private environment: string | undefined;
     private pollIntervalMs: number;
+    private contextClient: ContextClient;
+    private updateTaskStatus?: (id: string, status: TaskStatus, updatedBy?: string) => Promise<void>;
 
     constructor(options: ProfileWorkflowRunnerOptions) {
         this.taskProvider = options.taskProvider;
         this.taskExecutor = options.taskExecutor;
         this.environment = options.environment;
         this.pollIntervalMs = options.pollIntervalMs ?? 10000;
-        this.token = createToken<Record<string, unknown>>(options.initialState ?? "new-feature-proposed");
+        this.contextClient = createContextClient({ environment: options.environment });
+        this.updateTaskStatus = options.updateTaskStatus;
+        this.token = createToken<WorkflowContextToken>(
+            options.initialState ?? "themes-proposed",
+            options.contextId ? { contextId: options.contextId } : undefined,
+        );
+    }
+
+    private async ensureContextId(): Promise<string> {
+        const existingId =
+            this.token.context && typeof this.token.context.contextId === "string"
+                ? this.token.context.contextId
+                : undefined;
+        if (existingId) {
+            return existingId;
+        }
+        const created = await this.contextClient.createContext();
+        const contextId = created.id;
+        this.token = { ...this.token, context: { contextId } };
+        return contextId;
+    }
+
+    private async loadContextData(contextId: string): Promise<Record<string, unknown>> {
+        const existing = await this.contextClient.getContext(contextId);
+        if (existing) {
+            return normalizeContextData(existing.data);
+        }
+        const created = await this.contextClient.createContext({ id: contextId, data: {} });
+        return normalizeContextData(created.data);
+    }
+
+    private async updateContextData(
+        contextId: string,
+        patch: Record<string, unknown>,
+    ): Promise<void> {
+        if (Object.keys(patch).length === 0) {
+            return;
+        }
+        await this.contextClient.updateContext(contextId, patch);
     }
 
     async runLoop(): Promise<void> {
@@ -175,27 +757,86 @@ export class ProfileWorkflowRunner {
         while (true) {
             try {
                 const tasks = await this.taskProvider();
+                const contextId = await this.ensureContextId();
+                const baseContext = await this.loadContextData(contextId);
+                const shouldRecover =
+                    (this.token.state === "themes-proposed"
+                        || this.token.state === "new-feature-proposed")
+                    && baseContext.autoRecovered !== true;
+                const derived = shouldRecover ? deriveStateFromTasks(tasks) : null;
+                const recoveryPatch =
+                    derived && derived.state !== this.token.state
+                        ? {
+                            autoRecovered: true,
+                            ...(derived.currentTaskId ? { currentTaskId: derived.currentTaskId } : {}),
+                        }
+                        : null;
+                const tokenContext = recoveryPatch ? { ...baseContext, ...recoveryPatch } : baseContext;
+                if (recoveryPatch) {
+                    await this.updateContextData(contextId, recoveryPatch);
+                    this.token = { ...this.token, state: derived?.state ?? this.token.state, context: { contextId } };
+                    console.log(
+                        `[WORKFLOW] Auto-recovered state=${derived?.state ?? this.token.state} currentTaskId=${derived?.currentTaskId ?? "none"}`,
+                    );
+                }
+
                 const state = WORKFLOW[this.token.state];
                 if (!state) {
                     console.warn(`[WORKFLOW] Unknown workflow state: ${this.token.state}`);
                     await sleep(this.pollIntervalMs);
                     continue;
                 }
+                const currentTaskId =
+                    typeof tokenContext.currentTaskId === "string"
+                        ? tokenContext.currentTaskId
+                        : undefined;
+                const lastTestResult = tokenContext.lastTestResult;
 
-                const transition = await resolveTransition(state, tasks, {
+                const transitionResult = await resolveTransition(state, tasks, {
+                    ...tokenContext,
                     workflow: { state: state.name },
+                    services: {
+                        taskExecutor: this.taskExecutor,
+                    },
+                    contextId,
+                    currentTaskId,
+                    lastTestResult,
                 });
-                if (!transition) {
+                if (!transitionResult) {
                     console.warn(`[WORKFLOW] No transition chosen for state ${state.name}`);
                     await sleep(this.pollIntervalMs);
                     continue;
                 }
+                const { transition, isDecider } = transitionResult;
+                const prefetchedListTasksOutput = buildPrefetchedListTasksOutput(
+                    transition,
+                    tasks,
+                );
 
                 const nextStateName =
                     getNextStateFrom(WORKFLOW, this.token.state, transition) ?? this.token.state;
                 const targetState = WORKFLOW[nextStateName] ?? state;
                 const targetType = resolveTargetTypeForTransition(targetState, transition);
-                const taskCandidate = selectTaskForState(tasks, state, targetType);
+                const preferPreferredTask = ["run-tests", "tests-failed", "tests-passing"].includes(
+                    transition,
+                );
+                const inferredTaskId =
+                    currentTaskId ??
+                    selectInProgressImplementationTask(tasks)?.id;
+                const invalidCandidate =
+                    transition === "close-invalid-task"
+                        ? selectInvalidTaskForClosure(tasks)
+                        : null;
+                const taskCandidate =
+                    transition === "close-invalid-task"
+                        ? invalidCandidate
+                        : selectTaskForState(
+                            tasks,
+                            state,
+                            targetType,
+                            inferredTaskId,
+                            preferPreferredTask,
+                        );
                 if (!taskCandidate && !canRunWithoutTask(transition)) {
                     console.log(
                         `[WORKFLOW] No ${targetType ?? "matching"} tasks for ${transition}; waiting.`,
@@ -208,18 +849,123 @@ export class ProfileWorkflowRunner {
                 console.log(
                     `[WORKFLOW] state=${state.name} transition=${transition} tasks=${tasks.length}`,
                 );
+                if (transition === "tests-passing") {
+                    const effectiveTaskId =
+                        currentTaskId ?? taskCandidate?.id ?? inferredTaskId;
+                    if (effectiveTaskId && this.updateTaskStatus) {
+                        await this.updateTaskStatus(effectiveTaskId, "done", "workflow");
+                    } else if (!this.updateTaskStatus) {
+                        console.warn("[WORKFLOW] updateTaskStatus not configured; skipping auto-complete");
+                    }
+                    await this.updateContextData(contextId, {
+                        currentTaskId: null,
+                        lastTestResult: null,
+                        testStatus: null,
+                        testReport: null,
+                    });
+                    this.token = { ...this.token, state: nextStateName, context: { contextId } };
+                    continue;
+                }
                 const runState = {
                     ...targetState,
                     profile: resolveProfileForTransition(targetState, transition),
                 };
-                await this.taskExecutor({
+                const isVirtualTask =
+                    !task.id && typeof task.title === "string" && task.title.startsWith("Workflow context");
+                const includeTaskContext =
+                    TRANSITIONS_NEEDING_CONTEXT.has(transition) && !isVirtualTask;
+                const selectedTaskContext = includeTaskContext
+                    ? buildSelectedTaskContext(task, tasks, {
+                        includeDescription: TRANSITIONS_NEEDING_DESCRIPTION.has(transition),
+                    })
+                    : "";
+                const testReportSection =
+                    transition === "tests-failed"
+                        ? buildTestReportSection(tokenContext, lastTestResult)
+                        : null;
+                if (transition === "run-tests") {
+                    await this.updateContextData(contextId, {
+                        testStatus: null,
+                        testReport: null,
+                    });
+                }
+                const execution = await this.taskExecutor({
                     task,
                     workflowState: runState,
                     workflowTransition: transition,
                     environment: this.environment,
+                    workflowSourceState: this.token.state,
+                    workflowTargetState: nextStateName,
+                    executionContext: {
+                        contextId,
+                        currentTaskId,
+                        lastTestResult,
+                        prefetchedMcpOutput: prefetchedListTasksOutput,
+                        prefetchedTaskContext: selectedTaskContext,
+                        prefetchedTestReport: testReportSection,
+                    },
+                    isDecider,
                 });
 
-                this.token = { ...this.token, state: nextStateName };
+                const shouldTrackTask = [
+                    "begin-implementation",
+                    "run-tests",
+                    "tests-failed",
+                    "tests-passing",
+                ].includes(transition);
+                const shouldClearLastTestResult =
+                    transition === "begin-implementation"
+                    || (!shouldTrackTask && transition !== "run-tests");
+                const shouldClearTestReport = shouldClearLastTestResult;
+                const nextCurrentTaskId =
+                    shouldTrackTask && task.id ? task.id : null;
+                const inferredTestPatch =
+                    transition === "run-tests"
+                        ? (() => {
+                            const inferred = inferTestReportFromExecution(execution);
+                            return this.loadContextData(contextId).then((latestContext) => {
+                                const latestTestStatus =
+                                    typeof latestContext.testStatus === "string"
+                                        ? latestContext.testStatus.trim()
+                                        : "";
+                                const latestTestReport =
+                                    latestContext.testReport && typeof latestContext.testReport === "object"
+                                        ? (latestContext.testReport as Record<string, unknown>)
+                                        : null;
+                                const testStatusPatch =
+                                    latestTestStatus.length === 0 && inferred.testStatus
+                                        ? { testStatus: inferred.testStatus }
+                                        : {};
+                                const testReportPatch =
+                                    !latestTestReport && inferred.testReport
+                                        ? { testReport: inferred.testReport }
+                                        : {};
+                                return { ...testStatusPatch, ...testReportPatch };
+                            });
+                        })()
+                        : Promise.resolve({});
+                const inferredTestPatchResult = await inferredTestPatch;
+                const contextPatch: Record<string, unknown> = {
+                    ...(typeof nextCurrentTaskId === "string"
+                        ? { currentTaskId: nextCurrentTaskId }
+                        : { currentTaskId: null }),
+                    ...(transition === "run-tests"
+                        ? { lastTestResult: execution }
+                        : shouldClearLastTestResult
+                            ? { lastTestResult: null }
+                            : {}),
+                    ...(shouldClearTestReport
+                        ? {
+                            testStatus: null,
+                            testReport: null,
+                        }
+                        : {}),
+                    ...inferredTestPatchResult,
+                };
+
+                await this.updateContextData(contextId, contextPatch);
+
+                this.token = { ...this.token, state: nextStateName, context: { contextId } };
             } catch (error) {
                 console.error("[WORKFLOW] Error in profile workflow loop:", error);
             }

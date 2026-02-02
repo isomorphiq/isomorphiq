@@ -48,6 +48,9 @@ export interface TaskMonitoringSession {
 	active: boolean;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class TaskMonitor extends EventEmitter {
 	private sessions: Map<string, TaskMonitoringSession> = new Map();
 	private subscriptions: Map<string, Set<string>> = new Map(); // taskId -> sessionIds

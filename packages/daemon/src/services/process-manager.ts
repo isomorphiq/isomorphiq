@@ -1,9 +1,23 @@
+// TODO: This file is too complex (686 lines) and should be refactored into several modules.
+// Current concerns mixed: Process lifecycle management, health checking, service initialization,
+// TCP server management, auto-restart logic, dependency management.
+// 
+// Proposed structure:
+// - process-manager/index.ts - Main process manager orchestration
+// - process-manager/lifecycle-service.ts - Process spawn, stop, restart logic
+// - process-manager/health-checker.ts - Health check implementation
+// - process-manager/service-initializer.ts - Service startup and initialization
+// - process-manager/tcp-server.ts - TCP server for process communication
+// - process-manager/restart-service.ts - Auto-restart and failure recovery
+// - process-manager/dependency-service.ts - Process dependency management
+// - process-manager/types.ts - Process manager types
+
 import { type ChildProcess, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import type { Server as HttpServer } from "node:http";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
 import { startHttpServer } from "@isomorphiq/http-server";
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 import { ProfileManager } from "@isomorphiq/user-profile";
 import { createWorkflowAgentRunner } from "@isomorphiq/workflow/agent-runner";
 import { ProfileWorkflowRunner } from "@isomorphiq/workflow";
@@ -43,6 +57,9 @@ export interface ProcessManagerConfig {
 	restartDelay: number;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ProcessManager extends EventEmitter {
 	private processes: Map<string, ChildProcess> = new Map();
 	private configs: Map<string, ProcessConfig> = new Map();
@@ -78,6 +95,12 @@ export class ProcessManager extends EventEmitter {
         this.workflowRunner = new ProfileWorkflowRunner({
             taskProvider: () => this.productManager?.getAllTasks() ?? Promise.resolve([]),
             taskExecutor: workflowRunner.executeTask,
+            updateTaskStatus: async (id, status, updatedBy) => {
+                if (!this.productManager) {
+                    return;
+                }
+                await this.productManager.updateTaskStatus(id, status, updatedBy);
+            },
         });
 		this.webSocketManager = new WebSocketManager({ path: "/ws" });
 		this.productManager.setWebSocketManager(this.webSocketManager);

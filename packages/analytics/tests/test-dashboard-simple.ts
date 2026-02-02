@@ -50,6 +50,9 @@ interface AnalyticsData {
 	};
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class SimplifiedDashboardTester {
 	private results: TestResult[] = [];
 	private testTasks: Task[] = [];
@@ -744,3 +747,4 @@ class SimplifiedDashboardTester {
 // }
 
 export { SimplifiedDashboardTester };
+

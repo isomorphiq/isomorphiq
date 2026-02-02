@@ -5,8 +5,8 @@
  * Tests the new search functionality, saved searches, and API endpoints
  */
 
-import { ProductManager } from "./src/index.ts";
-import type { SearchQuery, CreateSavedSearchInput, TaskStatus, TaskType } from "./src/types.ts";
+import { ProductManager } from "@isomorphiq/user-profile";
+import type { SearchQuery, CreateSavedSearchInput, TaskStatus, TaskType } from "@isomorphiq/tasks";
 
 async function runAdvancedSearchTests() {
 	console.log("🔍 Testing Advanced Task Search and Filtering Feature");

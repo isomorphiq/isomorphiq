@@ -3,6 +3,7 @@ import type { TaskSavedSearch, TaskCreateSavedSearchInput } from "./types.ts";
 
 /**
  * Persistent storage for saved searches using LevelDB
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class SavedSearchRepository {
     private store: KeyValueStore<string, TaskSavedSearch>;

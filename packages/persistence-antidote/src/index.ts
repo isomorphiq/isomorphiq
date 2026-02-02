@@ -2,6 +2,7 @@ import type { KeyValueAdapter, KeyValueIterator } from "@isomorphiq/persistence-
 
 /**
  * Placeholder AntidoteDB adapter. Implement CRDT-backed operations following the shared interface.
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class AntidoteAdapter<K = string, V = unknown> implements KeyValueAdapter<K, V> {
     /* eslint-disable @typescript-eslint/no-unused-vars */
@@ -32,3 +33,4 @@ export class AntidoteAdapter<K = string, V = unknown> implements KeyValueAdapter
         throw new Error("Antidote adapter not implemented yet");
     }
 }
+

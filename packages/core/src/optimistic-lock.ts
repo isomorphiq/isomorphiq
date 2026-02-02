@@ -16,6 +16,9 @@ export const VersionedEntitySchema = z.object({
 export type VersionedEntity = z.infer<typeof VersionedEntitySchema>;
 
 // Version conflict error
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class VersionConflictError extends Error {
     constructor(
         message: string,
@@ -35,6 +38,7 @@ export type OptimisticLockResult<T> =
 
 /**
  * Optimistic locking manager for concurrent operations
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class OptimisticLockManager {
     public static readonly DEFAULT_MAX_RETRIES = 3;
@@ -159,6 +163,7 @@ export class OptimisticLockManager {
 
 /**
  * Database adapter wrapper with optimistic locking support
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export abstract class OptimisticLockingAdapter<T extends VersionedEntity> {
     /**
@@ -246,6 +251,7 @@ export interface OptimisticLockMetrics {
 
 /**
  * Metrics collector for optimistic locking operations
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class OptimisticLockMetricsCollector {
     private metrics: OptimisticLockMetrics = {

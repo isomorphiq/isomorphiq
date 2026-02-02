@@ -16,6 +16,7 @@ const packageRoot = path.resolve(__dirname, "..");
 const entryPoint = path.join(packageRoot, "src", "mcp-server.ts");
 
 console.log("🚀 Starting Task Manager MCP Server for OpenCode...");
+console.log("ℹ️  Ensure the tasks microservice is running (e.g., `yarn run supervisor`).");
 
 // Start the MCP server
 const mcpProcess = spawn("node", ["--experimental-strip-types", entryPoint], {
@@ -43,6 +44,7 @@ console.log("Available MCP tools:");
 console.log("- create_task: Create new tasks with priority");
 console.log("- list_tasks: List all tasks");
 console.log("- get_task: Get specific task by ID");
+console.log("- update_task: Update task fields (including dependencies)");
 console.log("- update_task_status: Update task status");
 console.log("- update_task_priority: Update task priority");
 console.log("- delete_task: Delete tasks");

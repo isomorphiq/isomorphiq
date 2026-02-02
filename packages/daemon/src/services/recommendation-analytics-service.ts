@@ -7,9 +7,9 @@ import type {
     RecommendationAnalytics
 } from "@isomorphiq/core";
 import type { Task } from "@isomorphiq/tasks";
-import type { ProductManager } from "@isomorphiq/tasks";
+import type { ProductManager } from "@isomorphiq/user-profile";
 import { TaskRecommendationService, AdvancedPatternAnalyzer, SimpleLearningEngine } from "@isomorphiq/tasks";
-import type { TaskService } from "@isomorphiq/tasks";
+import type { TaskServiceApi } from "@isomorphiq/tasks";
 
 export interface RecommendationServiceConfig {
     maxRecommendationsPerRequest: number;
@@ -19,6 +19,9 @@ export interface RecommendationServiceConfig {
     enableLearning: boolean;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class RecommendationAnalyticsService {
     private recommendationService: TaskRecommendationService;
     private productManager: ProductManager;
@@ -45,12 +48,11 @@ export class RecommendationAnalyticsService {
         const learningEngine = new SimpleLearningEngine();
         
         // Get or create a basic TaskService for the recommendation system
-        const taskService = productManager.taskService;
+        const taskService = productManager.taskService as TaskServiceApi;
         this.recommendationService = new TaskRecommendationService(
-            taskService as any, // Type assertion to handle compatibility
-            productManager,
+            taskService,
             patternAnalyzer,
-            learningEngine
+            learningEngine,
         );
     }
 
@@ -550,3 +552,4 @@ export class RecommendationAnalyticsService {
         return { ...this.config };
     }
 }
+

@@ -1,8 +1,8 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { createServer, type Server } from "node:http";
-import { DashboardServer } from "@isomorphiq/daemon";
-import { ProductManager } from "@isomorphiq/tasks";
+import { DashboardServer } from "@isomorphiq/dashboard";
+import { ProductManager } from "@isomorphiq/user-profile";
 import { WebSocketManager } from "@isomorphiq/realtime";
 
 describe("Dashboard Integration Tests", () => {

@@ -21,6 +21,9 @@ interface BenchmarkResult {
     };
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class PerformanceBenchmark {
     private results: BenchmarkResult[] = [];
 
@@ -324,6 +327,9 @@ async function runPerformanceBenchmarks(): Promise<void> {
     // In-memory benchmarks for comparison
     console.log("\n🧠 In-Memory Performance Tests");
     
+    /**
+     * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+     */
     class InMemoryAdapter implements KeyValueAdapter<string, unknown> {
         private store = new Map<string, unknown>();
         private isOpen = false;

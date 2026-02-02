@@ -83,6 +83,7 @@ export interface WorkloadBalancingConfig {
 /**
  * Resource Management Service
  * Extends the existing scheduling system with advanced capacity planning
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class ResourceManagementService {
 	private taskService: TaskService;
@@ -167,7 +168,7 @@ export class ResourceManagementService {
 		const candidates = await this.getCandidateUsers(requirements, constraints);
 
 		// Score candidates based on strategy
-		const scoredCandidates = await this.scoreCandidates(candidates, requirements, strategy);
+		const scoredCandidates = await this.scoreCandidates(taskId, candidates, requirements, strategy);
 
 		// Get top recommendation
 		const bestCandidate = scoredCandidates[0];
@@ -317,30 +318,70 @@ export class ResourceManagementService {
 		const users = await userManager.getAllUsers();
 		const activeUsers = users.filter((user) => user.isActive);
 
-		const workloads: Workload[] = [];
+        const workloadResults: Array<Workload | null> = await Promise.all(
+            activeUsers.map(async (user) => {
+                const userTasksResult = await this.taskService.getTasksByUser(user.id);
+                if (!userTasksResult.success) return null;
 
-		for (const user of activeUsers) {
-			const userTasksResult = await this.taskService.getTasksByUser(user.id);
-			if (!userTasksResult.success) continue;
+                const activeTasks = userTasksResult.data.filter(
+                    (task) => task.status === "in-progress",
+                );
+                const requirements = await Promise.all(
+                    activeTasks.map((task) => this.inferTaskRequirements(task)),
+                );
+                const estimatedHours = requirements.reduce(
+                    (sum, requirement) => sum + requirement.estimatedHours,
+                    0,
+                );
+                const availableHours = 40 * 4; // 40 hours/week for 4 weeks
+                const utilizationRate = (estimatedHours / availableHours) * 100;
 
-			const activeTasks = userTasksResult.data.filter((task) => task.status === "in-progress");
-			const estimatedHours = activeTasks.length * 8; // Rough estimate
-			const availableHours = 40 * 4; // 40 hours/week for 4 weeks
-			const utilizationRate = (estimatedHours / availableHours) * 100;
+                return {
+                    userId: user.id,
+                    currentTasks: activeTasks.length,
+                    estimatedHours,
+                    availableHours,
+                    utilizationRate,
+                    overloaded: utilizationRate > this.balancingConfig.maxUtilization,
+                    skillUtilization: this.calculateSkillUtilization(requirements),
+                };
+            }),
+        );
 
-			workloads.push({
-				userId: user.id,
-				currentTasks: activeTasks.length,
-				estimatedHours,
-				availableHours,
-				utilizationRate,
-				overloaded: utilizationRate > this.balancingConfig.maxUtilization,
-				skillUtilization: {}, // TODO: Calculate based on task requirements
-			});
-		}
-
-		return workloads;
+        return workloadResults.flatMap((workload) => (workload ? [workload] : []));
 	}
+
+    private calculateSkillUtilization(requirements: TaskRequirements[]): Record<string, number> {
+        const weightedSkills = requirements.flatMap((requirement) =>
+            requirement.requiredSkills.map((skill) => ({
+                name: skill.name,
+                weight: requirement.estimatedHours,
+            })),
+        );
+        const skillWeights = weightedSkills.reduce<Record<string, number>>(
+            (acc, { name, weight }) => ({
+                ...acc,
+                [name]: (acc[name] ?? 0) + weight,
+            }),
+            {},
+        );
+        const totalWeight = Object.values(skillWeights).reduce(
+            (sum, weight) => sum + weight,
+            0,
+        );
+
+        if (totalWeight === 0) {
+            return {};
+        }
+
+        return Object.entries(skillWeights).reduce<Record<string, number>>(
+            (acc, [name, weight]) => ({
+                ...acc,
+                [name]: (weight / totalWeight) * 100,
+            }),
+            {},
+        );
+    }
 
 	private async analyzeSkillGaps(): Promise<
 		Array<{
@@ -481,11 +522,22 @@ export class ResourceManagementService {
 	}
 
 	private async scoreCandidates(
+		taskId: string,
 		candidates: User[],
 		requirements: TaskRequirements,
 		strategy: string,
 	): Promise<AssignmentRecommendation[]> {
 		const recommendations: AssignmentRecommendation[] = [];
+		const workloads = await this.getCurrentWorkloads();
+		const workloadByUserId = workloads.reduce<Record<string, Workload>>(
+			(acc, workload) => ({
+				...acc,
+				[workload.userId]: workload,
+			}),
+			{},
+		);
+		const maxUtilization = this.balancingConfig.maxUtilization;
+		const requiredRoles = requirements.constraints?.requiredRoles ?? [];
 
 		for (const candidate of candidates) {
 			const confidence = await this.calculateAssignmentConfidence(
@@ -497,12 +549,62 @@ export class ResourceManagementService {
 			const estimatedCompletion = new Date(
 				Date.now() + requirements.estimatedHours * 60 * 60 * 1000,
 			);
+			const workload = workloadByUserId[candidate.id];
+			const overloadConflict: ScheduleConflict[] =
+				workload && workload.utilizationRate > maxUtilization
+					? [
+							{
+								id: `overload-${taskId}-${candidate.id}`,
+								type: "overload",
+								taskId,
+								userId: candidate.id,
+								description: `User ${candidate.username} is over the utilization threshold`,
+								severity: "high",
+								detectedAt: new Date(),
+							},
+						]
+					: [];
+			const roleConflict: ScheduleConflict[] =
+				requiredRoles.length > 0 && !requiredRoles.includes(candidate.role)
+					? [
+							{
+								id: `role-${taskId}-${candidate.id}`,
+								type: "skill_mismatch",
+								taskId,
+								userId: candidate.id,
+								description: `User role ${candidate.role} does not match required roles`,
+								severity: "medium",
+								detectedAt: new Date(),
+							},
+						]
+					: [];
+			const timezoneConflict: ScheduleConflict[] =
+				requirements.preferredTimezone
+					&& candidate.profile.timezone
+					&& candidate.profile.timezone !== requirements.preferredTimezone
+					? [
+							{
+								id: `timezone-${taskId}-${candidate.id}`,
+								type: "timezone_conflict",
+								taskId,
+								userId: candidate.id,
+								description: `User timezone ${candidate.profile.timezone} differs from preferred ${requirements.preferredTimezone}`,
+								severity: "low",
+								detectedAt: new Date(),
+							},
+						]
+					: [];
+			const potentialConflicts = [
+				...overloadConflict,
+				...roleConflict,
+				...timezoneConflict,
+			];
 
 			recommendations.push({
 				userId: candidate.id,
 				confidence,
 				reasons,
-				potentialConflicts: [], // TODO: Implement conflict detection
+				potentialConflicts,
 				estimatedCompletionTime: estimatedCompletion,
 			});
 		}
@@ -595,13 +697,99 @@ export class ResourceManagementService {
 	}
 
 	private async inferTaskRequirements(task: Task): Promise<TaskRequirements> {
-		// TODO: Implement task requirement inference based on task properties
-		return {
-			estimatedHours: 8,
-			requiredSkills: [],
-			priority: task.priority,
-			dependencies: task.dependencies,
-		};
+        const baseHoursByType: Record<string, number> = {
+            feature: 40,
+            story: 24,
+            task: 8,
+            implementation: 24,
+            integration: 20,
+            testing: 16,
+            research: 12,
+        };
+        const priorityMultiplierByLevel: Record<string, number> = {
+            low: 0.75,
+            medium: 1,
+            high: 1.25,
+        };
+        const baseHours = baseHoursByType[task.type] ?? 8;
+        const dependencyHours = Math.min((task.dependencies?.length ?? 0) * 2, 16);
+        const priorityMultiplier = priorityMultiplierByLevel[task.priority] ?? 1;
+        const estimatedHours = Math.max(
+            2,
+            Math.round((baseHours + dependencyHours) * priorityMultiplier),
+        );
+
+        const skillFor = (
+            name: string,
+            category: Skill["category"],
+            level: Skill["level"] = 3,
+        ): Skill => ({
+            name,
+            category,
+            level,
+        });
+
+        const typeSkills: Record<string, Skill[]> = {
+            feature: [
+                skillFor("TypeScript", "technical"),
+                skillFor("Requirements Analysis", "domain"),
+            ],
+            story: [
+                skillFor("TypeScript", "technical"),
+                skillFor("Requirements Analysis", "domain"),
+            ],
+            task: [skillFor("TypeScript", "technical")],
+            implementation: [
+                skillFor("TypeScript", "technical"),
+                skillFor("Architecture", "technical"),
+            ],
+            integration: [
+                skillFor("API Integration", "technical"),
+                skillFor("TypeScript", "technical"),
+            ],
+            testing: [
+                skillFor("Testing", "technical"),
+                skillFor("Quality Assurance", "domain"),
+            ],
+            research: [
+                skillFor("Research", "domain"),
+                skillFor("Analysis", "domain"),
+            ],
+        };
+
+        const searchableText = `${task.title} ${task.description}`.toLowerCase();
+        const keywordSkills = [
+            { keyword: "frontend", skill: skillFor("Frontend Development", "technical") },
+            { keyword: "ui", skill: skillFor("UI Design", "technical") },
+            { keyword: "ux", skill: skillFor("UX Design", "domain") },
+            { keyword: "backend", skill: skillFor("Backend Development", "technical") },
+            { keyword: "database", skill: skillFor("Database Design", "technical") },
+            { keyword: "api", skill: skillFor("API Design", "technical") },
+            { keyword: "integration", skill: skillFor("System Integration", "technical") },
+            { keyword: "testing", skill: skillFor("Testing", "technical") },
+            { keyword: "security", skill: skillFor("Security", "domain") },
+            { keyword: "performance", skill: skillFor("Performance Optimization", "technical") },
+            { keyword: "docs", skill: skillFor("Documentation", "domain") },
+            { keyword: "documentation", skill: skillFor("Documentation", "domain") },
+            { keyword: "devops", skill: skillFor("DevOps", "tool") },
+            { keyword: "deployment", skill: skillFor("Deployment", "tool") },
+        ];
+        const matchedSkills = keywordSkills
+            .filter(({ keyword }) => searchableText.includes(keyword))
+            .map(({ skill }) => skill);
+        const combinedSkills = [...(typeSkills[task.type] ?? []), ...matchedSkills];
+        const requiredSkills = combinedSkills.reduce<Skill[]>(
+            (acc, skill) =>
+                acc.some((existing) => existing.name === skill.name) ? acc : [...acc, skill],
+            [],
+        );
+
+        return {
+            estimatedHours,
+            requiredSkills,
+            priority: task.priority,
+            dependencies: task.dependencies,
+        };
 	}
 
 	private hasRequiredSkills(_userId: string, _requiredSkills: Skill[]): boolean {

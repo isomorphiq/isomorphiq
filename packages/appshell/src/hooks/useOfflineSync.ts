@@ -33,6 +33,9 @@ export interface OfflineQueueItem {
 	retryCount?: number;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class OfflineStorage {
 	private db: IDBDatabase | null = null;
 	private initPromise: Promise<IDBDatabase> | null = null;
@@ -570,3 +573,4 @@ export function useOfflineSync() {
 		getSyncQueueSize,
 	};
 }
+

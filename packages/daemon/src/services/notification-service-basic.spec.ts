@@ -1,4 +1,5 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
+import { once } from "node:events";
 import { strict as assert } from "node:assert";
 import { NotificationService } from "./notification-service.ts";
 import { MockEmailProvider } from "./email-provider.ts";
@@ -194,25 +195,21 @@ describe("NotificationService - Basic Tests", () => {
     });
 
     describe("Event Emission", () => {
-        it("should emit events", (done) => {
-            let eventReceived = false;
-            
-            notificationService.on("notification_queued", () => {
-                eventReceived = true;
-                done();
-            });
+        it("should emit events", async () => {
+            const eventPromise = once(notificationService, "notification_queued");
 
-            notificationService.sendNotification({
+            const result = await notificationService.sendNotification({
                 type: "task_created",
                 priority: "medium",
                 title: "Test Task",
                 message: "A test task has been created",
                 recipients: ["user123"],
                 channels: ["websocket"]
-            }).then(() => {
-                // Event should be emitted synchronously
-                assert.ok(eventReceived);
             });
+
+            const [queuedNotification] = await eventPromise;
+            assert.ok(result.success);
+            assert.ok(queuedNotification);
         });
     });
 

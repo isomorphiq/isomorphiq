@@ -1,3 +1,15 @@
+// TODO: This file is too complex (888 lines) and should be refactored into modules.
+// Current concerns mixed: Complex dependency schemas, deadlock detection algorithms,
+// resource constraint management, cycle analysis, resolution strategies.
+// 
+// Proposed structure:
+// - dependencies/deadlock-detector/index.ts - Main detector orchestration
+// - dependencies/deadlock-detector/schemas.ts - Zod schemas for dependencies
+// - dependencies/deadlock-detector/cycle-analyzer.ts - Cycle detection algorithms
+// - dependencies/deadlock-detector/resource-monitor.ts - Resource constraint tracking
+// - dependencies/deadlock-detector/resolution-service.ts - Deadlock resolution strategies
+// - dependencies/deadlock-detector/types.ts - Detector-specific types
+
 import { z } from "zod";
 import type { Task, TaskPriority, TaskStatus } from "./types.ts";
 
@@ -75,6 +87,9 @@ export const CrossLevelDependencySchema = z.object({
 
 export type CrossLevelDependency = z.output<typeof CrossLevelDependencySchema>;
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ComplexDependencyDeadlockDetector {
     private dependencies: Map<string, ComplexDependency> = new Map();
     private crossLevelDependencies: Map<string, CrossLevelDependency[]> = new Map();

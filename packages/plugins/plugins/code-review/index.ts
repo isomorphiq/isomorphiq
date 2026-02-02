@@ -6,6 +6,7 @@ import type { ACPProfile } from "@isomorphiq/user-profile";
  * 
  * This plugin provides a specialized profile for code review tasks,
  * with configuration options for review strictness and focus areas.
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export default class CodeReviewPlugin extends BaseProfilePlugin {
     constructor() {
@@ -154,3 +155,4 @@ Provide specific, actionable feedback with line references where applicable.`
         // Could reload external configuration files here
     }
 }
+

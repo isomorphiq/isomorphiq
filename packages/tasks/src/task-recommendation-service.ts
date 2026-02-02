@@ -1,3 +1,16 @@
+// TODO: This file is too complex (1077 lines) and should be refactored into several modules.
+// Current concerns mixed: Recommendation engine interface, pattern analysis, learning engine,
+// recommendation generation, caching, analytics tracking.
+// 
+// Proposed structure:
+// - recommendations/recommendation-service.ts - Main service orchestration
+// - recommendations/engines/ - Individual recommendation engine implementations
+// - recommendations/pattern-analyzer.ts - Task pattern analysis and clustering
+// - recommendations/learning-engine.ts - ML model and feedback processing
+// - recommendations/cache-service.ts - Recommendation caching and invalidation
+// - recommendations/analytics-service.ts - Recommendation analytics and reporting
+// - recommendations/types.ts - Recommendation-specific types
+
 import { randomUUID } from "node:crypto";
 import type {
     TaskRecommendation,
@@ -13,8 +26,7 @@ import type {
 } from "@isomorphiq/core";
 import type { Task, TaskStatus, TaskPriority } from "@isomorphiq/types";
 import type { CreateTaskInput } from "./types.ts";
-import type { TaskService } from "./task-service.ts";
-import type { ProductManager } from "./product-manager.ts";
+import type { TaskServiceApi } from "./task-service.ts";
 
 export interface RecommendationEngine {
     generateRecommendations(
@@ -37,9 +49,11 @@ export interface LearningEngine {
     updateModel(): Promise<void>;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class TaskRecommendationService {
-    private taskService: TaskService;
-    private productManager: ProductManager;
+    private taskService: TaskServiceApi;
     private engines: Map<RecommendationType, RecommendationEngine> = new Map();
     private patternAnalyzer: PatternAnalyzer;
     private learningEngine: LearningEngine;
@@ -47,13 +61,11 @@ export class TaskRecommendationService {
     private readonly cacheTimeout = 5 * 60 * 1000; // 5 minutes
 
     constructor(
-        taskService: TaskService,
-        productManager: ProductManager,
+        taskService: TaskServiceApi,
         patternAnalyzer: PatternAnalyzer,
         learningEngine: LearningEngine
     ) {
         this.taskService = taskService;
-        this.productManager = productManager;
         this.patternAnalyzer = patternAnalyzer;
         this.learningEngine = learningEngine;
         this.initializeEngines();
@@ -95,7 +107,11 @@ export class TaskRecommendationService {
         }
 
         try {
-            const allTasks = await this.productManager.getAllTasks();
+            const allTasksResult = await this.taskService.getAllTasks();
+            if (!allTasksResult.success) {
+                throw new Error(allTasksResult.error?.message ?? "Failed to load tasks");
+            }
+            const allTasks = allTasksResult.data;
             const patterns = await this.patternAnalyzer.getPatternsForContext(request.context);
             
             const recommendations: TaskRecommendation[] = [];
@@ -183,7 +199,11 @@ export class TaskRecommendationService {
     }
 
     async getRecommendationsForUser(userId: string, maxRecommendations: number = 5): Promise<RecommendationResponse> {
-        const allTasks = await this.productManager.getAllTasks();
+        const allTasksResult = await this.taskService.getAllTasks();
+        if (!allTasksResult.success) {
+            throw new Error(allTasksResult.error?.message ?? "Failed to load tasks");
+        }
+        const allTasks = allTasksResult.data;
         const userTasks = allTasks.filter(task => 
             task.assignedTo === userId || task.createdBy === userId
         );
@@ -202,7 +222,11 @@ export class TaskRecommendationService {
     }
 
     async filterRecommendations(filter: RecommendationFilter): Promise<TaskRecommendation[]> {
-        const allTasks = await this.productManager.getAllTasks();
+        const allTasksResult = await this.taskService.getAllTasks();
+        if (!allTasksResult.success) {
+            throw new Error(allTasksResult.error?.message ?? "Failed to load tasks");
+        }
+        const allTasks = allTasksResult.data;
         const allRecommendations: TaskRecommendation[] = [];
 
         // Get recommendations for all relevant contexts
@@ -380,10 +404,13 @@ export class TaskRecommendationService {
 
 // Built-in Recommendation Engines
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class RelatedTaskEngine implements RecommendationEngine {
-    private taskService: TaskService;
+    private taskService: TaskServiceApi;
 
-    constructor(taskService: TaskService) {
+    constructor(taskService: TaskServiceApi) {
         this.taskService = taskService;
     }
 
@@ -454,10 +481,13 @@ class RelatedTaskEngine implements RecommendationEngine {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class DependencyEngine implements RecommendationEngine {
-    private taskService: TaskService;
+    private taskService: TaskServiceApi;
 
-    constructor(taskService: TaskService) {
+    constructor(taskService: TaskServiceApi) {
         this.taskService = taskService;
     }
 
@@ -556,10 +586,13 @@ class DependencyEngine implements RecommendationEngine {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class PriorityEngine implements RecommendationEngine {
-    private taskService: TaskService;
+    private taskService: TaskServiceApi;
 
-    constructor(taskService: TaskService) {
+    constructor(taskService: TaskServiceApi) {
         this.taskService = taskService;
     }
 
@@ -671,10 +704,13 @@ class PriorityEngine implements RecommendationEngine {
 }
 
 // Placeholder implementations for other engines
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class AssignmentEngine implements RecommendationEngine {
-    private taskService: TaskService;
+    private taskService: TaskServiceApi;
 
-    constructor(taskService: TaskService) {
+    constructor(taskService: TaskServiceApi) {
         this.taskService = taskService;
     }
 
@@ -831,10 +867,13 @@ class AssignmentEngine implements RecommendationEngine {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class TemplateEngine implements RecommendationEngine {
-    private taskService: TaskService;
+    private taskService: TaskServiceApi;
 
-    constructor(taskService: TaskService) {
+    constructor(taskService: TaskServiceApi) {
         this.taskService = taskService;
     }
 
@@ -940,10 +979,13 @@ class TemplateEngine implements RecommendationEngine {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class WorkflowEngine implements RecommendationEngine {
-    private taskService: TaskService;
+    private taskService: TaskServiceApi;
 
-    constructor(taskService: TaskService) {
+    constructor(taskService: TaskServiceApi) {
         this.taskService = taskService;
     }
 
@@ -961,10 +1003,13 @@ class WorkflowEngine implements RecommendationEngine {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class TaskSequenceEngine implements RecommendationEngine {
-    private taskService: TaskService;
+    private taskService: TaskServiceApi;
 
-    constructor(taskService: TaskService) {
+    constructor(taskService: TaskServiceApi) {
         this.taskService = taskService;
     }
 
@@ -982,10 +1027,13 @@ class TaskSequenceEngine implements RecommendationEngine {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class DeadlineEngine implements RecommendationEngine {
-    private taskService: TaskService;
+    private taskService: TaskServiceApi;
 
-    constructor(taskService: TaskService) {
+    constructor(taskService: TaskServiceApi) {
         this.taskService = taskService;
     }
 
@@ -1003,10 +1051,13 @@ class DeadlineEngine implements RecommendationEngine {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class SkillMatchEngine implements RecommendationEngine {
-    private taskService: TaskService;
+    private taskService: TaskServiceApi;
 
-    constructor(taskService: TaskService) {
+    constructor(taskService: TaskServiceApi) {
         this.taskService = taskService;
     }
 
@@ -1024,10 +1075,13 @@ class SkillMatchEngine implements RecommendationEngine {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class ResourceAllocationEngine implements RecommendationEngine {
-    private taskService: TaskService;
+    private taskService: TaskServiceApi;
 
-    constructor(taskService: TaskService) {
+    constructor(taskService: TaskServiceApi) {
         this.taskService = taskService;
     }
 
@@ -1046,6 +1100,9 @@ class ResourceAllocationEngine implements RecommendationEngine {
 }
 
 // Placeholder implementations for pattern analyzer and learning engine
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class SimplePatternAnalyzer implements PatternAnalyzer {
     async analyzePatterns(tasks: Task[]): Promise<TaskPattern[]> {
         // Simple pattern analysis implementation
@@ -1062,6 +1119,9 @@ export class SimplePatternAnalyzer implements PatternAnalyzer {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class SimpleLearningEngine implements LearningEngine {
     async recordFeedback(data: RecommendationLearningData): Promise<void> {
         // Implementation would store feedback for learning
@@ -1076,3 +1136,4 @@ export class SimpleLearningEngine implements LearningEngine {
         // Implementation would retrain the model
     }
 }
+

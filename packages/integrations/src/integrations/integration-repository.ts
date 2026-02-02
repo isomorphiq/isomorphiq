@@ -44,6 +44,7 @@ export interface IIntegrationRepository {
 
 /**
  * LevelDB implementation of integration repository
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class LevelDbIntegrationRepository implements IIntegrationRepository {
 	/* eslint-disable no-unused-vars */
@@ -611,3 +612,4 @@ export class LevelDbIntegrationRepository implements IIntegrationRepository {
 		}
 	}
 }
+

@@ -5,7 +5,7 @@
  * Tests data integrity without HTTP endpoints to avoid authentication issues
  */
 
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 
 interface TestResult {
 	name: string;
@@ -14,6 +14,9 @@ interface TestResult {
 	duration: number;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class DataConsistencyTester {
 	private pm: ProductManager;
 	private results: TestResult[] = [];
@@ -191,3 +194,4 @@ tester.runAllTests().catch((error) => {
 });
 
 export { DataConsistencyTester };
+

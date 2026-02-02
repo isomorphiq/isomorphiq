@@ -47,7 +47,11 @@ export const createLevelStore = <K, V>(dbPath: string): KeyValueStore<K, V> => {
             const generator = async function* (): AsyncIterableIterator<[K, V]> {
                 try {
                     while (true) {
-                        const [key, value] = await levelIterator.next();
+                        const entry = await levelIterator.next();
+                        if (!entry) {
+                            break;
+                        }
+                        const [key, value] = entry as [K, V];
                         yield [key, value];
                     }
                 } catch (error: any) {

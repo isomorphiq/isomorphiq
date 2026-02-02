@@ -1,8 +1,8 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { expect } from "../../test-utils/expect.ts";
-import { DashboardServer } from "@isomorphiq/daemon";
+import { DashboardServer } from "@isomorphiq/dashboard";
 import { WebSocketManager } from "@isomorphiq/realtime";
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 import { createServer, type Server } from "node:http";
 import { WebSocketServer } from "ws";
 
@@ -542,7 +542,7 @@ describe("Enhanced Dashboard Server Tests", () => {
 
 	describe("Daemon Control API", () => {
 		it("should get daemon status", async () => {
-			const response = await fetch(`http://localhost:${dashboardPort}/api/daemon/status`, {
+			const response = await fetch(`http://localhost:${dashboardPort}/api/dashboard/status`, {
 				method: "GET"
 			});
 
@@ -553,7 +553,7 @@ describe("Enhanced Dashboard Server Tests", () => {
 		});
 
 		it("should pause daemon", async () => {
-			const response = await fetch(`http://localhost:${dashboardPort}/api/daemon/pause`, {
+			const response = await fetch(`http://localhost:${dashboardPort}/api/dashboard/pause`, {
 				method: "POST"
 			});
 
@@ -563,7 +563,7 @@ describe("Enhanced Dashboard Server Tests", () => {
 		});
 
 		it("should resume daemon", async () => {
-			const response = await fetch(`http://localhost:${dashboardPort}/api/daemon/resume`, {
+			const response = await fetch(`http://localhost:${dashboardPort}/api/dashboard/resume`, {
 				method: "POST"
 			});
 

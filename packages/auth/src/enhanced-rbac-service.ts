@@ -11,6 +11,9 @@ import type {
 type RbacContext = Record<string, unknown>;
 type ConstraintConditions = Record<string, unknown>;
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EnhancedRbacService {
 	private rolesDb!: Level<string, EnhancedRole>;
 	private permissionsDb!: Level<string, Permission>;
@@ -788,3 +791,4 @@ export function getEnhancedRbacService(): EnhancedRbacService {
 	}
 	return sharedEnhancedRbacService;
 }
+

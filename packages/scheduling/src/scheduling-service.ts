@@ -22,6 +22,7 @@ import type { TaskService } from "@isomorphiq/tasks";
 
 /**
  * Scheduling Engine implementation
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class SchedulingEngine implements ISchedulingEngine {
 	protected taskService: TaskService;
@@ -787,6 +788,7 @@ export class SchedulingEngine implements ISchedulingEngine {
 
 /**
  * Scheduling Service implementation
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class SchedulingService extends SchedulingEngine implements ISchedulingService {
 
@@ -988,3 +990,4 @@ export class SchedulingService extends SchedulingEngine implements ISchedulingSe
 		return validation;
 	}
 }
+

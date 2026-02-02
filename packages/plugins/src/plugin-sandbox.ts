@@ -3,6 +3,7 @@ import type { ProfilePlugin } from "./plugin-system.ts";
 
 /**
  * Plugin sandbox for security isolation
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class PluginSandbox extends EventEmitter {
 	private allowedModules: Set<string>;
@@ -408,6 +409,7 @@ const DEFAULT_NETWORK_REQUESTS_LIMIT = 10;
 
 /**
  * Plugin security manager
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class PluginSecurityManager {
 	private sandboxes = new Map<string, PluginSandbox>();
@@ -484,3 +486,4 @@ export interface SecurityReport {
 		usage: ResourceUsage;
 	}>;
 }
+

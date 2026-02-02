@@ -15,9 +15,12 @@
         "build": "tsc -p tsconfig.json",
         "typecheck": "tsc --noEmit -p tsconfig.json",
         "lint": "echo \"Lint not configured yet for @isomorphiq/user-profile\"",
-        "test": "echo \"Tests not configured yet for @isomorphiq/user-profile\""
+        "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts"
     },
     "dependencies": {
-        "@isomorphiq/core": "workspace:*"
+        "@isomorphiq/core": "workspace:*",
+        "@isomorphiq/integrations": "workspace:*",
+        "@isomorphiq/realtime": "workspace:*",
+        "@isomorphiq/tasks": "workspace:*"
     }
 }

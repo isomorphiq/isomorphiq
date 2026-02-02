@@ -13,6 +13,9 @@ import {
 } from "./types.ts";
 
 // WebSocket client for testing real-time task updates
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class TaskWebSocketClient {
 	private ws: WebSocket | null = null;
 	private url: string = "ws://localhost:3002/ws";
@@ -254,3 +257,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 export { TaskWebSocketClient };
+

@@ -1,4 +1,4 @@
-import { type Task } from "../web/tcp-client.ts";
+import type { Task } from "@isomorphiq/dashboard";
 import type { PriorityStatusDependency } from "./priority-status-deadlock-detector.ts";
 
 export interface ValidationResult {
@@ -16,6 +16,9 @@ export interface DependencyAnalysis {
     bottlenecks: string[];
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class PriorityStatusDependencyValidator {
     private dependencies: Map<string, PriorityStatusDependency[]> = new Map();
     private taskCache: Map<string, Task> = new Map();

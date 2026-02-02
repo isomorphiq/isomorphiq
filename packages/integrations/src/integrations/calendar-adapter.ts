@@ -1,6 +1,10 @@
-import type { Task } from "@isomorphiq/tasks";
 import { BaseIntegrationAdapter } from "./base-adapter.ts";
-import type { ExternalTask, IntegrationHealth, IntegrationSettings } from "./types.ts";
+import type {
+	ExternalTask,
+	IntegrationHealth,
+	IntegrationSettings,
+	IntegrationTask,
+} from "./types.ts";
 
 type CalendarSettings = NonNullable<IntegrationSettings["calendar"]>;
 
@@ -22,6 +26,7 @@ type CalendarPayload = {
 
 /**
  * Google Calendar integration adapter
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class CalendarIntegration extends BaseIntegrationAdapter {
 	private apiUrl = "https://www.googleapis.com/calendar/v3";
@@ -82,7 +87,9 @@ export class CalendarIntegration extends BaseIntegrationAdapter {
 		return [];
 	}
 
-	protected async onSyncSingleTask(task: Task): Promise<{ created: boolean; updated: boolean }> {
+	protected async onSyncSingleTask(
+		task: IntegrationTask,
+	): Promise<{ created: boolean; updated: boolean }> {
 		try {
 			// Check if event already exists for this task
 			const existingEvent = await this.findEventByTaskId(task.id);
@@ -102,13 +109,16 @@ export class CalendarIntegration extends BaseIntegrationAdapter {
 		}
 	}
 
-	protected async onCreateExternalTask(task: Task): Promise<ExternalTask> {
+	protected async onCreateExternalTask(task: IntegrationTask): Promise<ExternalTask> {
 		const event = await this.createEvent(task);
 
 		return this.createExternalTaskFromTask(task, event.id, event.htmlLink);
 	}
 
-	protected async onUpdateExternalTask(task: Task, externalId: string): Promise<ExternalTask> {
+	protected async onUpdateExternalTask(
+		task: IntegrationTask,
+		externalId: string,
+	): Promise<ExternalTask> {
 		const event = await this.updateEvent(externalId, task);
 
 		return this.createExternalTaskFromTask(task, externalId, event.htmlLink);
@@ -185,7 +195,7 @@ export class CalendarIntegration extends BaseIntegrationAdapter {
 		return response;
 	}
 
-	private async createEvent(task: Task): Promise<CalendarEvent> {
+	private async createEvent(task: IntegrationTask): Promise<CalendarEvent> {
 		const calendarSettings = this.getCalendarSettings();
 
 		const eventData = this.buildEventFromTask(task, calendarSettings);
@@ -209,7 +219,7 @@ export class CalendarIntegration extends BaseIntegrationAdapter {
 		return event;
 	}
 
-	private async updateEvent(eventId: string, task: Task): Promise<CalendarEvent> {
+	private async updateEvent(eventId: string, task: IntegrationTask): Promise<CalendarEvent> {
 		const calendarSettings = this.getCalendarSettings();
 
 		const eventData = this.buildEventFromTask(task, calendarSettings);
@@ -270,7 +280,7 @@ export class CalendarIntegration extends BaseIntegrationAdapter {
 	}
 
 	private buildEventFromTask(
-		task: Task,
+		task: IntegrationTask,
 		calendarSettings: CalendarSettings,
 	): Record<string, unknown> {
 		// Calculate event timing based on task

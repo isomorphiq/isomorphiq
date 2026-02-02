@@ -1,6 +1,9 @@
 import { DependencyGraphService } from "./src/services/dependency-graph.ts";
 
 // Simple test runner for dependency management features
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class DependencyManagementTester {
 	private dependencyGraphService: DependencyGraphService;
 

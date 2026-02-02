@@ -6,6 +6,9 @@ import { registerProfileRoutes } from "./profile-routes.ts";
 import type { ACPProfile, ProfileMetrics, ProfileState, ProfileManager } from "@isomorphiq/user-profile";
 import type { Task } from "@isomorphiq/tasks";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class StubProfileManager implements Pick<
 	ProfileManager,
 	| "getProfilesWithStates"
@@ -117,3 +120,4 @@ test("profile routes: with-states and state", async (t) => {
     const state = (await stateResponse.json()) as Record<string, unknown>;
     assert.strictEqual(state.name, "alpha");
 });
+

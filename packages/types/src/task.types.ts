@@ -16,6 +16,8 @@ export const TaskStatusSchema = z.enum(["todo", "in-progress", "done", "invalid"
 export type TaskStatus = z.output<typeof TaskStatusSchema>;
 
 export const TaskTypeSchema = z.enum([
+    "theme",
+    "initiative",
     "feature",
     "story",
     "task",

@@ -15,7 +15,7 @@
         "build": "tsc -p tsconfig.json",
         "typecheck": "tsc --noEmit -p tsconfig.json",
         "lint": "echo \"Lint not configured yet for @isomorphiq/cli\"",
-        "test": "echo \"Tests not configured yet for @isomorphiq/cli\"",
+        "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts",
         "start": "node --experimental-strip-types src/ink-ui.ts",
         "start:client": "node --experimental-strip-types src/cli-client.ts"
     },

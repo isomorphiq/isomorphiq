@@ -1,3 +1,17 @@
+// TODO: This file is too complex (743 lines) and should be refactored into several modules.
+// Current concerns mixed: WebSocket server management, connection pooling, heartbeat monitoring,
+// message queuing, event broadcasting, rate limiting, authentication.
+// 
+// Proposed structure:
+// - websocket/enhanced-server/index.ts - Main server orchestration
+// - websocket/enhanced-server/connection-pool.ts - Connection management and pooling
+// - websocket/enhanced-server/heartbeat-service.ts - Heartbeat and health monitoring
+// - websocket/enhanced-server/message-queue.ts - Message queuing and delivery
+// - websocket/enhanced-server/broadcast-service.ts - Event broadcasting
+// - websocket/enhanced-server/rate-limiter.ts - Connection and message rate limiting
+// - websocket/enhanced-server/auth-service.ts - WebSocket authentication
+// - websocket/enhanced-server/types.ts - Server-specific types
+
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
@@ -21,6 +35,9 @@ export interface EnhancedWebSocketConfig {
 }
 
 // Connection pool for better resource management
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ConnectionPool {
     private connections: Map<string, WebSocketClient> = new Map();
     private maxConnections: number;
@@ -161,6 +178,9 @@ export class ConnectionPool {
 }
 
 // Message queue for reliable delivery
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class MessageQueue {
     private queue: Array<{
         event: WebSocketEvent;
@@ -227,6 +247,9 @@ export class MessageQueue {
 }
 
 // Enhanced WebSocket Manager
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EnhancedWebSocketManager {
     private wss: WebSocketServer | null = null;
     private connectionPool: ConnectionPool;
@@ -741,3 +764,4 @@ export class EnhancedWebSocketManager {
         }));
     }
 }
+

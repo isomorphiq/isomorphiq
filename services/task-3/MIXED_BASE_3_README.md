@@ -27,7 +27,7 @@ This implementation provides a comprehensive mixed operations framework for task
    - Import/export capabilities
    - Profile comparison and recommendations
 
-4. **Performance Monitoring** (`monitoring.ts`)
+4. **Performance Monitoring** (`monitoring/index.ts`)
    - Real-time performance tracking
    - Alert system with customizable rules
    - Trend analysis and predictions
@@ -105,7 +105,7 @@ configurationManager.createProfile(customProfile);
 ### Performance Monitoring
 
 ```typescript
-import { performanceMonitor } from './services/task-3/src/monitoring.ts';
+import { performanceMonitor } from './services/task-3/src/monitoring/index.ts';
 
 // Generate performance report
 const report = performanceMonitor.generateReport('1h');

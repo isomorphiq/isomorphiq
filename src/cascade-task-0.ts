@@ -17,6 +17,7 @@ type Task = {
 
 /**
  * TCP Client for daemon communication
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 class DaemonTcpClient {
     private port: number;
@@ -102,6 +103,7 @@ class DaemonTcpClient {
  * 
  * This class implements the cascade dependency resolution mechanism
  * for task-b7c2d592-advanced-cas Cascade CAS Task 0.
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class CascadeTask0 {
     private tcpClient: DaemonTcpClient;

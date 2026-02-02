@@ -310,6 +310,8 @@ export function MobileCreateTaskForm({ onSuccess, onCancel }: MobileCreateTaskFo
 						>
 							<option value="task">Task</option>
 							<option value="bug">Bug</option>
+							<option value="theme">Theme</option>
+							<option value="initiative">Initiative</option>
 							<option value="feature">Feature</option>
 							<option value="improvement">Improvement</option>
 							<option value="documentation">Documentation</option>

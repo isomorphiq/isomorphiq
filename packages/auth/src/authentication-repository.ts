@@ -1,3 +1,17 @@
+// TODO: This file is too complex (706 lines) and should be refactored into several modules.
+// Current concerns mixed: User repository, session repository, password reset,
+// email verification, device management, database operations.
+// 
+// Proposed structure:
+// - auth/repositories/index.ts - Repository exports
+// - auth/repositories/user-repository.ts - User data access
+// - auth/repositories/session-repository.ts - Session data access
+// - auth/repositories/password-reset-repository.ts - Password reset token storage
+// - auth/repositories/email-verification-repository.ts - Email verification storage
+// - auth/repositories/device-repository.ts - Device management storage
+// - auth/repositories/base-repository.ts - Common repository functionality
+// - auth/repositories/types.ts - Repository-specific types
+
 import crypto from "node:crypto";
 import path from "node:path";
 import { Level } from "level";
@@ -13,6 +27,9 @@ import type {
     User,
 } from "./types.ts";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class AuthenticationRepository {
 	private userDb: Level<string, User>;
 	private sessionDb: Level<string, Session>;
@@ -704,3 +721,4 @@ export class AuthenticationRepository {
 		}
 	}
 }
+

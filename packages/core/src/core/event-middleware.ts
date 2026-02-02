@@ -11,6 +11,9 @@ export const loggingMiddleware: EventMiddleware = (event, next) => {
 };
 
 // Metrics collection middleware
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class MetricsMiddleware {
 	private metrics: Map<string, number> = new Map();
 	private eventCounts: Map<string, number> = new Map();
@@ -54,6 +57,9 @@ export class MetricsMiddleware {
 }
 
 // Event filtering middleware
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EventFilterMiddleware {
 	private allowedTypes: Set<string>;
 	private blockedTypes: Set<string>;
@@ -117,6 +123,9 @@ export class EventFilterMiddleware {
 }
 
 // Event transformation middleware
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EventTransformMiddleware {
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	private transformers: Map<string, (event: DomainEvent) => DomainEvent> = new Map();
@@ -146,6 +155,9 @@ export class EventTransformMiddleware {
 }
 
 // Rate limiting middleware
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class RateLimitMiddleware {
 	private eventCounts: Map<string, { count: number; resetTime: number }> = new Map();
 	private maxEventsPerWindow: number;
@@ -194,6 +206,9 @@ export class RateLimitMiddleware {
 }
 
 // Event enrichment middleware
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EventEnrichmentMiddleware {
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	private enrichers: Map<string, (event: DomainEvent) => Partial<DomainEvent>> = new Map();
@@ -223,6 +238,9 @@ export class EventEnrichmentMiddleware {
 }
 
 // Error handling middleware
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ErrorHandlingMiddleware {
 	private errorHandler: (event: DomainEvent, error: Error) => void;
 
@@ -246,6 +264,9 @@ export class ErrorHandlingMiddleware {
 }
 
 // Event validation middleware
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EventValidationMiddleware {
 	private validators: Map<string, (event: DomainEvent) => boolean> = new Map();
 
@@ -291,3 +312,4 @@ export const developmentMiddleware = [
 	new EventTransformMiddleware().middleware,
 	new ErrorHandlingMiddleware().middleware,
 ];
+

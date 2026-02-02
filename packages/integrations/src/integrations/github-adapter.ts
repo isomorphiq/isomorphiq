@@ -1,6 +1,10 @@
-import type { Task } from "@isomorphiq/tasks";
 import { BaseIntegrationAdapter } from "./base-adapter.ts";
-import type { ExternalTask, IntegrationHealth, IntegrationSettings } from "./types.ts";
+import type {
+	ExternalTask,
+	IntegrationHealth,
+	IntegrationSettings,
+	IntegrationTask,
+} from "./types.ts";
 
 type GitHubSettings = NonNullable<IntegrationSettings["github"]>;
 
@@ -36,6 +40,7 @@ type GitHubWebhookPayload = {
 
 /**
  * GitHub integration adapter
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class GitHubIntegration extends BaseIntegrationAdapter {
 	private apiUrl = "https://api.github.com";
@@ -114,7 +119,9 @@ export class GitHubIntegration extends BaseIntegrationAdapter {
 		}
 	}
 
-	protected async onSyncSingleTask(task: Task): Promise<{ created: boolean; updated: boolean }> {
+	protected async onSyncSingleTask(
+		task: IntegrationTask,
+	): Promise<{ created: boolean; updated: boolean }> {
 		const githubSettings = this.getGitHubSettings();
 		const [owner, repo] = githubSettings.repository.split("/");
 
@@ -137,7 +144,7 @@ export class GitHubIntegration extends BaseIntegrationAdapter {
 		}
 	}
 
-	protected async onCreateExternalTask(task: Task): Promise<ExternalTask> {
+	protected async onCreateExternalTask(task: IntegrationTask): Promise<ExternalTask> {
 		const githubSettings = this.getGitHubSettings();
 		const [owner, repo] = githubSettings.repository.split("/");
 
@@ -146,7 +153,10 @@ export class GitHubIntegration extends BaseIntegrationAdapter {
 		return this.createExternalTaskFromTask(task, issue.number.toString(), issue.html_url);
 	}
 
-	protected async onUpdateExternalTask(task: Task, externalId: string): Promise<ExternalTask> {
+	protected async onUpdateExternalTask(
+		task: IntegrationTask,
+		externalId: string,
+	): Promise<ExternalTask> {
 		const githubSettings = this.getGitHubSettings();
 		const [owner, repo] = githubSettings.repository.split("/");
 
@@ -336,7 +346,11 @@ export class GitHubIntegration extends BaseIntegrationAdapter {
 		}
 	}
 
-	private async createIssue(owner: string, repo: string, task: Task): Promise<GitHubIssue> {
+	private async createIssue(
+		owner: string,
+		repo: string,
+		task: IntegrationTask,
+	): Promise<GitHubIssue> {
 		const githubSettings = this.getGitHubSettings();
 
 		const issueData: Record<string, unknown> = {
@@ -368,7 +382,7 @@ export class GitHubIntegration extends BaseIntegrationAdapter {
 		owner: string,
 		repo: string,
 		issueNumber: number,
-		task: Task,
+		task: IntegrationTask,
 	): Promise<GitHubIssue> {
 		const githubSettings = this.getGitHubSettings();
 
@@ -482,7 +496,7 @@ export class GitHubIntegration extends BaseIntegrationAdapter {
 		return "low";
 	}
 
-	private mapTaskToGitHubLabels(task: Task): string[] {
+	private mapTaskToGitHubLabels(task: IntegrationTask): string[] {
 		const labels: string[] = [];
 
 		// Add priority label

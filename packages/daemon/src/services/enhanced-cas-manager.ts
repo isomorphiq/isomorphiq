@@ -1,7 +1,10 @@
-import { type Task } from "../web/tcp-client.ts";
+import type { Task } from "@isomorphiq/dashboard";
 import type { Result } from "@isomorphiq/core";
 import { DeadlockDetector, type CASOperation } from "./cas-deadlock-detector.ts";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EnhancedCASManager {
     private deadlockDetector: DeadlockDetector;
     private pendingOperations: Map<string, CASOperation> = new Map();

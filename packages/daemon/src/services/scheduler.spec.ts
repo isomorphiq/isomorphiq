@@ -1,9 +1,12 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { TaskScheduler } from "./scheduler.ts";
-import type { ProductManager } from "@isomorphiq/tasks";
+import type { ProductManager } from "@isomorphiq/user-profile";
 
 // Mock ProductManager for testing
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class MockProductManager implements Partial<ProductManager> {
 	private tasks: any[] = [];
 	
@@ -47,17 +50,22 @@ class MockProductManager implements Partial<ProductManager> {
 }
 
 describe("TaskScheduler", () => {
-	let scheduler: TaskScheduler;
-	let mockProductManager: MockProductManager;
-	
-	beforeEach(() => {
-		mockProductManager = new MockProductManager() as ProductManager;
-		scheduler = new TaskScheduler(mockProductManager);
-	});
-	
-	afterEach(async () => {
-		await scheduler.shutdown();
-	});
+    let scheduler: TaskScheduler;
+    let mockProductManager: MockProductManager;
+    let originalConsoleLog: typeof console.log;
+
+    beforeEach(() => {
+        originalConsoleLog = console.log;
+        console.log = () => {};
+
+        mockProductManager = new MockProductManager() as ProductManager;
+        scheduler = new TaskScheduler(mockProductManager);
+    });
+    
+    afterEach(async () => {
+        await scheduler.shutdown();
+        console.log = originalConsoleLog;
+    });
 
 	describe("Initialization", () => {
 		it("should initialize successfully", async () => {

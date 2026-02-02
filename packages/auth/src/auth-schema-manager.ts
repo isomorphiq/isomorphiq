@@ -29,6 +29,9 @@ export interface SchemaMetadata {
 	}>;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class DatabaseSchemaManager {
 	private schemaDb: Level<string, SchemaMetadata>;
 	private userDb: Level<string, User>;
@@ -345,3 +348,4 @@ export class DatabaseSchemaManager {
 		}
 	}
 }
+

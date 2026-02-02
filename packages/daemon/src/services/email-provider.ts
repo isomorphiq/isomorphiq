@@ -2,6 +2,9 @@ import type { Result } from "@isomorphiq/core";
 import type { EmailProvider } from "./notification-service.ts";
 
 // Simple SMTP email provider using Node.js
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class SMTPEmailProvider implements EmailProvider {
     private config: {
         host: string;
@@ -48,6 +51,9 @@ export class SMTPEmailProvider implements EmailProvider {
 }
 
 // Mock email provider for testing
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class MockEmailProvider implements EmailProvider {
     private sentEmails: Array<{
         to: string;
@@ -85,6 +91,9 @@ export class MockEmailProvider implements EmailProvider {
 }
 
 // SendGrid email provider (for future implementation)
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class SendGridEmailProvider implements EmailProvider {
     private apiKey: string;
     private fromEmail: string;

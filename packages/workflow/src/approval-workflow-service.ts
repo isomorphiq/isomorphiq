@@ -1,3 +1,17 @@
+// TODO: This file is too complex (973 lines) and should be refactored into several modules.
+// Current concerns mixed: Approval workflow CRUD, task approval management, approval rules,
+// audit logging, approval templates, multi-stage approval logic.
+// 
+// Proposed structure:
+// - approval/workflow-service.ts - Approval workflow management
+// - approval/task-approval-service.ts - Task-level approval handling
+// - approval/rule-engine.ts - Approval rule evaluation and execution
+// - approval/audit-service.ts - Approval audit logging
+// - approval/template-service.ts - Approval template management
+// - approval/stage-manager.ts - Multi-stage approval orchestration
+// - approval/repositories/ - Data access layer
+// - approval/types.ts - Approval-specific types
+
 import type { EventBus, Result } from "@isomorphiq/core";
 import {
     ConflictError,
@@ -118,6 +132,9 @@ export type IApprovalWorkflowService = {
 };
 /* eslint-enable no-unused-vars */
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ApprovalWorkflowService implements IApprovalWorkflowService {
 	private readonly workflowRepo: IApprovalWorkflowRepository;
 	private readonly approvalRepo: ITaskApprovalRepository;
@@ -971,3 +988,4 @@ export class ApprovalWorkflowService implements IApprovalWorkflowService {
 		return (escalatedApprovals.length / totalApprovals) * 100;
 	}
 }
+

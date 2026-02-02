@@ -1,3 +1,17 @@
+// TODO: This file is too complex (1094 lines) and should be refactored into several modules.
+// Current concerns mixed: Multi-channel notifications (email, SMS, Slack, Teams, webhook),
+// notification preferences, digest generation, rate limiting, template management.
+// 
+// Proposed structure:
+// - notifications/channels/ - Individual channel implementations
+//   - email-provider.ts, sms-provider.ts, slack-provider.ts, teams-provider.ts, webhook-provider.ts
+// - notifications/notification-service.ts - Core notification orchestration
+// - notifications/preference-service.ts - User notification preferences management
+// - notifications/digest-service.ts - Digest generation and scheduling
+// - notifications/template-service.ts - Notification template management
+// - notifications/rate-limiter.ts - Rate limiting and throttling
+// - notifications/types.ts - Notification-specific types and interfaces
+
 import { EventEmitter } from "node:events";
 import type { Task } from "@isomorphiq/tasks";
 import type { Result } from "@isomorphiq/core";
@@ -157,6 +171,9 @@ export interface TeamsProvider {
     sendMessage(webhookUrl: string, message: string, options?: any): Promise<Result<{ messageId: string }>>;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class NotificationService extends EventEmitter {
     private preferences: Map<string, NotificationPreferences> = new Map();
     private templates: Map<NotificationEventType, NotificationTemplate> = new Map();
@@ -641,13 +658,14 @@ return this.sendNotification(notification);
     }
 
     private startProcessingLoop(): void {
-        setInterval(async () => {
+        const interval = setInterval(async () => {
             if (!this.processing && this.queue.length > 0) {
                 this.processing = true;
                 await this.processQueue();
                 this.processing = false;
             }
         }, 1000);
+        interval.unref();
     }
 
     private async processQueue(): Promise<void> {

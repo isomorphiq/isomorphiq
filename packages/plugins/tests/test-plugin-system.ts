@@ -7,6 +7,7 @@ import path from "path";
 
 /**
  * Test plugin for testing purposes
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 class TestPlugin extends BaseProfilePlugin {
     constructor(name: string = "test-plugin") {
@@ -43,6 +44,7 @@ class TestPlugin extends BaseProfilePlugin {
 
 /**
  * Comprehensive test suite for plugin system
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 class PluginSystemTester {
     private pluginManager: PluginManager;
@@ -267,6 +269,9 @@ class PluginSystemTester {
 import { BaseProfilePlugin } from "../../src/plugin-system.ts";
 import type { ACPProfile } from "@isomorphiq/user-profile";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export default class DiscoveryTestPlugin extends BaseProfilePlugin {
     constructor() {
         super({
@@ -574,3 +579,4 @@ if (require.main === module) {
 }
 
 export { PluginSystemTester };
+

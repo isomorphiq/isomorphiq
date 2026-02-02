@@ -30,6 +30,9 @@ before(async () => {
     serverAvailable = await checkServer();
 });
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class DashboardIntegrationTest {
 	private dashboardPort: number = 3005;
 	private daemonTcpClient: DaemonTcpClient;
@@ -298,3 +301,4 @@ describe("Dashboard Integration Runner", () => {
         expect(failures.length).toBe(0);
     });
 });
+

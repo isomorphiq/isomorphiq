@@ -10,6 +10,9 @@ import { AdapterSpecificationTester, type AdapterTestConfig } from "@isomorphiq/
 import { expect } from "../../../tests/test-utils/expect.ts";
 import { randomUUID } from "node:crypto";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class LevelDBAdapterTester {
     private testDbPath: string;
 

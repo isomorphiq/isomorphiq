@@ -183,6 +183,9 @@ export const MixedOperationConfigValidation = {
 };
 
 // Error types
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class MixedOperationError extends Error {
     public operationType: string;
     public operationId: string;
@@ -202,6 +205,9 @@ export class MixedOperationError extends Error {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ResourceContentionError extends MixedOperationError {
     public resourceId: string;
     public contentionLevel: number;
@@ -220,6 +226,9 @@ export class ResourceContentionError extends MixedOperationError {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class TaskValidationError extends MixedOperationError {
     public validationErrors: string[];
 

@@ -3,46 +3,69 @@ import type {
     PermissionRequest,
     PermissionResponse,
     SessionUpdateParams,
+    ReadTextFileParams,
+    ReadTextFileResult,
+    WriteTextFileParams,
+    WriteTextFileResult,
 } from "./types.ts";
-import { appendFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 export interface AcpClientInterface {
 	requestPermission(params: PermissionRequest): Promise<PermissionResponse>;
 	sessionUpdate(params: SessionUpdateParams): Promise<void>;
+    readTextFile?(params: ReadTextFileParams): Promise<ReadTextFileResult>;
+    writeTextFile?(params: WriteTextFileParams): Promise<WriteTextFileResult>;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class TaskClient implements AcpClientInterface {
 	public responseText = "";
-	public taskComplete = false;
-	public turnComplete = false;
-	public taskError = "";
-	public stopReason: string | null = null;
-	public thoughtText = "";
-	public profileName: string | null = null;
+    public taskComplete = false;
+    public turnComplete = false;
+    public turnCompletionCount = 0;
+    public taskError = "";
+    public stopReason: string | null = null;
+    public thoughtText = "";
+    public profileName: string | null = null;
+    public sessionId: string | null = null;
     public runtimeName: string | null = null;
     public modelName: string | null = null;
+    public requestedModelName: string | null = null;
     public mcpTools: string[] | null = null;
     public taskId: string | null = null;
     public taskTitle: string | null = null;
     public taskType: string | null = null;
     public taskStatus: string | null = null;
     public workflowState: string | null = null;
+    public workflowSourceState: string | null = null;
+    public workflowTargetState: string | null = null;
     public workflowTransition: string | null = null;
+    public canReadFiles = true;
+    public canWriteFiles = true;
+    public workspaceRoot = process.cwd();
+    public onConfigOptions?: (options: Array<Record<string, unknown>>) => void;
 
 	private async emitSessionUpdate(update: Record<string, unknown>): Promise<void> {
 		const streamPath = process.env.ACP_SESSION_UPDATE_PATH;
 		const streamMode = process.env.ACP_SESSION_UPDATE_STREAM;
 		const line = `${JSON.stringify({
 			...update,
-			profileName: this.profileName ?? undefined,
-			runtimeName: this.runtimeName ?? undefined,
+            profileName: this.profileName ?? undefined,
+            sessionId: this.sessionId ?? undefined,
+            runtimeName: this.runtimeName ?? undefined,
             modelName: this.modelName ?? undefined,
+            requestedModelName: this.requestedModelName ?? undefined,
             mcpTools: this.mcpTools ?? undefined,
             taskId: this.taskId ?? undefined,
             taskTitle: this.taskTitle ?? undefined,
             taskType: this.taskType ?? undefined,
             taskStatus: this.taskStatus ?? undefined,
             workflowState: this.workflowState ?? undefined,
+            workflowSourceState: this.workflowSourceState ?? undefined,
+            workflowTargetState: this.workflowTargetState ?? undefined,
             workflowTransition: this.workflowTransition ?? undefined,
 		})}\n`;
 
@@ -155,17 +178,68 @@ export class TaskClient implements AcpClientInterface {
 				}
 				this.markTurnComplete("session_complete");
 				break;
-            case "session_meta":
+			case "session_meta":
                 if (!quietLogs) {
                     console.log(`${logPrefix} ℹ️ Session metadata updated`);
                 }
                 break;
+            case "config_option_update": {
+                const options = Array.isArray((update as Record<string, unknown>).configOptions)
+                    ? ((update as Record<string, unknown>).configOptions as Array<Record<string, unknown>>)
+                    : [];
+                if (options.length > 0) {
+                    this.onConfigOptions?.(options);
+                }
+                break;
+            }
 			default:
 				if (!quietLogs) {
 					console.log(`${logPrefix} ❓ Unknown update type: ${update.sessionUpdate}`);
 				}
 		}
 	}
+
+    private resolveWorkspacePath(targetPath: string): string {
+        const root = this.workspaceRoot;
+        const resolved = path.resolve(root, targetPath);
+        const relative = path.relative(root, resolved);
+        if (relative.startsWith("..") || path.isAbsolute(relative)) {
+            throw new Error(`Path is outside the workspace: ${targetPath}`);
+        }
+        return resolved;
+    }
+
+    async readTextFile(params: ReadTextFileParams): Promise<ReadTextFileResult> {
+        if (!this.canReadFiles) {
+            throw new Error("File read access is disabled for this session.");
+        }
+        const resolved = this.resolveWorkspacePath(params.path);
+        const encoding = params.encoding ?? "utf8";
+        const buffer = await readFile(resolved);
+        const content =
+            encoding === "base64" ? buffer.toString("base64") : buffer.toString("utf8");
+        return {
+            content,
+            encoding,
+        };
+    }
+
+    async writeTextFile(params: WriteTextFileParams): Promise<WriteTextFileResult> {
+        if (!this.canWriteFiles) {
+            throw new Error("File write access is disabled for this session.");
+        }
+        const resolved = this.resolveWorkspacePath(params.path);
+        const encoding = params.encoding ?? "utf8";
+        const data =
+            encoding === "base64"
+                ? Buffer.from(params.content, "base64")
+                : Buffer.from(params.content, "utf8");
+        await writeFile(resolved, data);
+        return {
+            success: true,
+            path: params.path,
+        };
+    }
 
 	async requestPermission(params: PermissionRequest): Promise<PermissionResponse> {
 		const toolCall = (params.context as Record<string, unknown>)?.toolCall as Record<
@@ -209,8 +283,11 @@ export class TaskClient implements AcpClientInterface {
 		if (reason) {
 			this.stopReason = reason;
 		}
-		this.turnComplete = true;
-		// Treat a completed turn as completing the task for our single-turn sessions
-		this.taskComplete = true;
+        if (!this.turnComplete) {
+            this.turnComplete = true;
+            // Treat a completed turn as completing the task for our single-turn sessions
+            this.taskComplete = true;
+            this.turnCompletionCount += 1;
+        }
 	}
 }

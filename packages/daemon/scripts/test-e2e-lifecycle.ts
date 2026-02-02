@@ -7,6 +7,9 @@
 
 import { createConnection } from "node:net";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class E2ETestClient {
 	private port: number = 3001;
 	private host: string = "localhost";

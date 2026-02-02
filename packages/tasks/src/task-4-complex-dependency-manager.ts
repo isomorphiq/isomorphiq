@@ -1,3 +1,17 @@
+// TODO: This file is too complex (752 lines) and should be refactored into several modules.
+// Current concerns mixed: Task execution queue, dependency resolution, resource pressure monitoring,
+// priority rebalancing, deadlock handling, execution coordination.
+// 
+// Proposed structure:
+// - execution/dependency-manager/index.ts - Main manager orchestration
+// - execution/dependency-manager/queue-service.ts - Execution queue management
+// - execution/dependency-manager/resolver.ts - Dependency resolution logic
+// - execution/dependency-manager/resource-monitor.ts - Resource pressure tracking
+// - execution/dependency-manager/priority-service.ts - Priority rebalancing
+// - execution/dependency-manager/deadlock-handler.ts - Deadlock detection and resolution
+// - execution/dependency-manager/coordinator.ts - Execution coordination
+// - execution/dependency-manager/types.ts - Manager-specific types
+
 import { z } from "zod";
 import type { Task, TaskPriority, TaskStatus } from "./types.ts";
 import { 
@@ -43,6 +57,9 @@ export const ResourcePressureMetricsSchema = z.object({
 
 export type ResourcePressureMetrics = z.output<typeof ResourcePressureMetricsSchema>;
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class Task4ComplexDependencyManager {
     private executionQueue: TaskExecutionRequest[] = [];
     private activeOperations: Map<string, TaskExecutionRequest> = new Map();
@@ -211,6 +228,70 @@ export class Task4ComplexDependencyManager {
         complexDependencyDeadlockDetector.addComplexDependency(complexDependency);
     }
 
+    /**
+     * Perform dependency graph optimization (stub for enhanced workflow).
+     */
+    private async performDependencyGraphOptimization(
+        _taskId: string,
+        _currentTasks: Map<string, Task>
+    ): Promise<void> {
+        void _taskId;
+        void _currentTasks;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    /**
+     * Proactively prevent deadlocks by adjusting resources or constraints.
+     */
+    private async performProactiveDeadlockPrevention(
+        _request: TaskExecutionRequest,
+        deadlockResult: ComplexDeadlockDetectionResult,
+        _currentTasks: Map<string, Task>
+    ): Promise<{ success: boolean; error?: string }> {
+        void _request;
+        void _currentTasks;
+        if (!deadlockResult.hasDeadlock) {
+            return { success: true };
+        }
+
+        const deadlockedTaskIds = Array.from(
+            new Set(deadlockResult.detectedCycles.flat().map((cycle) => cycle.taskId)),
+        );
+        if (deadlockedTaskIds.length === 0) {
+            return { success: true };
+        }
+
+        try {
+            await this.reallocateResources(deadlockedTaskIds);
+            await this.applyGracefulDegradation(deadlockedTaskIds);
+            return { success: true };
+        } catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : "Unknown error",
+            };
+        }
+    }
+
+    /**
+     * Advanced deadlock resolution wrapper.
+     */
+    private async handleAdvancedDeadlockResolution(
+        request: TaskExecutionRequest,
+        deadlockResult: ComplexDeadlockDetectionResult,
+        currentTasks: Map<string, Task>
+    ): Promise<{ success: boolean; error?: string }> {
+        const primary = await this.handleDeadlockResolution(request, deadlockResult, currentTasks);
+        if (primary.success) {
+            return primary;
+        }
+        const taskIds = deadlockResult.detectedCycles.flat().map((cycle) => cycle.taskId);
+        if (taskIds.length === 0) {
+            return primary;
+        }
+        await this.applyAlternativeDeadlockStrategies(taskIds, deadlockResult, currentTasks);
+        return { success: true };
+    }
     /**
      * Handle deadlock resolution
      */
@@ -400,6 +481,16 @@ export class Task4ComplexDependencyManager {
     }
 
     /**
+     * Intelligent rebalancing heuristic wrapper.
+     */
+    private shouldPerformIntelligentRebalancing(
+        request: TaskExecutionRequest,
+        currentTasks: Map<string, Task>
+    ): boolean {
+        return this.shouldPerformRebalancing(request, currentTasks);
+    }
+
+    /**
      * Perform dynamic priority rebalancing
      */
     private performDynamicPriorityRebalancing(
@@ -419,6 +510,18 @@ export class Task4ComplexDependencyManager {
         }
 
         return rebalancingActions;
+    }
+
+    /**
+     * Intelligent priority rebalancing wrapper.
+     */
+    private performIntelligentPriorityRebalancing(
+        taskIds: string[],
+        currentTasks: Map<string, Task>,
+        _deadlockResult: ComplexDeadlockDetectionResult
+    ): Array<{ taskId: string; oldPriority: TaskPriority; newPriority: TaskPriority; reason: string }> {
+        void _deadlockResult;
+        return this.performDynamicPriorityRebalancing(taskIds, currentTasks);
     }
 
     /**
@@ -448,6 +551,17 @@ export class Task4ComplexDependencyManager {
             console.error(`[TASK-4] Operation execution failed:`, error);
             return false;
         }
+    }
+
+    /**
+     * Enhanced task operation execution wrapper.
+     */
+    private async executeEnhancedTaskOperation(
+        request: TaskExecutionRequest,
+        currentTasks: Map<string, Task>,
+        deadlockResult: ComplexDeadlockDetectionResult
+    ): Promise<boolean> {
+        return this.executeTaskOperation(request, currentTasks, deadlockResult);
     }
 
     /**
@@ -669,6 +783,19 @@ export class Task4ComplexDependencyManager {
     private updateResourceMetrics(success: boolean, executionTime: number): void {
         // Metrics will be updated in the next monitoring cycle
         // This method can be used for immediate updates if needed
+    }
+
+    /**
+     * Advanced resource metrics update wrapper.
+     */
+    private updateAdvancedResourceMetrics(
+        success: boolean,
+        executionTime: number,
+        _deadlockResult: ComplexDeadlockDetectionResult
+    ): void {
+        void _deadlockResult;
+        this.updateResourceMetrics(success, executionTime);
+        this.updateResourceMetricsFromSystem();
     }
 
     /**

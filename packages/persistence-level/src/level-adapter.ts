@@ -1,6 +1,9 @@
 import { Level } from "level";
 import type { KeyValueAdapter, KeyValueIterator } from "@isomorphiq/persistence-adapter";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class LevelKeyValueAdapter<K = string, V = unknown> implements KeyValueAdapter<K, V> {
     private db: Level<K, V>;
     private isOpen = false;
@@ -56,3 +59,4 @@ export class LevelKeyValueAdapter<K = string, V = unknown> implements KeyValueAd
         await (this.db as unknown as { batch: (op: Array<unknown>) => Promise<void> }).batch(ops);
     }
 }
+

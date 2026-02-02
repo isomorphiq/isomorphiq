@@ -1,3 +1,16 @@
+// TODO: This file is too complex (708 lines) and should be refactored into several modules.
+// Current concerns mixed: Priority-status dependency schemas, deadlock detection,
+// cycle analysis, resolution strategies, timeout handling.
+// 
+// Proposed structure:
+// - dependencies/priority-status/index.ts - Main detector orchestration
+// - dependencies/priority-status/schemas.ts - Zod schemas for dependencies
+// - dependencies/priority-status/detector.ts - Deadlock detection logic
+// - dependencies/priority-status/cycle-analyzer.ts - Cycle analysis and reporting
+// - dependencies/priority-status/resolver.ts - Resolution strategy selection
+// - dependencies/priority-status/timeout-service.ts - Timeout and cleanup handling
+// - dependencies/priority-status/types.ts - Priority-status specific types
+
 import { z } from "zod";
 import type { Task, TaskPriority, TaskStatus } from "./types.ts";
 
@@ -40,6 +53,9 @@ export const DeadlockDetectionResultSchema = z.object({
 
 export type DeadlockDetectionResult = z.output<typeof DeadlockDetectionResultSchema>;
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class PriorityStatusDeadlockDetector {
     private dependencies: Map<string, PriorityStatusDependency[]> = new Map();
     private activeOperations: Map<string, { operation: string; timestamp: number }> = new Map();

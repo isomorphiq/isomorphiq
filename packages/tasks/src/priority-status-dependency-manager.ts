@@ -33,6 +33,9 @@ export const OperationLockRequestSchema = z.object({
 });
 export type OperationLockRequest = z.output<typeof OperationLockRequestSchema>;
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class PriorityStatusDependencyManager {
     private dependencies: Map<string, PriorityStatusDependency[]> = new Map();
     private operationLocks: Map<string, OperationLockRequest> = new Map();

@@ -1,5 +1,18 @@
+// TODO: This file is too complex (668 lines) and should be refactored into several modules.
+// Current concerns mixed: Integration lifecycle, adapter management, sync orchestration,
+// health monitoring, task mapping, configuration validation.
+// 
+// Proposed structure:
+// - integrations/manager/index.ts - Main integration manager
+// - integrations/manager/lifecycle-service.ts - Integration CRUD operations
+// - integrations/manager/adapter-registry.ts - Adapter registration and management
+// - integrations/manager/sync-orchestrator.ts - Synchronization coordination
+// - integrations/manager/health-monitor.ts - Integration health checking
+// - integrations/manager/task-mapper.ts - Task mapping and transformation
+// - integrations/manager/config-validator.ts - Configuration validation
+// - integrations/manager/types.ts - Manager-specific types
+
 import { NotFoundError, ValidationError, type Result } from "@isomorphiq/core";
-import type { Task } from "@isomorphiq/tasks";
 import type { IIntegrationRepository } from "./integration-repository.ts";
 import type {
 	ExternalTask,
@@ -9,12 +22,14 @@ import type {
 	IntegrationConfigInput,
 	IntegrationHealth,
 	IntegrationType,
+	IntegrationTask,
 	SyncResult,
 	TaskMapping,
 } from "./types.ts";
 
 /**
  * Main integration manager that orchestrates all external integrations
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class IntegrationManager implements IIntegrationManager {
 	private adapters = new Map<IntegrationType, IntegrationAdapter>();
@@ -635,7 +650,7 @@ export class IntegrationManager implements IIntegrationManager {
 		});
 	}
 
-	private async getTasksToSync(integration: IntegrationConfig): Promise<Task[]> {
+	private async getTasksToSync(integration: IntegrationConfig): Promise<IntegrationTask[]> {
 		// This would get tasks that need to be synced to the external service
 		// For now, return empty array
 		console.log(`[INTEGRATION-MANAGER] Getting tasks to sync for ${integration.name}`);

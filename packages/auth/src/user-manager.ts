@@ -1,3 +1,17 @@
+// TODO: This file is too complex (972 lines) and should be refactored into several modules.
+// Current concerns mixed: User CRUD operations, session management, password reset,
+// email verification, authentication, profile updates, database management.
+// 
+// Proposed structure:
+// - auth/user-manager/index.ts - Main user manager composition
+// - auth/user-manager/user-service.ts - User CRUD operations
+// - auth/user-manager/session-service.ts - Session lifecycle management
+// - auth/user-manager/password-service.ts - Password reset and verification
+// - auth/user-manager/email-service.ts - Email verification handling
+// - auth/user-manager/profile-service.ts - User profile management
+// - auth/user-manager/repositories/ - Database access layer
+// - auth/user-manager/types.ts - User management types
+
 import crypto from "node:crypto";
 import path from "node:path";
 import { Level } from "level";
@@ -21,6 +35,9 @@ import type {
 } from "./types.ts";
 import type { UserPermissions } from "./security-types.ts";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class UserManager {
 	private userDb!: Level<string, User>;
 	private sessionDb!: Level<string, Session>;
@@ -970,3 +987,4 @@ export function getUserManager(): UserManager {
 	}
 	return sharedUserManager;
 }
+

@@ -1,3 +1,16 @@
+// TODO: This file is too complex (987 lines) and should be refactored into several modules.
+// Current concerns mixed: ACP connection management, workflow execution, task creation,
+// profile management, file operations, result processing.
+// 
+// Proposed structure:
+// - workflow/agent-runner/index.ts - Main agent runner orchestration
+// - workflow/agent-runner/acp-manager.ts - ACP connection lifecycle management
+// - workflow/agent-runner/task-executor.ts - Task execution and monitoring
+// - workflow/agent-runner/profile-selector.ts - Profile selection and management
+// - workflow/agent-runner/file-service.ts - File operation utilities
+// - workflow/agent-runner/result-processor.ts - Execution result processing
+// - workflow/agent-runner/types.ts - Agent runner types
+
 import { cleanupConnection, createConnection, sendPrompt, waitForTaskCompletion } from "@isomorphiq/acp";
 import { ProfileManager } from "@isomorphiq/user-profile";
 import type { ACPProfile } from "@isomorphiq/user-profile";
@@ -5,6 +18,7 @@ import { z } from "zod";
 import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import type { RuntimeState } from "./workflow-factory.ts";
+import type { TaskActionLog } from "@isomorphiq/types";
 
 export type WorkflowTask = {
     id?: string;
@@ -14,6 +28,8 @@ export type WorkflowTask = {
     type?: string;
     status?: string;
     assignedTo?: string;
+    dependencies?: string[];
+    actionLog?: TaskActionLog[];
 };
 
 export type WorkflowSeedSpec = {
@@ -21,6 +37,8 @@ export type WorkflowSeedSpec = {
     description: string;
     priority: "low" | "medium" | "high";
     type:
+        | "theme"
+        | "initiative"
         | "feature"
         | "story"
         | "task"
@@ -48,6 +66,10 @@ export type WorkflowTaskExecutor = (context: {
     workflowState: RuntimeState | null;
     workflowTransition?: string | null;
     environment?: string;
+    workflowSourceState?: string;
+    workflowTargetState?: string;
+    executionContext?: Record<string, unknown>;
+    isDecider?: boolean;
 }) => Promise<WorkflowExecutionResult>;
 
 export type WorkflowTaskSeedProvider = (context: {
@@ -66,6 +88,8 @@ const SeedSpecSchema = z.object({
     priority: z.enum(["low", "medium", "high"]).optional().default("medium"),
     type: z
         .enum([
+            "theme",
+            "initiative",
             "feature",
             "story",
             "task",
@@ -222,18 +246,6 @@ const resolveWorkflowProfileName = (profileName: string): string => {
     return mapping[normalized] ?? profileName;
 };
 
-const resolveTransitionModelOverride = (transition?: string | null): string | null => {
-    if (!transition) {
-        return null;
-    }
-    switch (transition) {
-        case "prioritize-features":
-            return "lmstudio/nvidia/nemotron-3-nano";
-        default:
-            return null;
-    }
-};
-
 const shouldEnforceWorkflowProfile = (
     workflowState: RuntimeState | null,
     workflowTransition?: string | null,
@@ -247,10 +259,18 @@ const shouldEnforceWorkflowProfile = (
     if (workflowState?.name === "features-prioritized") {
         return true;
     }
+    if (workflowState?.name === "themes-prioritized") {
+        return true;
+    }
+    if (workflowState?.name === "initiatives-prioritized") {
+        return true;
+    }
     return (
         workflowTransition === "review-task-validity" ||
         workflowTransition === "close-invalid-task" ||
-        workflowTransition === "prioritize-features"
+        workflowTransition === "prioritize-features" ||
+        workflowTransition === "prioritize-themes" ||
+        workflowTransition === "prioritize-initiatives"
     );
 };
 
@@ -330,30 +350,100 @@ const loadPromptBlocks = async (root: string, files: string[]): Promise<string[]
     return blocks.filter((block): block is string => block !== null);
 };
 
+const isCodingProfile = (profileName: string): boolean => {
+    const codingProfiles = new Set([
+        "development",
+        "senior-developer",
+        "qa-specialist",
+        "principal-architect",
+        "refinement",
+    ]);
+    return codingProfiles.has(profileName);
+};
+
+const buildProjectRules = (profileName: string): string => {
+    const rules = [
+        "Project rules:",
+        "- Follow AGENTS.md and the repository conventions.",
+        "- Do not restart the daemon directly; use the restart_daemon MCP tool.",
+    ];
+    if (isCodingProfile(profileName)) {
+        return [
+            ...rules,
+            "- Use 4-space indentation.",
+            "- Use double quotes for strings.",
+            "- Prefer functional style; avoid mutating data.",
+            "- Prefer @tsimpl struct/trait/impl; avoid interfaces and type casts.",
+            "- Node ESM with no transpilation: include `.ts` on local imports.",
+        ].join("\n");
+    }
+    return rules.join("\n");
+};
+
 const buildProfilePrompt = async (
     root: string,
     profile: ACPProfile,
     task: WorkflowTask,
     workflowState: RuntimeState | null,
     workflowTransition?: string | null,
+    executionContext?: Record<string, unknown>,
 ): Promise<string> => {
+    const promptFiles = selectPromptFiles(profile, task);
+    const promptBlocks = await loadPromptBlocks(root, promptFiles);
     const workflowHint =
         workflowState?.promptHint && workflowState.profile === profile.name
             ? `Workflow hint: ${workflowState.promptHint}`
             : "";
-    const projectRules = [
-        "Project rules:",
-        "- Follow AGENTS.md and the repository conventions.",
-        "- Node ESM with no transpilation: include `.ts` on local imports.",
-        "- Do not restart the daemon directly; use the restart_daemon MCP tool.",
-    ].join("\n");
+    const prefetchedOutput =
+        executionContext && typeof executionContext.prefetchedMcpOutput === "string"
+            ? executionContext.prefetchedMcpOutput.trim()
+            : "";
+    const prefetchedSection =
+        prefetchedOutput.length > 0
+            ? [
+                "Prefetched MCP data (latest output; equivalent to running list_tasks now):",
+                prefetchedOutput,
+                "If you need fresher data, you may call list_tasks again.",
+            ].join("\n")
+            : "";
+    const prefetchedTaskContext =
+        executionContext && typeof executionContext.prefetchedTaskContext === "string"
+            ? executionContext.prefetchedTaskContext.trim()
+            : "";
+    const prefetchedTaskSection =
+        prefetchedTaskContext.length > 0
+            ? ["Selected task context:", prefetchedTaskContext].join("\n")
+            : "";
+    const prefetchedTestReport =
+        executionContext && typeof executionContext.prefetchedTestReport === "string"
+            ? executionContext.prefetchedTestReport.trim()
+            : "";
+    const prefetchedTestReportSection =
+        prefetchedTestReport.length > 0
+            ? ["Test report (from workflow context):", prefetchedTestReport].join("\n")
+            : "";
+    const promptSection =
+        promptBlocks.length > 0
+            ? ["Reference prompts:", ...promptBlocks].join("\n")
+            : "";
+    const projectRules = buildProjectRules(profile.name);
+    const resolutionGuardrails = isCodingProfile(profile.name)
+        ? [
+            "If you discover the task is already implemented, say so and propose a better-scoped follow-up.",
+            "If you lack permission to read files, say so and proceed with the task using the context available.",
+            "If command execution or tool calls are blocked by a sandbox, say so explicitly and provide exact commands for QA or a human to run.",
+        ].join("\n")
+        : "If you cannot access required MCP tools or data, say so and proceed with the context available.";
     const instructions = [
         profile.systemPrompt.trim(),
         "",
         workflowHint,
+        prefetchedTaskSection,
+        prefetchedTestReportSection,
+        prefetchedSection,
+        promptSection,
         projectRules,
-        "If you discover the task is already implemented, say so and propose a better-scoped follow-up.",
-        "If you lack permission to read files, say so and proceed with the task using the context available.",
+        resolutionGuardrails,
         "At the end of your response, include `Summary:` with 1-2 sentences describing what you completed.",
         "",
         profile.getTaskPrompt({
@@ -367,6 +457,7 @@ const buildProfilePrompt = async (
                     }
                 : undefined,
             workflowTransition: workflowTransition ?? undefined,
+            ...executionContext,
         }),
     ];
     return instructions.filter((line) => line.length > 0).join("\n");
@@ -380,7 +471,10 @@ type TurnContext = {
     taskType?: string;
     taskStatus?: string;
     workflowState?: string;
+    workflowSourceState?: string;
+    workflowTargetState?: string;
     workflowTransition?: string;
+    isDecider?: boolean;
 };
 
 const resolveModelFromEnv = (): string | null => {
@@ -518,6 +612,11 @@ const executePrompt = async (
     environment: string | undefined,
     modelName: string | undefined,
     turnContext?: TurnContext,
+    runtimeName?: string,
+    acpMode?: string,
+    acpSandbox?: string,
+    acpApprovalPolicy?: string,
+    mcpServers?: ACPProfile["mcpServers"],
 ): Promise<{ output: string; error: string; modelName: string }> => {
     const session = await createConnection(
         fsMode === "default"
@@ -528,15 +627,27 @@ const executePrompt = async (
                         writeTextFile: fsMode === "read-write",
                     },
                 },
-        { environment, modelName },
+        {
+            environment,
+            modelName,
+            runtimeName,
+            modeName: acpMode,
+            sandbox: acpSandbox,
+            approvalPolicy: acpApprovalPolicy,
+            mcpServers,
+        },
     );
     session.taskClient.profileName = profileName;
+    session.taskClient.sessionId = session.sessionId;
+    session.taskClient.requestedModelName = modelName ?? null;
     if (turnContext) {
         session.taskClient.taskId = turnContext.taskId ?? null;
         session.taskClient.taskTitle = turnContext.taskTitle ?? null;
         session.taskClient.taskType = turnContext.taskType ?? null;
         session.taskClient.taskStatus = turnContext.taskStatus ?? null;
         session.taskClient.workflowState = turnContext.workflowState ?? null;
+        session.taskClient.workflowSourceState = turnContext.workflowSourceState ?? null;
+        session.taskClient.workflowTargetState = turnContext.workflowTargetState ?? null;
         session.taskClient.workflowTransition = turnContext.workflowTransition ?? null;
     }
     await session.taskClient.sessionUpdate({
@@ -548,6 +659,7 @@ const executePrompt = async (
         },
     });
     try {
+        const completionCountStart = session.taskClient.turnCompletionCount;
         const promptResult = await sendPrompt(
             session.connection,
             session.sessionId,
@@ -555,23 +667,50 @@ const executePrompt = async (
             session.taskClient,
         );
         const completion = await waitForTaskCompletion(session.taskClient, 600000, profileName);
-        const modelName =
+        if (session.taskClient.turnCompletionCount === completionCountStart) {
+            await session.taskClient.sessionUpdate({
+                sessionId: session.sessionId,
+                update: {
+                    sessionUpdate: "turn_complete",
+                    status: completion.error ? "error" : "completed",
+                    reason: completion.error || undefined,
+                },
+            });
+        }
+        const reportedModelName =
             (promptResult && readModelNameFromResult(promptResult)) ??
             resolveModelFromEnv() ??
             "unknown-model";
-        session.taskClient.modelName = modelName;
+        if (reportedModelName === "unknown-model" && modelName) {
+            console.warn(
+                `[ACP] Model name not reported by runtime; requested=${modelName}`,
+            );
+        }
+        session.taskClient.modelName = reportedModelName;
+        if (
+            session.taskClient.stopReason === "end_turn"
+            && completion.output.trim().length === 0
+            && completion.error.length === 0
+        ) {
+            const requested = modelName ? ` requested=${modelName}` : "";
+            return {
+                output: "",
+                error: `ACP ended the turn without output.${requested} This usually indicates an invalid or unavailable model.`,
+                modelName: reportedModelName,
+            };
+        }
         await session.taskClient.sessionUpdate({
             sessionId: session.sessionId,
             update: {
                 sessionUpdate: "session_meta",
-                modelName,
+                modelName: reportedModelName,
                 mcpTools: session.taskClient.mcpTools ?? undefined,
             },
         });
         return {
             output: completion.output ?? "",
             error: completion.error ?? "",
-            modelName,
+            modelName: reportedModelName,
         };
     } finally {
         await cleanupConnection(session.connection, session.processResult);
@@ -710,7 +849,7 @@ const buildSeedPrompt = async (
         "  \"title\": \"...\",",
         "  \"description\": \"...\",",
         "  \"priority\": \"low|medium|high\",",
-        "  \"type\": \"feature|story|implementation|testing|task|integration|research\",",
+        "  \"type\": \"theme|initiative|feature|story|implementation|testing|task|integration|research\",",
         "  \"assignedTo\": \"senior-developer\"",
         "}",
         "Description should include: problem, requirements/acceptance criteria, evidence (file paths reviewed), impacted packages/files, and testing notes.",
@@ -736,6 +875,10 @@ export const createWorkflowAgentRunner = (
         workflowState,
         workflowTransition,
         environment,
+        workflowSourceState,
+        workflowTargetState,
+        executionContext,
+        isDecider,
     }) => {
         const enforceWorkflowProfile = shouldEnforceWorkflowProfile(
             workflowState,
@@ -762,6 +905,7 @@ export const createWorkflowAgentRunner = (
             task,
             workflowState,
             workflowTransition,
+            executionContext,
         );
         const startTime = Date.now();
         profileManager.startTaskProcessing(profile.name);
@@ -771,15 +915,23 @@ export const createWorkflowAgentRunner = (
                 prompt,
                 "read-write",
                 environment,
-                resolveTransitionModelOverride(workflowTransition) ?? profile.modelName,
+                profile.modelName,
                 {
-                taskId: task.id,
-                taskTitle: task.title,
-                taskType: task.type,
-                taskStatus: task.status,
-                workflowState: workflowState?.name,
-                workflowTransition: workflowTransition ?? undefined,
+                    taskId: task.id,
+                    taskTitle: task.title,
+                    taskType: task.type,
+                    taskStatus: task.status,
+                    workflowState: workflowState?.name,
+                    workflowSourceState: workflowSourceState ?? workflowState?.name,
+                    workflowTargetState: workflowTargetState ?? workflowState?.name,
+                    workflowTransition: workflowTransition ?? undefined,
+                    isDecider: isDecider ?? undefined,
                 },
+                profile.runtimeName,
+                profile.acpMode,
+                profile.acpSandbox,
+                profile.acpApprovalPolicy,
+                profile.mcpServers,
             );
             const summarySource = completion.error.length > 0 ? completion.error : completion.output;
             const summary = summarizeText(summarySource);
@@ -839,11 +991,22 @@ export const createWorkflowAgentRunner = (
         const startTime = Date.now();
         profileManager.startTaskProcessing(profile.name);
         try {
-            const completion = await executePrompt(profile.name, prompt, "read-only", undefined, undefined, {
-                taskType: workflowState?.targetType,
-                workflowState: workflowState?.name,
-                workflowTransition: workflowState?.defaultTransition,
-            });
+            const completion = await executePrompt(
+                profile.name,
+                prompt,
+                "read-only",
+                undefined,
+                undefined,
+                {
+                    taskType: workflowState?.targetType,
+                    workflowState: workflowState?.name,
+                    workflowTransition: workflowState?.defaultTransition,
+                },
+                profile.runtimeName,
+                profile.acpMode,
+                profile.acpSandbox,
+                profile.acpApprovalPolicy,
+            );
             const duration = Date.now() - startTime;
             profileManager.endTaskProcessing(profile.name);
             profileManager.recordTaskProcessing(

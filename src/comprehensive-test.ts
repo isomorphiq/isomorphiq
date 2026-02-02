@@ -1,3 +1,17 @@
+// TODO: This test file is too complex (673 lines) and should be refactored into several modules.
+// Current concerns mixed: Test suite management, task CRUD tests, search tests,
+// dependency tests, priority tests, status tests, template tests, automation tests.
+// 
+// Proposed structure:
+// - tests/unit/task-crud.test.ts - Task create, read, update, delete tests
+// - tests/unit/task-search.test.ts - Search and filter tests
+// - tests/unit/task-dependencies.test.ts - Dependency management tests
+// - tests/unit/task-priority.test.ts - Priority handling tests
+// - tests/unit/task-status.test.ts - Status transition tests
+// - tests/unit/task-templates.test.ts - Template functionality tests
+// - tests/unit/task-automation.test.ts - Automation rule tests
+// - tests/unit/test-suite.ts - Shared test infrastructure
+
 import { ProductManager } from "./index.ts";
 import type { TaskType } from "./types.ts";
 
@@ -35,6 +49,9 @@ async function assertThrowsAsync(
 }
 
 // Test suite
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class TestSuite {
 	private pm: ProductManager;
 	testResults: { name: string; passed: boolean; error?: string; duration: number }[] = [];
@@ -671,3 +688,4 @@ async function main(): Promise<void> {
 
 // Run if this file is executed directly
 main().catch(console.error);
+

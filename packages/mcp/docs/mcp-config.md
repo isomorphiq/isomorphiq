@@ -77,6 +77,19 @@ Retrieves a specific task by ID
 }
 ```
 
+### `update_task`
+Updates task fields (including dependencies)
+```json
+{
+  "id": "task-1234567890",
+  "updates": {
+    "dependencies": ["task-111", "task-222"],
+    "priority": "medium"
+  },
+  "changedBy": "system"
+}
+```
+
 ### `update_task_status`
 Updates task status
 ```json

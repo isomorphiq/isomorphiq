@@ -9,6 +9,9 @@ import type {
     WebSocketMessage,
 } from "./types.ts";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class WebSocketManager {
 	private wss: WebSocketServer | null = null;
 	private clients: Map<string, WebSocketClient> = new Map();
@@ -414,3 +417,4 @@ export class WebSocketManager {
 		}));
 	}
 }
+

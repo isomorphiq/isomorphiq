@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 async function testDependencyProcessing() {
     console.log('[TEST] Starting dependency processing test...');
     const pm = new ProductManager();

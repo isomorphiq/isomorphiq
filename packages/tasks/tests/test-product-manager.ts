@@ -1,4 +1,4 @@
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 
 /**
  * Simple test for ProductManager functionality

@@ -6,6 +6,7 @@ import type { ACPProfile } from "@isomorphiq/user-profile";
  * 
  * This plugin provides a specialized profile for automatic documentation
  * generation and maintenance tasks.
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export default class DocumentationPlugin extends BaseProfilePlugin {
     constructor() {
@@ -171,3 +172,4 @@ Focus on creating documentation that is clear, accurate, and valuable for ${sett
         // Could reload documentation templates here
     }
 }
+

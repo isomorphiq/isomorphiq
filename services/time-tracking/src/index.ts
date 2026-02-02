@@ -1,3 +1,17 @@
+// TODO: This file is too complex (752 lines) and should be refactored into several modules.
+// Current concerns mixed: Time entry CRUD, timesheet management, approval workflow,
+// reporting, analytics, search and filtering.
+// 
+// Proposed structure:
+// - time-tracking/time-entry-service.ts - Time entry operations
+// - time-tracking/timesheet-service.ts - Timesheet management
+// - time-tracking/approval-service.ts - Timesheet approval workflow
+// - time-tracking/reporting-service.ts - Time tracking reports
+// - time-tracking/analytics-service.ts - Time analytics and insights
+// - time-tracking/search-service.ts - Time entry search and filtering
+// - time-tracking/repositories/ - Data access layer
+// - time-tracking/types.ts - Time tracking types
+
 import { ConflictError, NotFoundError, UnauthorizedError, type Result } from "@isomorphiq/core";
 import {
     TimeTrackingDomainRules,
@@ -83,6 +97,7 @@ export type ITimeTrackingService = {
 
 /**
  * Time tracking service implementation
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class TimeTrackingService implements ITimeTrackingService {
 	private readonly timeTrackingRepository: ITimeTrackingRepository;
@@ -750,3 +765,4 @@ export class TimeTrackingService implements ITimeTrackingService {
 		return totalHours / uniqueDays.size;
 	}
 }
+

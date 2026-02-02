@@ -517,6 +517,21 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@isomorphiq/context@workspace:*, @isomorphiq/context@workspace:packages/context":
+  version: 0.0.0-use.local
+  resolution: "@isomorphiq/context@workspace:packages/context"
+  dependencies:
+    "@isomorphiq/core": "workspace:*"
+    "@isomorphiq/persistence-level": "workspace:*"
+    "@trpc/client": "npm:^11.7.2"
+    "@trpc/server": "npm:^11.7.2"
+    "@tsimpl/core": "npm:0.1.1"
+    "@tsimpl/runtime": "npm:0.1.1"
+    "@tsimpl/validation": "npm:0.1.1"
+    zod: "npm:^3.24.2"
+  languageName: unknown
+  linkType: soft
+
 "@isomorphiq/core@workspace:*, @isomorphiq/core@workspace:packages/core":
   version: 0.0.0-use.local
   resolution: "@isomorphiq/core@workspace:packages/core"
@@ -529,6 +544,7 @@ __metadata:
   dependencies:
     "@isomorphiq/auth": "workspace:*"
     "@isomorphiq/core": "workspace:*"
+    "@isomorphiq/dashboard": "workspace:*"
     "@isomorphiq/http-api": "workspace:*"
     "@isomorphiq/mcp": "workspace:*"
     "@isomorphiq/realtime": "workspace:*"
@@ -536,7 +552,19 @@ __metadata:
     "@isomorphiq/tasks": "workspace:*"
     "@isomorphiq/workflow": "workspace:*"
     node-cron: "npm:^3.0.3"
-    ws: "npm:^8.14.2"
+  languageName: unknown
+  linkType: soft
+
+"@isomorphiq/dashboard@workspace:*, @isomorphiq/dashboard@workspace:packages/dashboard":
+  version: 0.0.0-use.local
+  resolution: "@isomorphiq/dashboard@workspace:packages/dashboard"
+  dependencies:
+    "@isomorphiq/core": "workspace:*"
+    "@isomorphiq/realtime": "workspace:*"
+    "@isomorphiq/tasks": "workspace:*"
+    "@isomorphiq/user-profile": "workspace:*"
+    level: "npm:^10.0.0"
+    ws: "npm:^8.18.3"
   languageName: unknown
   linkType: soft
 
@@ -545,6 +573,7 @@ __metadata:
   resolution: "@isomorphiq/gateway@workspace:services/gateway"
   dependencies:
     "@isomorphiq/auth": "workspace:*"
+    "@isomorphiq/core": "workspace:*"
     "@isomorphiq/http-server": "workspace:*"
     "@isomorphiq/realtime": "workspace:*"
     "@isomorphiq/tasks": "workspace:*"
@@ -599,7 +628,6 @@ __metadata:
   resolution: "@isomorphiq/integrations@workspace:packages/integrations"
   dependencies:
     "@isomorphiq/core": "workspace:*"
-    "@isomorphiq/tasks": "workspace:*"
   languageName: unknown
   linkType: soft
 
@@ -607,6 +635,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@isomorphiq/mcp@workspace:packages/mcp"
   dependencies:
+    "@isomorphiq/context": "workspace:*"
+    "@isomorphiq/tasks": "workspace:*"
     "@modelcontextprotocol/sdk": "npm:^1.24.3"
   languageName: unknown
   linkType: soft
@@ -701,6 +731,10 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@isomorphiq/search@workspace:packages/search"
   dependencies:
+    "@isomorphiq/core": "workspace:*"
+    "@isomorphiq/persistence-level": "workspace:*"
+    "@trpc/client": "npm:^11.7.2"
+    "@trpc/server": "npm:^11.7.2"
     "@tsimpl/core": "npm:0.1.1"
     "@tsimpl/runtime": "npm:0.1.1"
     "@tsimpl/validation": "npm:0.1.1"
@@ -782,17 +816,17 @@ __metadata:
   resolution: "@isomorphiq/tasks@workspace:packages/tasks"
   dependencies:
     "@isomorphiq/core": "workspace:*"
-    "@isomorphiq/integrations": "workspace:*"
     "@isomorphiq/persistence-level": "workspace:*"
     "@isomorphiq/realtime": "workspace:*"
     "@isomorphiq/search": "workspace:*"
     "@isomorphiq/types": "workspace:*"
-    "@isomorphiq/user-profile": "workspace:*"
-    "@isomorphiq/workflow": "workspace:*"
+    "@trpc/client": "npm:^11.7.2"
+    "@trpc/server": "npm:^11.7.2"
     "@tsimpl/core": "npm:0.1.1"
     "@tsimpl/runtime": "npm:0.1.1"
     "@tsimpl/validation": "npm:0.1.1"
     level: "npm:^10.0.0"
+    ws: "npm:^8.18.3"
     zod: "npm:^3.24.2"
   languageName: unknown
   linkType: soft
@@ -826,6 +860,9 @@ __metadata:
   resolution: "@isomorphiq/user-profile@workspace:packages/user-profile"
   dependencies:
     "@isomorphiq/core": "workspace:*"
+    "@isomorphiq/integrations": "workspace:*"
+    "@isomorphiq/realtime": "workspace:*"
+    "@isomorphiq/tasks": "workspace:*"
   languageName: unknown
   linkType: soft
 
@@ -834,7 +871,9 @@ __metadata:
   resolution: "@isomorphiq/workflow@workspace:packages/workflow"
   dependencies:
     "@isomorphiq/acp": "workspace:*"
+    "@isomorphiq/context": "workspace:*"
     "@isomorphiq/core": "workspace:*"
+    "@isomorphiq/types": "workspace:*"
     "@isomorphiq/user-profile": "workspace:*"
     "@tsimpl/core": "npm:0.1.1"
     "@tsimpl/runtime": "npm:0.1.1"
@@ -4981,7 +5020,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ws@npm:^8.12.0, ws@npm:^8.14.2, ws@npm:^8.18.3":
+"ws@npm:^8.12.0, ws@npm:^8.18.3":
   version: 8.19.0
   resolution: "ws@npm:8.19.0"
   peerDependencies:

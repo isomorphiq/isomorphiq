@@ -1,5 +1,18 @@
+// TODO: This file is too complex (669 lines) and should be refactored into several modules.
+// Current concerns mixed: ACP connection establishment, runtime resolution, configuration loading,
+// process spawning, session management, capability handling.
+// 
+// Proposed structure:
+// - acp/connection/index.ts - Main connection manager
+// - acp/connection/runtime-resolver.ts - ACP runtime detection and resolution
+// - acp/connection/config-loader.ts - Configuration file loading and parsing
+// - acp/connection/process-spawner.ts - ACP process spawning logic
+// - acp/connection/session-manager.ts - Session lifecycle management
+// - acp/connection/capability-service.ts - Client capability handling
+// - acp/connection/types.ts - Connection-specific types
+
 import * as acp from "@agentclientprotocol/sdk";
-import type { ClientSideConnection } from "@agentclientprotocol/sdk";
+import { ClientSideConnection } from "./client-connection.ts";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { TaskClient } from "./acp-client.ts";
@@ -26,7 +39,25 @@ type ClientCapabilities = {
 	};
 };
 
-const resolveAcpRuntime = (): AcpRuntime => {
+type McpServerEntry = {
+    name: string;
+    command?: string;
+    args?: string[];
+    env?: Record<string, string> | Array<{ name: string; value: string }>;
+    type?: "http" | "sse";
+    url?: string;
+    headers?: Record<string, string> | Array<{ name: string; value: string }>;
+    tools?: string[];
+};
+
+const resolveAcpRuntime = (override?: string): AcpRuntime => {
+    const normalizedOverride = (override ?? "").trim().toLowerCase();
+    if (normalizedOverride === "codex") {
+        return "codex";
+    }
+    if (normalizedOverride === "opencode") {
+        return "opencode";
+    }
     const raw = (process.env.ACP_RUNTIME ?? process.env.ACP_SERVER ?? "").trim().toLowerCase();
     return raw === "codex" ? "codex" : "opencode";
 };
@@ -42,8 +73,146 @@ const resolveModelFromEnv = (): string | null => {
     return match ? match.trim() : null;
 };
 
+const resolveCodexModelOverride = (): string | null => {
+    const candidates = [
+        process.env.CODEX_ACP_MODEL,
+        process.env.CODEX_MODEL,
+        process.env.CODEX_MODEL_ID,
+    ];
+    const match = candidates.find((value) => typeof value === "string" && value.trim().length > 0);
+    return match ? match.trim() : null;
+};
+
+type SessionModeState = {
+    currentModeId: string;
+    availableModes: Array<{ id: string; name?: string | null }>;
+};
+
+type ConfigOption = {
+    id?: string;
+    currentValue?: string;
+    options?: Array<{ value?: string }>;
+};
+
+const readSessionModes = (value: Record<string, unknown>): SessionModeState | null => {
+    const modes = value.modes;
+    if (!modes || typeof modes !== "object") {
+        return null;
+    }
+    const record = modes as Record<string, unknown>;
+    const currentModeId =
+        typeof record.currentModeId === "string" ? record.currentModeId : null;
+    const available = Array.isArray(record.availableModes) ? record.availableModes : null;
+    if (!currentModeId || !available) {
+        return null;
+    }
+    const availableModes = available
+        .map((entry) => {
+            if (!entry || typeof entry !== "object") {
+                return null;
+            }
+            const modeRecord = entry as Record<string, unknown>;
+            const id = typeof modeRecord.id === "string" ? modeRecord.id : null;
+            if (!id) {
+                return null;
+            }
+            const name = typeof modeRecord.name === "string" ? modeRecord.name : null;
+            return { id, name };
+        })
+        .filter((entry): entry is { id: string; name: string | null } => Boolean(entry));
+    return { currentModeId, availableModes };
+};
+
+const isSessionResult = (value: unknown): value is Record<string, unknown> & { sessionId: string } =>
+    isRecord(value) && typeof value.sessionId === "string";
+
+const resolvePreferredModeId = (
+    modes: SessionModeState | null,
+    override?: string,
+): string | null => {
+    if (!modes) {
+        return null;
+    }
+    const normalizedOverride = (override ?? "").trim();
+    if (normalizedOverride.length > 0) {
+        const direct = modes.availableModes.find((mode) => mode.id === normalizedOverride);
+        if (direct) {
+            return direct.id;
+        }
+    }
+    const auto = modes.availableModes.find((mode) => mode.id === "auto");
+    if (auto) {
+        return auto.id;
+    }
+    const agent = modes.availableModes.find((mode) => mode.id === "agent");
+    if (agent) {
+        return agent.id;
+    }
+    return modes.currentModeId;
+};
+
+const resolveConfigOptionValue = (
+    options: Array<Record<string, unknown>>,
+    id: string,
+    preferred: string | null,
+): string | null => {
+    const option = options.find((entry) => (entry as ConfigOption)?.id === id) as ConfigOption | undefined;
+    if (!option) {
+        return null;
+    }
+    const available = Array.isArray(option.options) ? option.options : [];
+    const preferredValue =
+        preferred && available.some((entry) => entry?.value === preferred) ? preferred : null;
+    if (preferredValue) {
+        return preferredValue;
+    }
+    const current = typeof option.currentValue === "string" ? option.currentValue : null;
+    if (current && available.some((entry) => entry?.value === current)) {
+        return current;
+    }
+    const first = available.find((entry) => typeof entry?.value === "string");
+    return first?.value ?? null;
+};
+
+const resolveInitTimeoutMs = (): number => {
+    const raw = process.env.ACP_INIT_TIMEOUT_MS;
+    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+    if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed;
+    }
+    return 15000;
+};
+
+const withTimeout = async <T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    onTimeout: () => Error,
+): Promise<T> => {
+    let timeoutId: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(() => {
+            reject(onTimeout());
+        }, timeoutMs);
+    });
+    try {
+        return await Promise.race([promise, timeoutPromise]);
+    } finally {
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+        }
+    }
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     value !== null && typeof value === "object" && !Array.isArray(value);
+
+const resolveWorkspaceRoot = (): string => {
+    const initCwd = process.env.INIT_CWD;
+    if (initCwd && initCwd.trim().length > 0) {
+        return path.resolve(initCwd);
+    }
+    return process.cwd();
+};
 
 const readJsonFile = async (filePath: string): Promise<Record<string, unknown> | null> => {
     try {
@@ -269,8 +438,15 @@ const selectMcpEntries = (
 const resolveMcpServers = async (
     runtime: AcpRuntime,
     environment?: string,
+    overrides?: McpServerEntry[],
 ): Promise<{ servers: McpServerConfig[]; tools: string[] }> => {
     const environmentContext = resolveEnvironmentContext(environment);
+    if (overrides && overrides.length > 0) {
+        const entries = overrides.filter((entry): entry is Record<string, unknown> => isRecord(entry));
+        if (entries.length > 0) {
+            return selectMcpEntries(entries, runtime, environmentContext);
+        }
+    }
     const fromEnv = process.env.ACP_MCP_SERVERS ?? process.env.OPENCODE_MCP_SERVERS ?? "";
     if (fromEnv.trim().length > 0) {
         try {
@@ -286,7 +462,8 @@ const resolveMcpServers = async (
         }
     }
 
-    const defaultPath = path.join(process.cwd(), "packages", "mcp", "config", "mcp-server-config.json");
+    const workspaceRoot = resolveWorkspaceRoot();
+    const defaultPath = path.join(workspaceRoot, "packages", "mcp", "config", "mcp-server-config.json");
     const config = await readJsonFile(defaultPath);
     if (!config) {
         return runtime === "opencode"
@@ -402,31 +579,69 @@ export async function createConnection(
 			writeTextFile: true,
 		},
 	},
-    options?: { environment?: string; modelName?: string },
+    options?: {
+        environment?: string;
+        modelName?: string;
+        runtimeName?: string;
+        modeName?: string;
+        sandbox?: string;
+        approvalPolicy?: string;
+        mcpServers?: McpServerEntry[];
+    },
 ): Promise<ACPConnectionResult> {
 	console.log("[ACP] 🔗 Creating ACP connection...");
     let stderrOutput = "";
     let stdoutOutput = "";
     let exitCode: number | null = null;
     let exitSignal: NodeJS.Signals | null = null;
+    let initCompleted = false;
 
 	try {
 		// Spawn ACP server process (opencode or codex)
-        const runtime = resolveAcpRuntime();
-        const modelOverride = options?.modelName?.trim();
-        const envOverrides = modelOverride
-            ? {
-                    ACP_MODEL: modelOverride,
-                    OPENAI_MODEL: modelOverride,
-                    MODEL: modelOverride,
-                    LLM_MODEL: modelOverride,
-                    OPENCODE_MODEL: modelOverride,
-                    OPENCODE_MODEL_ID: modelOverride,
-                    LLM_MODEL_ID: modelOverride,
-                }
-            : undefined;
+        const runtime = resolveAcpRuntime(options?.runtimeName);
+        const modelOverride = options?.modelName?.trim() ?? "";
+        const fallbackModelOverride = runtime === "codex" ? resolveCodexModelOverride() ?? "" : "";
+        const resolvedModelOverride =
+            modelOverride.trim().length > 0 ? modelOverride.trim() : fallbackModelOverride.trim();
+        const modeOverride = options?.modeName?.trim() ?? "";
+        const sandboxOverride = options?.sandbox?.trim() ?? "";
+        const approvalPolicyOverride = options?.approvalPolicy?.trim() ?? "";
+        const resolvedModeOverride =
+            modeOverride.length > 0
+                ? modeOverride
+                : (process.env.CODEX_ACP_MODE ?? process.env.CODEX_MODE ?? "");
+        const envOverrides = {
+            ...(resolvedModelOverride.length > 0
+                ? {
+                        ACP_MODEL: resolvedModelOverride,
+                        OPENAI_MODEL: resolvedModelOverride,
+                        MODEL: resolvedModelOverride,
+                        LLM_MODEL: resolvedModelOverride,
+                        OPENCODE_MODEL: resolvedModelOverride,
+                        OPENCODE_MODEL_ID: resolvedModelOverride,
+                        LLM_MODEL_ID: resolvedModelOverride,
+                    }
+                : {}),
+            ...(modeOverride.length > 0
+                ? {
+                        CODEX_ACP_MODE: modeOverride,
+                        CODEX_MODE: modeOverride,
+                    }
+                : {}),
+            ...(sandboxOverride.length > 0
+                ? {
+                        CODEX_ACP_SANDBOX: sandboxOverride,
+                    }
+                : {}),
+            ...(approvalPolicyOverride.length > 0
+                ? {
+                        CODEX_ACP_APPROVAL_POLICY: approvalPolicyOverride,
+                    }
+                : {}),
+        };
+        const envOverridesValue = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
 		console.log(`[ACP] 🚀 Spawning ${runtime} process...`);
-		const processResult = ProcessSpawner.spawnAcpServer(runtime, envOverrides);
+		const processResult = ProcessSpawner.spawnAcpServer(runtime, envOverridesValue);
 
         processResult.process.on("exit", (code, signal) => {
             exitCode = code ?? null;
@@ -454,11 +669,16 @@ export async function createConnection(
 
 		// Create task client and connection
 		console.log("[ACP] 👤 Creating task client...");
-		const taskClient = new TaskClient();
+        const taskClient = new TaskClient();
         taskClient.runtimeName = runtime;
-        taskClient.modelName = modelOverride ?? resolveModelFromEnv();
+        taskClient.modelName =
+            resolvedModelOverride.length > 0 ? resolvedModelOverride : resolveModelFromEnv();
+        taskClient.canReadFiles = clientCapabilities?.fs?.readTextFile ?? false;
+        taskClient.canWriteFiles = clientCapabilities?.fs?.writeTextFile ?? false;
+        const workspaceRoot = resolveWorkspaceRoot();
+        taskClient.workspaceRoot = workspaceRoot;
 		console.log("[ACP] 🔌 Creating client-side connection...");
-		const connection = new acp.ClientSideConnection(
+		const connection = new ClientSideConnection(
 			() => taskClient as unknown as acp.Client,
 			stream,
 		);
@@ -467,41 +687,186 @@ export async function createConnection(
 		// Initialize connection
 		console.log("[ACP] 🤝 Initializing ACP connection...");
 		console.log("[ACP] 📋 Protocol version:", acp.PROTOCOL_VERSION);
-		const initResult = await connection.initialize({
-			protocolVersion: acp.PROTOCOL_VERSION,
-			clientCapabilities,
-		});
+        const formatProcessSnapshot = (): string => {
+            const stderrSnippet = stderrOutput.trim();
+            const stdoutSnippet = stdoutOutput.trim();
+            const exitInfo =
+                exitCode !== null || exitSignal !== null
+                    ? `exit=${exitCode ?? "?"}${exitSignal ? ` signal=${exitSignal}` : ""}`
+                    : "";
+            const parts = [
+                exitInfo,
+                stderrSnippet ? `stderr=${stderrSnippet}` : "",
+                stdoutSnippet ? `stdout=${stdoutSnippet}` : "",
+            ].filter((part) => part.length > 0);
+            return parts.join(" | ");
+        };
+        const initTimeoutMs = resolveInitTimeoutMs();
+        const initAbortPromise = new Promise<never>((_resolve, reject) => {
+            const handleExit = (): void => {
+                if (initCompleted) {
+                    return;
+                }
+                const snapshot = formatProcessSnapshot();
+                reject(
+                    new Error(
+                        `ACP ${runtime} exited before init${
+                            snapshot.length > 0 ? ` | ${snapshot}` : ""
+                        }`,
+                    ),
+                );
+            };
+            const handleError = (error: Error): void => {
+                if (initCompleted) {
+                    return;
+                }
+                const snapshot = formatProcessSnapshot();
+                reject(
+                    new Error(
+                        `ACP ${runtime} process error before init: ${formatErrorMessage(error)}${
+                            snapshot.length > 0 ? ` | ${snapshot}` : ""
+                        }`,
+                    ),
+                );
+            };
+            processResult.process.once("exit", handleExit);
+            processResult.process.once("error", handleError);
+            connection.closed.then(() => {
+                if (initCompleted) {
+                    return;
+                }
+                const snapshot = formatProcessSnapshot();
+                reject(
+                    new Error(
+                        `ACP ${runtime} connection closed during init${
+                            snapshot.length > 0 ? ` | ${snapshot}` : ""
+                        }`,
+                    ),
+                );
+            });
+        });
+        const initResult = await withTimeout(
+            Promise.race([
+                connection.initialize({
+                    protocolVersion: acp.PROTOCOL_VERSION,
+                    clientCapabilities,
+                }),
+                initAbortPromise,
+            ]),
+            initTimeoutMs,
+            () =>
+                new Error(
+                    `ACP ${runtime} init timed out after ${initTimeoutMs}ms${
+                        formatProcessSnapshot().length > 0
+                            ? ` | ${formatProcessSnapshot()}`
+                            : ""
+                    }`,
+                ),
+        );
+        initCompleted = true;
 		console.log(`[ACP] ✅ Connected to ${runtime} (protocol v${initResult.protocolVersion})`);
 		console.log("[ACP] 📊 Init result:", JSON.stringify(initResult, null, 2));
 
 		// Create session
 		console.log("[ACP] 🆔 Creating new session...");
-		console.log("[ACP] 📁 Working directory:", process.cwd());
-        const mcpConfig = await resolveMcpServers(runtime, options?.environment);
+		console.log("[ACP] 📁 Working directory:", workspaceRoot);
+        const mcpConfig = await resolveMcpServers(runtime, options?.environment, options?.mcpServers);
         taskClient.mcpTools = mcpConfig.tools.length > 0 ? mcpConfig.tools : null;
         const sessionResult = await connection.newSession({
-			cwd: process.cwd(),
+			cwd: workspaceRoot,
 			mcpServers: mcpConfig.servers,
 		});
-        if (modelOverride) {
+        if (!isSessionResult(sessionResult)) {
+            throw new Error("ACP session response missing sessionId");
+        }
+        const sessionModes = readSessionModes(sessionResult);
+        let appliedModeId: string | null = null;
+        let appliedModelId: string | null = null;
+        const preferredModeId = resolvePreferredModeId(sessionModes, resolvedModeOverride);
+        if (preferredModeId && sessionModes?.currentModeId !== preferredModeId) {
+            try {
+                await connection.setSessionMode({
+                    sessionId: sessionResult.sessionId,
+                    modeId: preferredModeId,
+                });
+                appliedModeId = preferredModeId;
+                console.log(`[ACP] 🎛️ Session mode set to ${preferredModeId}`);
+            } catch (error) {
+                console.warn(
+                    `[ACP] ⚠️ Failed to set session mode to ${preferredModeId}:`,
+                    formatErrorMessage(error),
+                );
+            }
+        }
+        const desiredModel =
+            resolvedModelOverride.length > 0
+                ? resolvedModelOverride
+                : runtime === "codex"
+                    ? resolveCodexModelOverride()
+                    : null;
+        if (desiredModel) {
             try {
                 await connection.setSessionModel({
                     sessionId: sessionResult.sessionId,
-                    modelId: modelOverride,
+                    modelId: desiredModel,
                 });
-                taskClient.modelName = modelOverride;
-                console.log(`[ACP] 🎯 Session model set to ${modelOverride}`);
+                taskClient.modelName = desiredModel;
+                appliedModelId = desiredModel;
+                console.log(`[ACP] 🎯 Session model set to ${desiredModel}`);
             } catch (error) {
                 console.warn(
-                    `[ACP] ⚠️ Failed to set session model to ${modelOverride}:`,
+                    `[ACP] ⚠️ Failed to set session model to ${desiredModel}:`,
                     formatErrorMessage(error),
                 );
             }
         }
         const sessionModelName = resolveModelNameFromSession(sessionResult);
-        if (sessionModelName && !modelOverride) {
+        if (sessionModelName && !desiredModel) {
             taskClient.modelName = sessionModelName;
         }
+        taskClient.onConfigOptions = (configOptions) => {
+            const modePreference =
+                resolvedModeOverride.length > 0 ? resolvedModeOverride : preferredModeId;
+            const modeId = resolveConfigOptionValue(
+                configOptions,
+                "mode",
+                modePreference,
+            );
+            if (modeId && modeId !== appliedModeId) {
+                void connection
+                    .setSessionMode({ sessionId: sessionResult.sessionId, modeId })
+                    .then(() => {
+                        appliedModeId = modeId;
+                        console.log(`[ACP] 🎛️ Session mode set to ${modeId}`);
+                    })
+                    .catch((error) => {
+                        console.warn(
+                            `[ACP] ⚠️ Failed to set session mode to ${modeId}:`,
+                            formatErrorMessage(error),
+                        );
+                    });
+            }
+            const modelId = resolveConfigOptionValue(
+                configOptions,
+                "model",
+                desiredModel ?? (resolvedModelOverride.length > 0 ? resolvedModelOverride : null),
+            );
+            if (modelId && modelId !== appliedModelId) {
+                void connection
+                    .setSessionModel({ sessionId: sessionResult.sessionId, modelId })
+                    .then(() => {
+                        appliedModelId = modelId;
+                        taskClient.modelName = modelId;
+                        console.log(`[ACP] 🎯 Session model set to ${modelId}`);
+                    })
+                    .catch((error) => {
+                        console.warn(
+                            `[ACP] ⚠️ Failed to set session model to ${modelId}:`,
+                            formatErrorMessage(error),
+                        );
+                    });
+            }
+        };
 		console.log("[ACP] ✅ Session created:", sessionResult.sessionId);
 		console.log("[ACP] 📊 Session result:", JSON.stringify(sessionResult, null, 2));
 
@@ -528,6 +893,10 @@ export async function createConnection(
 
 		console.error("[ACP] ❌ Connection creation failed:", message);
 		console.error("[ACP] 📋 Error details:", safeStringify(error) ?? String(error));
+        const processResult = (error as { processResult?: ProcessResult }).processResult;
+        if (processResult) {
+            ProcessSpawner.cleanupProcess(processResult);
+        }
 		throw new Error(message, { cause: error instanceof Error ? error : undefined });
 	}
 }
@@ -581,31 +950,27 @@ export async function sendPrompt(
 		prompt.substring(0, 200) + (prompt.length > 200 ? "..." : ""),
 	);
 	console.log("[ACP] 🆔 Session ID:", sessionId);
-	const result = await connection.prompt({
-		sessionId,
-		prompt: [
-			{
-				type: "text",
-				text: prompt,
-			},
-		],
-	});
-	console.log("[ACP] ✅ Prompt completed with stop reason:", result.stopReason);
-	console.log("[ACP] 📊 Prompt result:", JSON.stringify(result, null, 2));
-	// Mark turn complete on the task client if available
-	const client = taskClient as {
-		markTurnComplete?: () => void;
-		stopReason?: string;
-	};
-	if (client && typeof client.markTurnComplete === "function") {
-		try {
-			client.stopReason = result.stopReason ?? client.stopReason;
-			client.markTurnComplete();
-		} catch (err) {
-			console.log("[ACP] ⚠️ Failed to mark turn complete on task client:", err);
-		}
-	}
-	return result;
+	try {
+		const result = await connection.prompt({
+			sessionId,
+			prompt: [
+				{
+					type: "text",
+					text: prompt,
+				},
+			],
+		});
+		console.log("[ACP] ✅ Prompt completed with stop reason:", result.stopReason);
+		console.log("[ACP] 📊 Prompt result:", JSON.stringify(result, null, 2));
+        if (taskClient && typeof result.stopReason === "string" && result.stopReason.length > 0) {
+            taskClient.markTurnComplete(result.stopReason);
+        }
+		return result;
+	} catch (error) {
+        const details = safeStringify(error) ?? String(error);
+        console.error("[ACP] ❌ Prompt failed:", details);
+        throw error;
+    }
 }
 
 export async function waitForTaskCompletion(

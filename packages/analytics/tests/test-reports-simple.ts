@@ -33,6 +33,9 @@ interface ReportData {
 	timeline: Record<string, unknown>[];
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class SimplifiedReportTester {
 	private results: TestResult[] = [];
 	private testTasks: Task[] = [];
@@ -778,3 +781,4 @@ class SimplifiedReportTester {
 // }
 
 export { SimplifiedReportTester };
+

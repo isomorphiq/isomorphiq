@@ -1,3 +1,16 @@
+// TODO: This file is too complex (1023 lines) and should be refactored into several modules.
+// Current concerns mixed: Dependency graph construction, cycle detection, critical path analysis,
+// topological sorting, bottleneck identification, graph visualization data.
+// 
+// Proposed structure:
+// - dependencies/graph-builder.ts - Dependency graph construction and management
+// - dependencies/cycle-detector.ts - Circular dependency detection algorithms
+// - dependencies/critical-path.ts - Critical path analysis and calculation
+// - dependencies/topological-sort.ts - Topological sorting implementation
+// - dependencies/bottleneck-analyzer.ts - Bottleneck identification and analysis
+// - dependencies/visualization-service.ts - Graph data for visualization
+// - dependencies/types.ts - Dependency graph types and interfaces
+
 import type { Task } from "@isomorphiq/tasks";
 
 export interface DependencyNode {
@@ -68,6 +81,9 @@ export interface DependencyValidationResult {
 	}>;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class DependencyGraphService {
 	private taskCache: Map<string, Task> = new Map();
 	private adjacencyList: Map<string, Set<string>> = new Map();

@@ -20,6 +20,9 @@ export interface LockInfo {
     resource: string;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class DistributedLockError extends Error {
     constructor(
         message: string,
@@ -32,6 +35,7 @@ export class DistributedLockError extends Error {
 
 /**
  * Distributed lock implementation using storage backend
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class DistributedLock extends EventEmitter {
     private isHeld = false;
@@ -190,6 +194,7 @@ export interface DistributedLockStorage {
 
 /**
  * In-memory implementation of distributed lock storage (for testing)
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class InMemoryLockStorage implements DistributedLockStorage {
     private locks = new Map<string, LockInfo>();
@@ -280,6 +285,9 @@ export interface ElectionState {
     lastHeartbeat: number;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class LeaderElection extends EventEmitter {
     private state: ElectionState;
     private isCandidate = false;
@@ -468,6 +476,7 @@ export interface LeaderElectionStorage {
 
 /**
  * In-memory implementation of leader election storage (for testing)
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class InMemoryLeaderElectionStorage implements LeaderElectionStorage {
     private state: Map<string, { term: number; lastHeartbeat: number }> = new Map();
@@ -517,6 +526,7 @@ export class InMemoryLeaderElectionStorage implements LeaderElectionStorage {
 
 /**
  * Distributed semaphore implementation
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class DistributedSemaphore {
     private waiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
@@ -579,6 +589,7 @@ export interface DistributedSemaphoreStorage {
 
 /**
  * In-memory implementation of distributed semaphore storage (for testing)
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class InMemorySemaphoreStorage implements DistributedSemaphoreStorage {
     private permits = new Map<string, number>();
@@ -616,3 +627,4 @@ export class InMemorySemaphoreStorage implements DistributedSemaphoreStorage {
         return this.permits.get(resource) || 0;
     }
 }
+

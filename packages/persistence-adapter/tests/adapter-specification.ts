@@ -18,6 +18,9 @@ export interface AdapterTestConfig<K = string, V = unknown> {
     complexValue?: V;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class AdapterSpecificationTester<K = string, V = unknown> {
     private config: AdapterTestConfig<K, V>;
 

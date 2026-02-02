@@ -6,7 +6,7 @@ import "../../../tests/test-utils/env-fetch.ts";
  * Tests all major functionality of the web dashboard
  */
 
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 import { startHttpServer } from "@isomorphiq/http-server";
 import type http from "node:http";
 
@@ -17,6 +17,9 @@ interface TestResult {
 	duration: number;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class WebDashboardTester {
 	private pm: ProductManager;
 	private server: http.Server | null = null;
@@ -416,3 +419,4 @@ async function main() {
 }
 
 main().catch(console.error);
+

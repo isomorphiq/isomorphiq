@@ -6,7 +6,7 @@ import "../../../tests/test-utils/env-fetch.ts";
  * Tests the web dashboard components, state management, and real-time updates
  */
 
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 import { startHttpServer } from "@isomorphiq/http-server";
 
 interface TestResult {
@@ -16,6 +16,9 @@ interface TestResult {
 	duration: number;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class DashboardTester {
 	private pm: ProductManager;
 	private server: unknown;
@@ -435,3 +438,4 @@ if (require.main === module) {
 }
 
 export { DashboardTester };
+

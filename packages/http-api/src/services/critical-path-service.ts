@@ -288,6 +288,12 @@ function estimateTaskDuration(task: Task): number {
 
 	// Adjust based on task type
 	switch (task.type) {
+		case "theme":
+			baseDuration = 6;
+			break;
+		case "initiative":
+			baseDuration = 5;
+			break;
 		case "feature":
 			baseDuration = 5;
 			break;

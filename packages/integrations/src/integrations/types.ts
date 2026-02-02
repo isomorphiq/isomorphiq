@@ -1,6 +1,16 @@
 /* eslint-disable no-unused-vars */
 import type { Result } from "@isomorphiq/core";
-import type { Task } from "@isomorphiq/tasks";
+export type IntegrationTask = {
+	id: string;
+	title: string;
+	description: string;
+	status: string;
+	priority: string;
+	createdAt: Date;
+	updatedAt: Date;
+	createdBy?: string;
+	assignedTo?: string;
+};
 
 /**
  * Integration types supported by the system
@@ -221,17 +231,17 @@ export interface IntegrationAdapter {
 	/**
 	 * Sync tasks to external service (outbound)
 	 */
-	syncOutbound(tasks: Task[]): Promise<SyncResult>;
+	syncOutbound(tasks: IntegrationTask[]): Promise<SyncResult>;
 
 	/**
 	 * Create external task from local task
 	 */
-	createExternalTask(task: Task): Promise<ExternalTask>;
+	createExternalTask(task: IntegrationTask): Promise<ExternalTask>;
 
 	/**
 	 * Update external task from local task
 	 */
-	updateExternalTask(task: Task, externalId: string): Promise<ExternalTask>;
+	updateExternalTask(task: IntegrationTask, externalId: string): Promise<ExternalTask>;
 
 	/**
 	 * Delete external task

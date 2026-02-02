@@ -1,6 +1,7 @@
 import { logTransition } from "./transition-effects.ts";
 import { handleProductResearchTransition } from "./feature-creation.ts";
 import { handleUxResearchTransition } from "./story-creation.ts";
+import { handleInitiativeResearchTransition, handleThemeResearchTransition } from "./portfolio-creation.ts";
 import {
 	assembleWorkflow,
 	createTransition,
@@ -30,6 +31,29 @@ const isImplementationTask = (task: WorkflowTask): boolean => {
     return type === "implementation" || type === "task";
 };
 
+const isThemeTask = (task: WorkflowTask): boolean =>
+    normalizeTaskType(task.type) === "theme" && isActiveStatus(task.status);
+
+const isInitiativeTask = (task: WorkflowTask): boolean =>
+    normalizeTaskType(task.type) === "initiative" && isActiveStatus(task.status);
+
+const isFeatureLikeTask = (task: WorkflowTask): boolean => {
+	const type = normalizeTaskType(task.type);
+	const status = normalizeTaskStatus(task.status);
+	const isActive = status === "todo" || status === "in-progress";
+	if (!isActive) {
+		return false;
+	}
+	if (type === "feature") {
+		return true;
+	}
+	if (type === "task") {
+		const text = `${task.title ?? ""} ${task.description ?? ""}`.toLowerCase();
+		return text.includes("feature");
+	}
+	return false;
+};
+
 const isTestingTask = (task: WorkflowTask): boolean => {
     const type = normalizeTaskType(task.type);
     return type === "testing" || type === "integration";
@@ -46,7 +70,55 @@ const dependenciesSatisfied = (task: WorkflowTask, tasks: WorkflowTask[]): boole
     });
 };
 
+const parseTestStatus = (value: unknown): "passed" | "failed" | null => {
+    const text = typeof value === "string" ? value : "";
+    if (!text) {
+        return null;
+    }
+    const match = text.match(/test status\s*:\s*(passed|failed)/i);
+    if (!match) {
+        return null;
+    }
+    const status = match[1].toLowerCase();
+    return status === "passed" ? "passed" : "failed";
+};
+
+const parseTestStatusValue = (value: unknown): "passed" | "failed" | null => {
+    if (typeof value !== "string") {
+        return null;
+    }
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "passed") {
+        return "passed";
+    }
+    if (normalized === "failed") {
+        return "failed";
+    }
+    return null;
+};
+
+const resolveTestStatusFromContext = (
+    record: Record<string, unknown>,
+): "passed" | "failed" | null => {
+    const direct = parseTestStatusValue(record.testStatus);
+    if (direct) {
+        return direct;
+    }
+    const report =
+        record.testReport && typeof record.testReport === "object"
+            ? (record.testReport as Record<string, unknown>)
+            : null;
+    if (!report) {
+        return null;
+    }
+    return parseTestStatusValue(report.testStatus);
+};
+
 export type WorkflowStateName =
+	| "themes-proposed"
+	| "themes-prioritized"
+	| "initiatives-proposed"
+	| "initiatives-prioritized"
 	| "new-feature-proposed"
 	| "features-prioritized"
 	| "stories-created"
@@ -60,7 +132,51 @@ export type WorkflowStateName =
 const transitionEffects: Partial<
 	Record<WorkflowStateName, Partial<Record<string, TransitionEffect>>>
 > = {
+	"themes-proposed": {
+		"retry-theme-research": (payload?: unknown) =>
+			handleThemeResearchTransition(
+				payload,
+				WORKFLOW["themes-proposed"],
+				"retry-theme-research",
+			),
+	},
+	"themes-prioritized": {
+		"define-initiatives": (payload?: unknown) =>
+			handleInitiativeResearchTransition(
+				payload,
+				WORKFLOW["initiatives-proposed"],
+				"define-initiatives",
+			),
+	},
+	"initiatives-proposed": {
+		"retry-initiative-research": (payload?: unknown) =>
+			handleInitiativeResearchTransition(
+				payload,
+				WORKFLOW["initiatives-proposed"],
+				"retry-initiative-research",
+			),
+	},
+	"initiatives-prioritized": {
+		"define-initiatives": (payload?: unknown) =>
+			handleInitiativeResearchTransition(
+				payload,
+				WORKFLOW["initiatives-proposed"],
+				"define-initiatives",
+			),
+		"research-new-features": (payload?: unknown) =>
+			handleProductResearchTransition(
+				payload,
+				WORKFLOW["new-feature-proposed"],
+				"research-new-features",
+			),
+	},
 	"new-feature-proposed": {
+		"define-initiatives": (payload?: unknown) =>
+			handleInitiativeResearchTransition(
+				payload,
+				WORKFLOW["initiatives-proposed"],
+				"define-initiatives",
+			),
 		"retry-product-research": (payload?: unknown) =>
 			handleProductResearchTransition(
 				payload,
@@ -78,11 +194,11 @@ const transitionEffects: Partial<
 	},
 	"task-completed": {
 		"pick-up-next-task": () => logTransition("tasks-prepared"),
-		"research-new-features": (payload?: unknown) =>
-			handleProductResearchTransition(
+		"research-new-themes": (payload?: unknown) =>
+			handleThemeResearchTransition(
 				payload,
-				WORKFLOW["new-feature-proposed"],
-				"research-new-features",
+				WORKFLOW["themes-proposed"],
+				"research-new-themes",
 			),
 	},
 };
@@ -99,30 +215,82 @@ const buildTransitionsFor = (stateName: WorkflowStateName): TransitionDefinition
 // Canonical workflow assembled via factories.
 const baseStateDefs: Array<StateDefinition> = [
 	{
+		name: "themes-proposed",
+		description: "Portfolio themes are identified for strategic direction.",
+		profile: "portfolio-manager",
+		targetType: "theme",
+		promptHint:
+			"Produce exactly one theme: title, strategic outcome, scope, and priority.",
+		defaultTransition: "retry-theme-research",
+		transitions: buildTransitionsFor("themes-proposed"),
+		decider: (tasks: WorkflowTask[]) => {
+			const themeCount = tasks.filter(isThemeTask).length;
+			if (themeCount === 0) return "retry-theme-research";
+			return "prioritize-themes";
+		},
+	},
+	{
+		name: "themes-prioritized",
+		description: "Themes are ordered for roadmap planning.",
+		profile: "portfolio-manager",
+		targetType: "theme",
+		promptHint: "Return ordered theme IDs (highest priority first).",
+		transitions: buildTransitionsFor("themes-prioritized"),
+		decider: (tasks: WorkflowTask[]) => {
+			const themes = tasks.filter(isThemeTask);
+			if (themes.length === 0) return "request-theme";
+			const initiatives = tasks.filter(isInitiativeTask);
+			return initiatives.length > 0 ? "prioritize-initiatives" : "define-initiatives";
+		},
+	},
+	{
+		name: "initiatives-proposed",
+		description: "Initiatives have been drafted under a theme.",
+		profile: "portfolio-manager",
+		targetType: "initiative",
+		promptHint:
+			"Create 2-4 initiatives for the selected theme. Include the theme id as a dependency on each initiative.",
+		defaultTransition: "retry-initiative-research",
+		transitions: buildTransitionsFor("initiatives-proposed"),
+		decider: (tasks: WorkflowTask[]) => {
+			const themes = tasks.filter(isThemeTask);
+			if (themes.length === 0) return "request-theme";
+			const initiatives = tasks.filter(isInitiativeTask);
+			if (initiatives.length === 0) return "retry-initiative-research";
+			return "prioritize-initiatives";
+		},
+	},
+	{
+		name: "initiatives-prioritized",
+		description: "Initiatives ordered for feature discovery.",
+		profile: "portfolio-manager",
+		targetType: "initiative",
+		promptHint: "Return ordered initiative IDs (highest priority first).",
+		transitions: buildTransitionsFor("initiatives-prioritized"),
+		decider: (tasks: WorkflowTask[]) => {
+			const themes = tasks.filter(isThemeTask);
+			const initiatives = tasks.filter(isInitiativeTask);
+			if (initiatives.length === 0) {
+				return themes.length > 0 ? "define-initiatives" : "request-theme";
+			}
+			const featureCount = tasks.filter(isFeatureLikeTask).length;
+			return featureCount > 0 ? "prioritize-features" : "research-new-features";
+		},
+	},
+	{
 		name: "new-feature-proposed",
 		description: "Backlog is empty of net-new features; time to propose one.",
 		profile: "product-manager",
 		targetType: "feature",
 		promptHint:
-			"Produce exactly one feature: title, rich description, user value, acceptance criteria, priority.",
+			"Produce exactly one feature: title, rich description, user value, acceptance criteria, priority. If an initiative is provided, include its id as a dependency.",
 		defaultTransition: "retry-product-research",
 		transitions: buildTransitionsFor("new-feature-proposed"),
 		decider: (tasks: WorkflowTask[]) => {
-			// Treat obvious feature-shaped records as features, even if type was mis-labeled as task.
-			const isFeatureLike = (t: WorkflowTask) => {
-				const type = normalizeTaskType(t.type);
-				const status = normalizeTaskStatus(t.status);
-				const isFeature =
-					type === "feature"
-					|| (type === "task"
-						&& (/feature/i.test(t.title ?? "")
-							|| /feature/i.test(t.description ?? "")));
-				const isActive = status === "todo" || status === "in-progress";
-				return isFeature && isActive;
-			};
+			const initiativeCount = tasks.filter(isInitiativeTask).length;
+			if (initiativeCount === 0) return "define-initiatives";
 
-			const featureCount = tasks.filter(isFeatureLike).length;
-
+			const featureCount = tasks.filter(isFeatureLikeTask).length;
 			if (featureCount === 0) return "retry-product-research";
 
 			// If we already have plenty queued, stop generating more and proceed to prioritization.
@@ -139,16 +307,7 @@ const baseStateDefs: Array<StateDefinition> = [
 		promptHint: "Return reordered/prioritized feature list (IDs + priority).",
 		transitions: buildTransitionsFor("features-prioritized"),
 		decider: (tasks: WorkflowTask[]) => {
-			const isFeatureLike = (t: WorkflowTask): boolean => {
-				const type = normalizeTaskType(t.type);
-				const isFeature =
-					type === "feature"
-					|| (type === "task"
-						&& (/feature/i.test(t.title ?? "")
-							|| /feature/i.test(t.description ?? "")));
-				return isFeature && isActiveStatus(t.status);
-			};
-			const activeFeatures = tasks.filter(isFeatureLike);
+			const activeFeatures = tasks.filter(isFeatureLikeTask);
 			const storyTasks = tasks.filter(
 				(t) => normalizeTaskType(t.type) === "story" && isActiveStatus(t.status),
 			);
@@ -188,9 +347,7 @@ const baseStateDefs: Array<StateDefinition> = [
 			);
 			if (hasStories) return "prioritize-stories";
 			// If stories somehow vanished, ask for a feature to restart the pipeline.
-			const hasFeature = tasks.some(
-				(t) => normalizeTaskType(t.type) === "feature" && isActiveStatus(t.status),
-			);
+			const hasFeature = tasks.some(isFeatureLikeTask);
 			return hasFeature ? "prioritize-stories" : "request-feature";
 		},
 	},
@@ -208,7 +365,12 @@ const baseStateDefs: Array<StateDefinition> = [
 		description: "Tasks exist and are ready for implementation.",
 		profile: "principal-architect",
 		targetType: "implementation",
-		promptHint: "Produce 3-7 tasks with AC and priority for the story.",
+		promptHint: "Break down the story into 3-7 implementation tasks. For each task, provide:\n" +
+			"- Clear title and description\n" +
+			"- Acceptance criteria that are specific and testable\n" +
+			"- Priority based on dependencies and story importance\n" +
+			"- Any technical considerations or dependencies\n\n" +
+			"Write your response for an audience of senior technical staff. Be comprehensive and clear—use as much detail as necessary to fully capture the scope, rationale, and implementation approach. Do not limit your response length; thoroughness is more important than brevity.",
 		transitions: buildTransitionsFor("tasks-prepared"),
 		decider: async (tasks: WorkflowTask[], context?: unknown) =>
 			decideTasksPreparedTransition(tasks, context, WORKFLOW["tasks-prepared"]),
@@ -221,31 +383,7 @@ const baseStateDefs: Array<StateDefinition> = [
 		promptHint:
 			"Write tests first; then code to make them pass. Report failing output if not green.",
 		transitions: buildTransitionsFor("task-in-progress"),
-		decider: (tasks: WorkflowTask[]) => {
-			const hasActionableTesting = tasks.some(
-				(task) =>
-					isTestingTask(task) &&
-					isWorkflowTaskActionable(task) &&
-					dependenciesSatisfied(task, tasks),
-			);
-			if (hasActionableTesting) return "run-tests";
-
-			const hasInProgressTask = tasks.some(
-				(task) => isImplementationTask(task) && task.status === "in-progress",
-			);
-			if (hasInProgressTask) return "additional-implementation";
-
-			const hasActionableImplementation = tasks.some(
-				(task) =>
-					isImplementationTask(task) &&
-					isWorkflowTaskActionable(task) &&
-					dependenciesSatisfied(task, tasks),
-			);
-			if (hasActionableImplementation) return "additional-implementation";
-
-			// If no active task but work exists, go back to tasks-prepared for PM review.
-			return "refine-task";
-		},
+		decider: () => "run-tests",
 	},
 	{
 		name: "tests-completed",
@@ -255,7 +393,48 @@ const baseStateDefs: Array<StateDefinition> = [
 		promptHint:
 			"Run unit + integration suite; suggest fixes. Up to 3 attempts; if failures shrink, continue.",
 		transitions: buildTransitionsFor("tests-completed"),
-		decider: (tasks: WorkflowTask[]) => {
+		decider: (tasks: WorkflowTask[], context?: unknown) => {
+			const record =
+				context && typeof context === "object" ? (context as Record<string, unknown>) : {};
+			const statusFromContext = resolveTestStatusFromContext(record);
+			if (statusFromContext === "passed") {
+				return "tests-passing";
+			}
+			if (statusFromContext === "failed") {
+				return "tests-failed";
+			}
+			const currentTaskId =
+				typeof record.currentTaskId === "string" ? record.currentTaskId : undefined;
+			if (currentTaskId) {
+				const currentTask = tasks.find((task) => task.id === currentTaskId);
+				if (currentTask?.status === "done") {
+					return "tests-passing";
+				}
+				if (currentTask?.status === "in-progress") {
+					return "tests-failed";
+				}
+			}
+			const lastTestResult =
+				record.lastTestResult && typeof record.lastTestResult === "object"
+					? (record.lastTestResult as Record<string, unknown>)
+					: undefined;
+			const statusFromOutput =
+				parseTestStatus(lastTestResult?.output)
+					?? parseTestStatus(lastTestResult?.summary)
+					?? parseTestStatus(lastTestResult?.error);
+			if (statusFromOutput === "passed") {
+				return "tests-passing";
+			}
+			if (statusFromOutput === "failed") {
+				return "tests-failed";
+			}
+			const success =
+				lastTestResult && typeof lastTestResult.success === "boolean"
+					? lastTestResult.success
+					: undefined;
+			if (success === false) {
+				return "tests-failed";
+			}
 			const testingTasks = tasks.filter((task) => isTestingTask(task));
 			if (testingTasks.length === 0) {
 				return "tests-passing";
@@ -278,7 +457,10 @@ const baseStateDefs: Array<StateDefinition> = [
 			);
 			if (hasInProgress) return "pick-up-next-task";
 			const hasTasksReady = tasks.some(
-				(task) => isImplementationTask(task) && isWorkflowTaskActionable(task),
+				(task) =>
+					isImplementationTask(task)
+					&& isWorkflowTaskActionable(task)
+					&& dependenciesSatisfied(task, tasks),
 			);
 			if (hasTasksReady) return "pick-up-next-task";
 
@@ -287,30 +469,18 @@ const baseStateDefs: Array<StateDefinition> = [
 			);
 			if (hasStories) return "prioritize-stories";
 
-            const normalizeValue = (value: string | undefined): string =>
-                (value ?? "").trim().toLowerCase();
-            const isFeatureCandidate = (task: WorkflowTask): boolean => {
-                const status = normalizeValue(task.status);
-                const statusOk = status === "todo" || status === "in-progress";
-                if (!statusOk) {
-                    return false;
-                }
-                const type = normalizeValue(task.type);
-                if (type === "feature") {
-                    return true;
-                }
-                if (type === "task") {
-                    const text = `${task.title ?? ""} ${task.description ?? ""}`.toLowerCase();
-                    return text.includes("feature");
-                }
-                return false;
-            };
-            if (tasks.some(isFeatureCandidate)) {
-                return "prioritize-features";
-            }
+			if (tasks.some(isFeatureLikeTask)) {
+				return "prioritize-features";
+			}
+			if (tasks.some(isInitiativeTask)) {
+				return "prioritize-initiatives";
+			}
+			if (tasks.some(isThemeTask)) {
+				return "prioritize-themes";
+			}
 
-			// No tasks, stories, or features to feed refinement; go back to product research.
-			return "research-new-features";
+			// No tasks, stories, features, or initiatives; return to theme discovery.
+			return "research-new-themes";
 		},
 	},
 ];

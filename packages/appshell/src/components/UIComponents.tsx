@@ -68,6 +68,9 @@ interface State {
 	errorInfo?: ErrorInfo;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EnhancedErrorBoundary extends Component<Props, State> {
 	constructor(props: Props) {
 		super(props);
@@ -481,3 +484,4 @@ if (!document.head.querySelector("style[data-ui-components]")) {
 	style.setAttribute("data-ui-components", "true");
 	document.head.appendChild(style);
 }
+

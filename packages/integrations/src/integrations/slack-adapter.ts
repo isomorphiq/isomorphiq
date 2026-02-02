@@ -1,6 +1,10 @@
-import type { Task } from "@isomorphiq/tasks";
 import { BaseIntegrationAdapter } from "./base-adapter.ts";
-import type { ExternalTask, IntegrationHealth, IntegrationSettings } from "./types.ts";
+import type {
+	ExternalTask,
+	IntegrationHealth,
+	IntegrationSettings,
+	IntegrationTask,
+} from "./types.ts";
 
 type SlackSettings = NonNullable<IntegrationSettings["slack"]>;
 type SlackWebhookEvent = {
@@ -14,6 +18,7 @@ type SlackWebhookEvent = {
 
 /**
  * Slack integration adapter
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class SlackIntegration extends BaseIntegrationAdapter {
 	private apiUrl = "https://slack.com/api";
@@ -76,7 +81,9 @@ export class SlackIntegration extends BaseIntegrationAdapter {
 		return [];
 	}
 
-	protected async onSyncSingleTask(task: Task): Promise<{ created: boolean; updated: boolean }> {
+	protected async onSyncSingleTask(
+		task: IntegrationTask,
+	): Promise<{ created: boolean; updated: boolean }> {
 		const slackSettings = this.getSlackSettings();
 
 		try {
@@ -94,7 +101,7 @@ export class SlackIntegration extends BaseIntegrationAdapter {
 		}
 	}
 
-	protected async onCreateExternalTask(task: Task): Promise<ExternalTask> {
+	protected async onCreateExternalTask(task: IntegrationTask): Promise<ExternalTask> {
 		// Send notification about new task
 		const slackSettings = this.getSlackSettings();
 		if (slackSettings.notifyChannel && slackSettings.notifyOnTaskCreated) {
@@ -105,7 +112,10 @@ export class SlackIntegration extends BaseIntegrationAdapter {
 		return this.createExternalTaskFromTask(task, `slack-${task.id}`);
 	}
 
-	protected async onUpdateExternalTask(task: Task, externalId: string): Promise<ExternalTask> {
+	protected async onUpdateExternalTask(
+		task: IntegrationTask,
+		externalId: string,
+	): Promise<ExternalTask> {
 		// Send notification about task update
 		const slackSettings = this.getSlackSettings();
 		if (slackSettings.notifyChannel) {
@@ -210,7 +220,7 @@ export class SlackIntegration extends BaseIntegrationAdapter {
 	}
 
 	private async sendTaskNotification(
-		task: Task,
+		task: IntegrationTask,
 		channel: string,
 		action: "created" | "updated" | "completed" = "updated",
 	): Promise<void> {

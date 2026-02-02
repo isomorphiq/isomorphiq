@@ -13,17 +13,58 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(__dirname, "..");
 const entryPoint = path.join(packageRoot, "src", "mcp-server.ts");
+const tasksEntryPoint = path.resolve(packageRoot, "..", "tasks", "src", "task-service-server.ts");
+const tasksPort = process.env.MCP_TEST_TASKS_PORT || "3016";
+const dbPath = process.env.MCP_TEST_DB_PATH || path.join(packageRoot, ".mcp-test-db");
 
 console.log("🧪 Testing MCP Server functionality...\n");
+
+// Start tasks microservice
+const tasksProcess = spawn("node", ["--experimental-strip-types", tasksEntryPoint], {
+    cwd: packageRoot,
+    env: {
+        ...process.env,
+        TASKS_HTTP_PORT: tasksPort,
+        TASKS_PORT: tasksPort,
+        DB_PATH: dbPath,
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+});
+
+tasksProcess.stdout.on("data", (data) => {
+    const output = data.toString();
+    if (output.includes("Task service listening")) {
+        console.log(output.trim());
+    }
+});
+
+tasksProcess.stderr.on("data", (data) => {
+    console.error("⚠️ Tasks service stderr:", data.toString());
+});
 
 // Start MCP server
 const mcpProcess = spawn("node", ["--experimental-strip-types", entryPoint], {
     cwd: packageRoot,
+    env: {
+        ...process.env,
+        TASKS_HTTP_PORT: tasksPort,
+        TASKS_PORT: tasksPort,
+    },
     stdio: ["pipe", "pipe", "pipe"],
 });
 
 let responseBuffer = "";
 let errorBuffer = "";
+
+const cleanup = (code = 0) => {
+    if (!mcpProcess.killed) {
+        mcpProcess.kill();
+    }
+    if (!tasksProcess.killed) {
+        tasksProcess.kill();
+    }
+    process.exit(code);
+};
 
 mcpProcess.stdout.on("data", (data) => {
 	responseBuffer += data.toString();
@@ -97,8 +138,7 @@ setTimeout(() => {
 				console.log(responseBuffer);
 				console.log("\n✅ MCP Server test completed!");
 
-				mcpProcess.kill();
-				process.exit(0);
+				cleanup(0);
 			}, 1000);
 		}, 1000);
 	}, 1000);
@@ -107,20 +147,31 @@ setTimeout(() => {
 // Handle errors
 mcpProcess.on("error", (error) => {
 	console.error("❌ MCP Server failed to start:", error.message);
-	process.exit(1);
+	cleanup(1);
 });
 
 mcpProcess.on("exit", (code) => {
 	if (code !== 0 && code !== null) {
 		console.error(`❌ MCP Server exited with code ${code}`);
 		console.error("Error output:", errorBuffer);
-		process.exit(code);
+		cleanup(code);
 	}
+});
+
+tasksProcess.on("error", (error) => {
+    console.error("❌ Tasks service failed to start:", error.message);
+    cleanup(1);
+});
+
+tasksProcess.on("exit", (code) => {
+    if (code !== 0 && code !== null) {
+        console.error(`❌ Tasks service exited with code ${code}`);
+        cleanup(code);
+    }
 });
 
 // Timeout
 setTimeout(() => {
 	console.error("⏰ Test timed out");
-	mcpProcess.kill();
-	process.exit(1);
+	cleanup(1);
 }, 10000);

@@ -17,6 +17,9 @@ export interface TransactionOptions {
     isolationLevel?: "read-committed" | "serializable";
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class TransactionError extends Error {
     constructor(
         message: string,
@@ -27,6 +30,9 @@ export class TransactionError extends Error {
     }
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class Transaction<K = string, V = unknown> {
     private operations: TransactionOperation<K, V>[] = [];
     private isCommitted = false;
@@ -173,6 +179,7 @@ export class Transaction<K = string, V = unknown> {
 
 /**
  * Transaction manager for handling multiple concurrent transactions
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class TransactionManager<K = string, V = unknown> {
     private activeTransactions = new Map<string, Transaction<K, V>>();
@@ -248,6 +255,7 @@ export class TransactionManager<K = string, V = unknown> {
 
 /**
  * High-level transaction utilities for common patterns
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class TransactionUtils<K = string, V = unknown> {
     private transactionManager: TransactionManager<K, V>;
@@ -387,6 +395,7 @@ export interface TransactionMetrics {
 
 /**
  * Metrics collector for transactions
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class TransactionMetricsCollector {
     private metrics: TransactionMetrics = {
@@ -451,3 +460,4 @@ export class TransactionMetricsCollector {
         this.totalExecutionTime = 0;
     }
 }
+

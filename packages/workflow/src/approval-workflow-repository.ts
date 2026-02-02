@@ -11,6 +11,9 @@ import type {
 	ITaskApprovalRepository,
 } from "./approval-workflow-service.ts";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class InMemoryApprovalWorkflowRepository implements IApprovalWorkflowRepository {
 	private workflows: Map<string, ApprovalWorkflow> = new Map();
 
@@ -113,6 +116,9 @@ export class InMemoryApprovalWorkflowRepository implements IApprovalWorkflowRepo
 	}
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class InMemoryTaskApprovalRepository implements ITaskApprovalRepository {
 	private approvals: Map<string, TaskApproval> = new Map();
 
@@ -243,6 +249,9 @@ export class InMemoryTaskApprovalRepository implements ITaskApprovalRepository {
 	}
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class InMemoryApprovalTemplateRepository implements IApprovalTemplateRepository {
 	private templates: Map<string, ApprovalTemplate> = new Map();
 
@@ -342,3 +351,4 @@ export class InMemoryApprovalTemplateRepository implements IApprovalTemplateRepo
 		}
 	}
 }
+

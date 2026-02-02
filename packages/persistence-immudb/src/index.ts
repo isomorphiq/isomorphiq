@@ -2,6 +2,7 @@ import type { KeyValueAdapter, KeyValueIterator } from "@isomorphiq/persistence-
 
 /**
  * Placeholder immudb adapter. Intended to wrap the immudb client with the shared persistence interface.
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class ImmudbAdapter<K = string, V = unknown> implements KeyValueAdapter<K, V> {
     /* eslint-disable @typescript-eslint/no-unused-vars */
@@ -32,3 +33,4 @@ export class ImmudbAdapter<K = string, V = unknown> implements KeyValueAdapter<K
         throw new Error("Immudb adapter not implemented yet");
     }
 }
+

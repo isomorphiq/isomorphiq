@@ -52,6 +52,7 @@ export const ResultUtils = {
 
 /**
  * Domain-specific errors
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class DomainError extends Error {
 	public readonly code: string;
@@ -65,6 +66,9 @@ export class DomainError extends Error {
 	}
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ValidationError extends DomainError {
 	constructor(message: string, field?: string) {
 		super(message, "VALIDATION_ERROR", { field });
@@ -72,6 +76,9 @@ export class ValidationError extends DomainError {
 	}
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class NotFoundError extends DomainError {
 	constructor(resource: string, id?: string) {
 		super(`${resource}${id ? ` with id ${id}` : ""} not found`, "NOT_FOUND", { resource, id });
@@ -79,6 +86,9 @@ export class NotFoundError extends DomainError {
 	}
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class UnauthorizedError extends DomainError {
 	constructor(action: string, resource: string) {
 		super(`Unauthorized to ${action} ${resource}`, "UNAUTHORIZED", { action, resource });
@@ -86,9 +96,13 @@ export class UnauthorizedError extends DomainError {
 	}
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ConflictError extends DomainError {
 	constructor(message: string, details?: Record<string, unknown>) {
 		super(message, "CONFLICT", details);
 		this.name = "ConflictError";
 	}
 }
+

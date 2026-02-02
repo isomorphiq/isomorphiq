@@ -243,6 +243,7 @@ export interface PluginManagerContract {
 
 /**
  * Base class for profile plugins with common functionality
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export abstract class BaseProfilePlugin implements ProfilePlugin {
 	public state: PluginState = "unloaded";
@@ -350,3 +351,4 @@ export abstract class BaseProfilePlugin implements ProfilePlugin {
 	async onTaskComplete?(task: Record<string, unknown>, result: unknown): Promise<void>;
 	async onTaskError?(task: Record<string, unknown>, error: Error): Promise<void>;
 }
+

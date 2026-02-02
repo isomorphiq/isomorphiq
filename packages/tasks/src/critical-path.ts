@@ -122,6 +122,12 @@ const estimateTaskDuration = (task: Task): number => {
     let baseDuration = 1;
 
     switch (task.type) {
+        case "theme":
+            baseDuration = 6;
+            break;
+        case "initiative":
+            baseDuration = 5;
+            break;
         case "feature":
             baseDuration = 5;
             break;

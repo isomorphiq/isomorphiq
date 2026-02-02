@@ -16,6 +16,9 @@ export type TemplateManagerOptions = {
     storeFactory?: KeyValueStoreFactory;
 };
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class TemplateManager {
 	private templateDb!: KeyValueStore<string, TaskTemplate>;
 	private ruleDb!: KeyValueStore<string, AutomationRule>;
@@ -643,3 +646,4 @@ export class TemplateManager {
 		console.log(`[TEMPLATE] Deleted automation rule: ${id}`);
 	}
 }
+

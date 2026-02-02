@@ -25,6 +25,9 @@ export interface TaskDependencyGraph {
   }>;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class AdvancedTaskManager {
   
   /**
@@ -203,6 +206,9 @@ export interface MixedOperationMetrics {
   }>;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class MixedOperationManager {
   
   /**
@@ -627,3 +633,4 @@ Generated: ${timestamp}
 export const mixedOperationManager = new MixedOperationManager();
 
 export default { advancedTaskManager, mixedOperationManager, Task3Utils };
+

@@ -1,3 +1,17 @@
+// TODO: This file is too complex (721 lines) and should be refactored into several modules.
+// Current concerns mixed: Workflow execution orchestration, node execution, state management,
+// validation, logging, conditional logic, parallel execution.
+// 
+// Proposed structure:
+// - workflow/execution-engine/index.ts - Main engine orchestration
+// - workflow/execution-engine/node-executors/ - Individual node type executors
+// - workflow/execution-engine/state-manager.ts - Execution state management
+// - workflow/execution-engine/validator.ts - Workflow validation logic
+// - workflow/execution-engine/logger.ts - Execution logging
+// - workflow/execution-engine/conditional-service.ts - Conditional logic evaluation
+// - workflow/execution-engine/parallel-executor.ts - Parallel node execution
+// - workflow/execution-engine/types.ts - Execution engine types
+
 import { v4 as uuidv4 } from "uuid";
 import type {
     WorkflowDefinition,
@@ -27,6 +41,7 @@ const toNumberOr = (value: unknown, fallback: number): number =>
 
 /**
  * Workflow execution engine for processing workflow definitions
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class WorkflowExecutionEngine {
 	private executions: Map<string, WorkflowExecution> = new Map();
@@ -386,6 +401,7 @@ export interface WorkflowNodeExecutor {
 
 /**
  * Trigger node executor
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class TriggerNodeExecutor implements WorkflowNodeExecutor {
 	async execute(
@@ -400,6 +416,7 @@ export class TriggerNodeExecutor implements WorkflowNodeExecutor {
 
 /**
  * Condition node executor
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class ConditionNodeExecutor implements WorkflowNodeExecutor {
 	async execute(
@@ -479,6 +496,7 @@ export class ConditionNodeExecutor implements WorkflowNodeExecutor {
 
 /**
  * Action node executor
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class ActionNodeExecutor implements WorkflowNodeExecutor {
 	async execute(
@@ -505,6 +523,7 @@ export class ActionNodeExecutor implements WorkflowNodeExecutor {
 
 /**
  * Delay node executor
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class DelayNodeExecutor implements WorkflowNodeExecutor {
 	async execute(node: WorkflowNode): Promise<Record<string, unknown>> {
@@ -537,6 +556,7 @@ export class DelayNodeExecutor implements WorkflowNodeExecutor {
 
 /**
  * Notification node executor
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class NotificationNodeExecutor implements WorkflowNodeExecutor {
 	async execute(
@@ -567,6 +587,7 @@ export class NotificationNodeExecutor implements WorkflowNodeExecutor {
 
 /**
  * Task create node executor
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class TaskCreateNodeExecutor implements WorkflowNodeExecutor {
 	async execute(
@@ -606,6 +627,7 @@ export class TaskCreateNodeExecutor implements WorkflowNodeExecutor {
 
 /**
  * Task update node executor
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class TaskUpdateNodeExecutor implements WorkflowNodeExecutor {
 	async execute(
@@ -632,6 +654,7 @@ export class TaskUpdateNodeExecutor implements WorkflowNodeExecutor {
 
 /**
  * Webhook node executor
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class WebhookNodeExecutor implements WorkflowNodeExecutor {
 	async execute(
@@ -679,6 +702,7 @@ export class WebhookNodeExecutor implements WorkflowNodeExecutor {
 
 /**
  * Script node executor
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class ScriptNodeExecutor implements WorkflowNodeExecutor {
 	async execute(
@@ -719,3 +743,4 @@ export class ScriptNodeExecutor implements WorkflowNodeExecutor {
 		}
 	}
 }
+

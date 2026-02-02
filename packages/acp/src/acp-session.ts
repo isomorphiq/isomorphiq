@@ -18,8 +18,9 @@ export async function startAcpSession(
 	profile: string,
 	context?: Record<string, unknown>,
 	taskId?: string,
+    connectionOptions?: Parameters<typeof ACPConnectionManager.createConnection>[1],
 ): Promise<AcpSession> {
-	const result = await ACPConnectionManager.createConnection();
+	const result = await ACPConnectionManager.createConnection(undefined, connectionOptions);
 	result.taskClient.profileName = profile;
 	return {
 		sessionId: result.sessionId,

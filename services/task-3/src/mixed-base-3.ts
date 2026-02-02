@@ -27,6 +27,9 @@ import {
     TypesExport
 } from "./types.ts";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class MixedOperationManager {
     private resourceLocks: Map<string, ResourceLock[]> = new Map();
     private performanceBaselines: Map<string, PerformanceBaseline> = new Map();

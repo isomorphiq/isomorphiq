@@ -147,6 +147,9 @@ const releaseUserColor = (userId: string): void => {
 };
 
 // Collaboration service implementation
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class CollaborationService implements ICollaborationService {
 	private sessions = new Map<string, TaskEditSession>();
 	private userSessions = new Map<string, Set<string>>();
@@ -407,3 +410,4 @@ export function getCollaborationService(): CollaborationService {
 	}
 	return collaborationService;
 }
+

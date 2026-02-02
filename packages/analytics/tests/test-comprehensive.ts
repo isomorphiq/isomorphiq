@@ -28,6 +28,9 @@ interface ConsolidatedReport {
 	success: boolean;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class ComprehensiveTestRunner {
 	async runTestSuite(
 		name: string,
@@ -193,3 +196,4 @@ runner.runAllTests().catch((error) => {
 });
 
 export { ComprehensiveTestRunner };
+

@@ -38,6 +38,9 @@ export interface TaskDependencyGraph {
   }>;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class AdvancedTaskManager {
   private taskMetrics: Map<string, number> = new Map();
   private dependencyGraph: TaskDependencyGraph = { nodes: [], edges: [] };

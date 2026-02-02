@@ -15,6 +15,9 @@ export interface KeyValueAdapter<K = string, V = unknown> {
     ): Promise<void>;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export abstract class BaseKeyValueAdapter<K = string, V = unknown>
     implements KeyValueAdapter<K, V> {
     abstract open(): Promise<void>;
@@ -24,3 +27,4 @@ export abstract class BaseKeyValueAdapter<K = string, V = unknown>
     abstract del(key: K): Promise<void>;
     abstract iterator(options?: Record<string, unknown>): KeyValueIterator<K, V>;
 }
+

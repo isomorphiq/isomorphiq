@@ -1,9 +1,11 @@
-import { PriorityConsistencyValidator, ProductManager, type TaskPriority } from "@isomorphiq/tasks";
+import { PriorityConsistencyValidator, type TaskPriority } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 import path from "node:path";
 
 /**
  * Enhanced priority consistency testing with optimizations
  * Tests the improved priority update system for performance and consistency
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class EnhancedPriorityConsistencyTester {
     private pm: ProductManager;
@@ -289,3 +291,4 @@ export async function runEnhancedPriorityConsistencyTests(): Promise<void> {
 if (import.meta.main) {
     await runEnhancedPriorityConsistencyTests();
 }
+

@@ -2,6 +2,9 @@ import type { Result } from "@isomorphiq/core";
 import type { SMSProvider } from "./notification-service.ts";
 
 // Twilio SMS provider
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class TwilioSMSProvider implements SMSProvider {
     private accountSid: string;
     private authToken: string;
@@ -40,6 +43,9 @@ export class TwilioSMSProvider implements SMSProvider {
 }
 
 // AWS SNS SMS provider
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class AWSSMSProvider implements SMSProvider {
     private region: string;
     private accessKeyId: string;
@@ -74,6 +80,9 @@ export class AWSSMSProvider implements SMSProvider {
 }
 
 // Mock SMS provider for testing
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class MockSMSProvider implements SMSProvider {
     private sentSMSs: Array<{
         to: string;

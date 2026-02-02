@@ -56,6 +56,9 @@ const resolveDefaultEnvironment = (): string => {
 	return "integration";
 };
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class DaemonTcpClient {
 	private port: number;
 	private host: string;
@@ -347,3 +350,4 @@ export class DaemonTcpClient {
 		return this.sendCommand("send_weekly_digest", { userId, tasks });
 	}
 }
+

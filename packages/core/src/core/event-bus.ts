@@ -8,6 +8,9 @@ import type {
 	EventStore,
 } from "./events.ts";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EventBus extends EventEmitter {
 	private middleware: EventMiddleware[] = [];
 	private eventStore?: EventStore;
@@ -340,3 +343,4 @@ import type {
 	TaskUpdatedEvent,
 	TaskWatchersUpdatedEvent,
 } from "./events.ts";
+

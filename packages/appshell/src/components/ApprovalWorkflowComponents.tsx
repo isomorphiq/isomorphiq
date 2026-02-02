@@ -1,3 +1,18 @@
+// TODO: This file is too complex (854 lines) and should be refactored into several modules.
+// Current concerns mixed: Multiple React components (list, detail, form, stages, decisions),
+// API integration, state management, form handling, approval logic.
+// 
+// Proposed structure:
+// - components/approval-workflow/ - Component directory
+//   - workflow-list.tsx - Workflow list component
+//   - workflow-detail.tsx - Workflow detail view
+//   - workflow-form.tsx - Create/edit workflow form
+//   - stage-manager.tsx - Stage management component
+//   - decision-panel.tsx - Approval decision UI
+//   - hooks/ - Custom hooks for data fetching
+//   - types.ts - Component-specific types
+// - components/approval-workflow/index.ts - Component exports
+
 import { useCallback, useEffect, useState } from "react";
 import type { ApprovalWorkflow, CreateApprovalWorkflowInput } from "@isomorphiq/workflow/approval-types";
 

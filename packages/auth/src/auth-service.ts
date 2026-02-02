@@ -3,6 +3,9 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import type { DeviceInfo, PasswordPolicy, User, UserPreferences, UserProfile } from "./types.ts";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class AuthService {
 	private jwtSecret: string;
 	private jwtRefreshSecret: string;
@@ -283,3 +286,4 @@ export class AuthService {
 		return token.length === 64 && /^[a-f0-9]+$/i.test(token);
 	}
 }
+

@@ -1,3 +1,16 @@
+// TODO: This file is too complex (679 lines) and should be refactored into several modules.
+// Current concerns mixed: Configuration profiles, validation, history tracking,
+// environment-specific settings, performance expectations, use case management.
+// 
+// Proposed structure:
+// - task-3/config/index.ts - Main configuration manager
+// - task-3/config/profile-service.ts - Configuration profile management
+// - task-3/config/validator.ts - Configuration validation logic
+// - task-3/config/history-service.ts - Configuration change tracking
+// - task-3/config/environment-service.ts - Environment-specific configuration
+// - task-3/config/performance-service.ts - Performance expectation management
+// - task-3/config/types.ts - Configuration-specific types
+
 // Configuration Management System for Mixed Base 3 Operations - Task b7c2d592-load
 
 import type {
@@ -27,6 +40,9 @@ export interface ConfigurationValidation {
     warnings: string[];
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ConfigurationManager {
     private profiles: Map<string, ConfigurationProfile> = new Map();
     private activeProfile: string | null = null;

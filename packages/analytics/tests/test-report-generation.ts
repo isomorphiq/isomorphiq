@@ -6,7 +6,7 @@ import "../../../tests/test-utils/env-fetch.ts";
  * Tests various report formats, data aggregation, and export functionality
  */
 
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 import fs from "node:fs";
 import type { Task } from "@isomorphiq/tasks";
 
@@ -63,6 +63,9 @@ interface ReportData {
 	timeline: TimelineEntry[];
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class ReportGeneratorTester {
 	private pm: ProductManager;
 	private results: TestResult[] = [];
@@ -725,3 +728,4 @@ if (require.main === module) {
 }
 
 export { ReportGeneratorTester };
+

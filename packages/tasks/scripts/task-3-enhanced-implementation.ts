@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 
 /**
  * Task 3 Enhancement: Advanced Task Analytics and Reporting
@@ -33,6 +33,9 @@ interface TaskAnalytics {
     } | null;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class TaskAnalyticsService {
     private pm: ProductManager;
 
@@ -195,3 +198,4 @@ async function main() {
 
 // Execute the implementation
 main();
+

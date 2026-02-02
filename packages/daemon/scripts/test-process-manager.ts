@@ -7,6 +7,9 @@
 
 import { ProcessManager } from "../src/services/process-manager.ts";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class ProcessManagerTest {
     private pm: ProcessManager;
 

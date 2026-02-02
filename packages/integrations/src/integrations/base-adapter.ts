@@ -1,15 +1,16 @@
-import type { Task } from "@isomorphiq/tasks";
 import type {
 	ExternalTask,
 	IntegrationAdapter,
 	IntegrationConfig,
 	IntegrationHealth,
 	IntegrationType,
+	IntegrationTask,
 	SyncResult,
 } from "./types.ts";
 
 /**
  * Base implementation for integration adapters
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export abstract class BaseIntegrationAdapter implements IntegrationAdapter {
 	protected config: IntegrationConfig | null = null;
@@ -139,7 +140,7 @@ export abstract class BaseIntegrationAdapter implements IntegrationAdapter {
 	/**
 	 * Sync tasks to external service (outbound)
 	 */
-	async syncOutbound(tasks: Task[]): Promise<SyncResult> {
+	async syncOutbound(tasks: IntegrationTask[]): Promise<SyncResult> {
 		if (!this.isInitialized || !this.config) {
 			throw new Error(`${this.name} adapter not initialized`);
 		}
@@ -219,7 +220,7 @@ export abstract class BaseIntegrationAdapter implements IntegrationAdapter {
 	/**
 	 * Create external task from local task
 	 */
-	async createExternalTask(task: Task): Promise<ExternalTask> {
+	async createExternalTask(task: IntegrationTask): Promise<ExternalTask> {
 		if (!this.isInitialized || !this.config) {
 			throw new Error(`${this.name} adapter not initialized`);
 		}
@@ -246,7 +247,7 @@ export abstract class BaseIntegrationAdapter implements IntegrationAdapter {
 	/**
 	 * Update external task from local task
 	 */
-	async updateExternalTask(task: Task, externalId: string): Promise<ExternalTask> {
+	async updateExternalTask(task: IntegrationTask, externalId: string): Promise<ExternalTask> {
 		if (!this.isInitialized || !this.config) {
 			throw new Error(`${this.name} adapter not initialized`);
 		}
@@ -338,9 +339,14 @@ export abstract class BaseIntegrationAdapter implements IntegrationAdapter {
 	protected abstract onTestConnection(): Promise<boolean>;
 	protected abstract onHealthCheck(): Promise<boolean>;
 	protected abstract onSyncInbound(lastSyncAt?: Date): Promise<ExternalTask[]>;
-	protected abstract onSyncSingleTask(task: Task): Promise<{ created: boolean; updated: boolean }>;
-	protected abstract onCreateExternalTask(task: Task): Promise<ExternalTask>;
-	protected abstract onUpdateExternalTask(task: Task, externalId: string): Promise<ExternalTask>;
+	protected abstract onSyncSingleTask(
+		task: IntegrationTask,
+	): Promise<{ created: boolean; updated: boolean }>;
+	protected abstract onCreateExternalTask(task: IntegrationTask): Promise<ExternalTask>;
+	protected abstract onUpdateExternalTask(
+		task: IntegrationTask,
+		externalId: string,
+	): Promise<ExternalTask>;
 	protected abstract onDeleteExternalTask(externalId: string): Promise<void>;
 	protected abstract onHandleWebhook(payload: Record<string, unknown>): Promise<void>;
 	protected abstract onCleanup(): Promise<void>;
@@ -397,7 +403,11 @@ export abstract class BaseIntegrationAdapter implements IntegrationAdapter {
 		return priorityMap[priority] || priority;
 	}
 
-	protected createExternalTaskFromTask(task: Task, externalId: string, url?: string): ExternalTask {
+	protected createExternalTaskFromTask(
+		task: IntegrationTask,
+		externalId: string,
+		url?: string,
+	): ExternalTask {
 		return {
 			id: `external-${this.type}-${externalId}`,
 			source: this.type,

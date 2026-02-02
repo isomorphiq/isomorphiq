@@ -1,5 +1,4 @@
 import { ValidationError, type Result } from "@isomorphiq/core";
-import type { Task } from "@isomorphiq/tasks";
 import { CalendarIntegration } from "./calendar-adapter.ts";
 import { GitHubIntegration } from "./github-adapter.ts";
 import { IntegrationManager } from "./integration-manager.ts";
@@ -11,11 +10,13 @@ import type {
 	IntegrationHealth,
 	IntegrationStats,
 	IntegrationType,
+	IntegrationTask,
 	SyncResult,
 } from "./types.ts";
 
 /**
  * Main integration service that provides high-level integration functionality
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class IntegrationService {
 	private integrationManager: IntegrationManager;
@@ -262,7 +263,7 @@ export class IntegrationService {
 	/**
 	 * Sync task with all relevant integrations
 	 */
-	async syncTaskWithIntegrations(task: Task): Promise<Result<void>> {
+	async syncTaskWithIntegrations(task: IntegrationTask): Promise<Result<void>> {
 			try {
 				const allIntegrationsResult = await this.getAllIntegrations();
 				if (!allIntegrationsResult.success) {
@@ -433,7 +434,10 @@ export class IntegrationService {
 	/**
 	 * Check if task should be synced to integration
 	 */
-	private async shouldSyncTask(_task: Task, integration: IntegrationConfig): Promise<boolean> {
+	private async shouldSyncTask(
+		_task: IntegrationTask,
+		integration: IntegrationConfig,
+	): Promise<boolean> {
 		// Basic filtering logic - can be extended based on integration settings
 		switch (integration.type) {
 			case "github": {

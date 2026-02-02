@@ -1,6 +1,8 @@
 import type { Task } from "@isomorphiq/tasks/types";
 
 const colors: Record<Task["type"] | "unknown", { bg: string; text: string }> = {
+	theme: { bg: "#ecfccb", text: "#3f6212" },
+	initiative: { bg: "#ccfbf1", text: "#0f766e" },
 	feature: { bg: "#dbeafe", text: "#1d4ed8" },
 	story: { bg: "#fef3c7", text: "#b45309" },
 	task: { bg: "#ecfdf3", text: "#15803d" },

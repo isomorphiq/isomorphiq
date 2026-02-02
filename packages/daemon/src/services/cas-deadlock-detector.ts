@@ -1,4 +1,4 @@
-import { type Task } from "../web/tcp-client.ts";
+import type { Task } from "@isomorphiq/dashboard";
 
 export interface CASOperation {
     id: string;
@@ -26,6 +26,9 @@ export interface DeadlockDetectionResult {
     resolutionStrategy: "timeout" | "victim_selection" | "wait_for_graph";
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class DeadlockDetector {
     private activeLocks: Map<string, ResourceLock[]> = new Map();
     private waitGraph: Map<string, Set<string>> = new Map();

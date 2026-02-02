@@ -1,6 +1,9 @@
 import { ProcessManager } from "./services/process-manager.ts";
 
 // Enhanced Daemon Process with improved lifecycle management
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class EnhancedDaemon {
 	private processManager: ProcessManager;
 	private isShuttingDown = false;
@@ -290,3 +293,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 export { EnhancedDaemon };
+

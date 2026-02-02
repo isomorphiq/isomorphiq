@@ -1,3 +1,18 @@
+// TODO: This file is too complex (991 lines) and should be refactored into several modules.
+// Current concerns mixed: React components for CLI UI, session state management, input handling,
+// real-time updates, workflow visualization, task display components.
+// 
+// Proposed structure:
+// - cli-ui/components/ - Individual React components
+//   - session-view.tsx, task-list.tsx, workflow-view.tsx, status-bar.tsx
+// - cli-ui/hooks/ - Custom React hooks
+//   - use-session.ts, use-input-handler.ts, use-updates.ts
+// - cli-ui/state/ - State management
+//   - session-store.ts, update-reducer.ts
+// - cli-ui/renderers/ - Output rendering utilities
+// - cli-ui/types.ts - UI-specific types
+// - cli-ui/index.ts - Main UI composition
+
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, render, useInput, useStdout, useStdin } from "ink";
 import fs from "node:fs";
@@ -8,9 +23,11 @@ type SessionUpdatePayload = Record<string, unknown> & {
     content?: { type?: string; text?: string };
     update?: { sessionUpdate?: string; content?: { type?: string; text?: string } };
     updates?: { sessionUpdate?: string; content?: { type?: string; text?: string } };
+    sessionId?: string;
     profileName?: string;
     runtimeName?: string;
     modelName?: string;
+    requestedModelName?: string;
     mcpTools?: string[];
     timestamp?: string;
     taskId?: string;
@@ -18,7 +35,10 @@ type SessionUpdatePayload = Record<string, unknown> & {
     taskType?: string;
     taskStatus?: string;
     workflowState?: string;
+    workflowSourceState?: string;
+    workflowTargetState?: string;
     workflowTransition?: string;
+    isDecider?: boolean;
 };
 
 type TurnState = {
@@ -27,21 +47,27 @@ type TurnState = {
     message: string;
     updatedAt: string;
     isProcessing: boolean;
+    sessionId?: string;
     profileName?: string;
     runtimeName?: string;
     modelName?: string;
+    requestedModelName?: string;
     mcpTools?: string[];
     taskType?: string;
     taskId?: string;
     taskTitle?: string;
     workflowState?: string;
+    workflowSourceState?: string;
+    workflowTargetState?: string;
     workflowTransition?: string;
+    isDecider?: boolean;
 };
 
 type UiState = {
     turns: TurnState[];
     currentTurnId: number;
     activeTurnId: number;
+    turnBySessionId: Record<string, number>;
     systemMessages: Array<{
         id: number;
         text: string;
@@ -49,7 +75,7 @@ type UiState = {
     }>;
 };
 
-type FocusTarget = "system" | "recent" | "thought" | "message";
+type FocusTarget = "system" | "thought" | "message" | "prev" | "next";
 
 type CliConfig = {
     streamPath?: string;
@@ -106,6 +132,42 @@ const clampSystem = (
 ): Array<{ id: number; text: string; timestamp: string }> =>
     messages.length > maxMessages ? messages.slice(messages.length - maxMessages) : messages;
 
+const navigateTurn = (state: UiState, isPrevTurn: boolean): UiState => {
+    const orderedTurns = [...state.turns].sort((a, b) => a.id - b.id);
+    if (orderedTurns.length === 0) {
+        return state;
+    }
+    const currentIndex = orderedTurns.findIndex(
+        (turn) => turn.id === state.activeTurnId,
+    );
+    const safeIndex = currentIndex >= 0 ? currentIndex : orderedTurns.length - 1;
+    const nextIndex = isPrevTurn ? safeIndex - 1 : safeIndex + 1;
+    if (nextIndex < 0 || nextIndex >= orderedTurns.length) {
+        return state;
+    }
+    return {
+        ...state,
+        activeTurnId: orderedTurns[nextIndex].id,
+    };
+};
+
+const normalizeActiveTurnId = (state: UiState): UiState => {
+    if (state.turns.length === 0) {
+        return state;
+    }
+    if (state.turns.some((turn) => turn.id === state.activeTurnId)) {
+        return state;
+    }
+    const sorted = [...state.turns].sort((a, b) => a.id - b.id);
+    const minId = sorted[0].id;
+    const maxId = sorted[sorted.length - 1].id;
+    const nextActiveId = state.activeTurnId < minId ? minId : maxId;
+    return {
+        ...state,
+        activeTurnId: nextActiveId,
+    };
+};
+
 const readUpdateType = (payload: SessionUpdatePayload): string | null =>
     payload.sessionUpdate ??
     payload.update?.sessionUpdate ??
@@ -121,12 +183,36 @@ const readContentText = (payload: SessionUpdatePayload): string => {
     return typeof content?.text === "string" ? content.text : "";
 };
 
+const readSessionId = (payload: SessionUpdatePayload): string | null => {
+    const candidate =
+        payload.sessionId ??
+        (payload.update as { sessionId?: unknown } | undefined)?.sessionId ??
+        (payload.updates as { sessionId?: unknown } | undefined)?.sessionId;
+    if (typeof candidate !== "string") {
+        return null;
+    }
+    const trimmed = candidate.trim();
+    return trimmed.length > 0 ? trimmed : null;
+};
+
 const WORKFLOW_TRANSITIONS: Array<{
     source: string;
     target: string;
     label: string;
 }> = [
+    { source: "themes-proposed", target: "themes-proposed", label: "retry-theme-research" },
+    { source: "themes-proposed", target: "themes-prioritized", label: "prioritize-themes" },
+    { source: "themes-prioritized", target: "themes-proposed", label: "request-theme" },
+    { source: "themes-prioritized", target: "initiatives-proposed", label: "define-initiatives" },
+    { source: "themes-prioritized", target: "initiatives-prioritized", label: "prioritize-initiatives" },
+    { source: "initiatives-proposed", target: "initiatives-proposed", label: "retry-initiative-research" },
+    { source: "initiatives-proposed", target: "initiatives-prioritized", label: "prioritize-initiatives" },
+    { source: "initiatives-proposed", target: "themes-proposed", label: "request-theme" },
+    { source: "initiatives-prioritized", target: "initiatives-proposed", label: "define-initiatives" },
+    { source: "initiatives-prioritized", target: "new-feature-proposed", label: "research-new-features" },
+    { source: "initiatives-prioritized", target: "features-prioritized", label: "prioritize-features" },
     { source: "new-feature-proposed", target: "new-feature-proposed", label: "retry-product-research" },
+    { source: "new-feature-proposed", target: "initiatives-proposed", label: "define-initiatives" },
     { source: "new-feature-proposed", target: "features-prioritized", label: "prioritize-features" },
     { source: "features-prioritized", target: "stories-created", label: "do-ux-research" },
     { source: "features-prioritized", target: "stories-prioritized", label: "prioritize-stories" },
@@ -137,12 +223,13 @@ const WORKFLOW_TRANSITIONS: Array<{
     { source: "tasks-prepared", target: "task-completed", label: "close-invalid-task" },
     { source: "tasks-prepared", target: "stories-prioritized", label: "need-more-tasks" },
     { source: "task-in-progress", target: "tests-completed", label: "run-tests" },
-    { source: "task-in-progress", target: "task-in-progress", label: "additional-implementation" },
     { source: "task-in-progress", target: "tasks-prepared", label: "refine-task" },
     { source: "tests-completed", target: "task-completed", label: "tests-passing" },
     { source: "tests-completed", target: "task-in-progress", label: "tests-failed" },
     { source: "task-completed", target: "tasks-prepared", label: "pick-up-next-task" },
-    { source: "task-completed", target: "new-feature-proposed", label: "research-new-features" },
+    { source: "task-completed", target: "themes-proposed", label: "research-new-themes" },
+    { source: "task-completed", target: "themes-prioritized", label: "prioritize-themes" },
+    { source: "task-completed", target: "initiatives-prioritized", label: "prioritize-initiatives" },
     { source: "task-completed", target: "features-prioritized", label: "prioritize-features" },
     { source: "task-completed", target: "stories-prioritized", label: "prioritize-stories" },
 ];
@@ -173,14 +260,70 @@ const clampLines = (content: string, maxLines: number): string => {
 
 const updateTurn = (
     state: UiState,
+    turnId: number,
     updater: (turn: TurnState) => TurnState,
 ): UiState => {
-    const existing = state.turns.find((turn) => turn.id === state.currentTurnId);
-    const updated = updater(existing ?? createTurn(state.currentTurnId));
+    const existing = state.turns.find((turn) => turn.id === turnId);
+    const updated = updater(existing ?? createTurn(turnId));
     const remaining = state.turns.filter((turn) => turn.id !== updated.id);
-    return {
+    const nextTurns = clampTurns([...remaining, updated], 12);
+    const allowedIds = new Set(nextTurns.map((turn) => turn.id));
+    const nextMappings = Object.fromEntries(
+        Object.entries(state.turnBySessionId).filter(([, id]) => allowedIds.has(id)),
+    );
+    const nextState = {
         ...state,
-        turns: clampTurns([...remaining, updated], 12),
+        turns: nextTurns,
+        turnBySessionId: nextMappings,
+    };
+    return normalizeActiveTurnId(nextState);
+};
+
+const assignTurnForSession = (
+    state: UiState,
+    sessionId: string | null,
+): { state: UiState; turnId: number } => {
+    if (!sessionId) {
+        return { state: normalizeActiveTurnId(state), turnId: state.currentTurnId };
+    }
+    const existing = state.turnBySessionId[sessionId];
+    if (existing !== undefined) {
+        return { state: normalizeActiveTurnId(state), turnId: existing };
+    }
+    const usedTurnIds = new Set(Object.values(state.turnBySessionId));
+    if (!usedTurnIds.has(state.currentTurnId)) {
+        return {
+            state: {
+                ...state,
+                turnBySessionId: {
+                    ...state.turnBySessionId,
+                    [sessionId]: state.currentTurnId,
+                },
+            },
+            turnId: state.currentTurnId,
+        };
+    }
+    const nextId = state.currentTurnId + 1;
+    const nextTurn = createTurn(nextId);
+    const nextActiveId =
+        state.activeTurnId === state.currentTurnId ? nextId : state.activeTurnId;
+    const nextTurns = clampTurns([...state.turns, nextTurn], 12);
+    const nextMappings = Object.fromEntries(
+        Object.entries({
+            ...state.turnBySessionId,
+            [sessionId]: nextId,
+        }).filter(([, id]) => nextTurns.some((turn) => turn.id === id)),
+    );
+    const nextState = {
+            ...state,
+            turns: nextTurns,
+            currentTurnId: nextId,
+            activeTurnId: nextActiveId,
+            turnBySessionId: nextMappings,
+    };
+    return {
+        state: normalizeActiveTurnId(nextState),
+        turnId: nextId,
     };
 };
 
@@ -317,23 +460,31 @@ const readFileTail = (
 };
 
 const applyUpdate = (state: UiState, payload: SessionUpdatePayload): UiState => {
-    const updateType = readUpdateType(payload);
-    if (!updateType) {
+    const updateTypeRaw = readUpdateType(payload);
+    if (!updateTypeRaw) {
         return state;
     }
-    const metaState = state;
+    const normalizedType = updateTypeRaw.trim().toLowerCase();
+    const updateType = normalizedType.replace(/[\s-]+/g, "_");
+    const sessionId = readSessionId(payload);
+    const { state: metaState, turnId } = assignTurnForSession(state, sessionId);
 
     const metaUpdate = (turn: TurnState): TurnState => ({
         ...turn,
+        sessionId: sessionId ?? turn.sessionId,
         profileName: payload.profileName ?? turn.profileName,
         runtimeName: payload.runtimeName ?? turn.runtimeName,
         modelName: payload.modelName ?? turn.modelName,
+        requestedModelName: payload.requestedModelName ?? turn.requestedModelName,
         mcpTools: payload.mcpTools ?? turn.mcpTools,
         taskType: payload.taskType ?? turn.taskType,
         taskId: payload.taskId ?? turn.taskId,
         taskTitle: payload.taskTitle ?? turn.taskTitle,
         workflowState: payload.workflowState ?? turn.workflowState,
+        workflowSourceState: payload.workflowSourceState ?? turn.workflowSourceState,
+        workflowTargetState: payload.workflowTargetState ?? turn.workflowTargetState,
         workflowTransition: payload.workflowTransition ?? turn.workflowTransition,
+        isDecider: payload.isDecider ?? turn.isDecider,
         updatedAt: payload.timestamp ? formatTimestamp(payload.timestamp) : turn.updatedAt,
     });
 
@@ -342,7 +493,7 @@ const applyUpdate = (state: UiState, payload: SessionUpdatePayload): UiState => 
         if (!text) {
             return metaState;
         }
-        return updateTurn(metaState, (turn) =>
+        return updateTurn(metaState, turnId, (turn) =>
             metaUpdate({
                 ...turn,
                 message: `${turn.message}${text}`,
@@ -356,7 +507,7 @@ const applyUpdate = (state: UiState, payload: SessionUpdatePayload): UiState => 
         if (!text) {
             return metaState;
         }
-        return updateTurn(metaState, (turn) =>
+        return updateTurn(metaState, turnId, (turn) =>
             metaUpdate({
                 ...turn,
                 thought: `${turn.thought}${text}`,
@@ -366,24 +517,40 @@ const applyUpdate = (state: UiState, payload: SessionUpdatePayload): UiState => 
     }
 
     if (["turn_complete", "end_turn", "session_complete"].includes(updateType)) {
-        const nextId = state.currentTurnId + 1;
-        const nextTurn = createTurn(nextId);
-        const updatedTurns = state.turns.map((turn) =>
-            turn.id === state.currentTurnId ? { ...turn, isProcessing: false } : turn,
+        const markedState = updateTurn(metaState, turnId, (turn) =>
+            metaUpdate({
+                ...turn,
+                isProcessing: false,
+            }),
         );
+        if (turnId !== markedState.currentTurnId) {
+            return markedState;
+        }
+        const nextId = markedState.currentTurnId + 1;
+        const nextTurn = createTurn(nextId);
         const nextActiveId =
-            state.activeTurnId === state.currentTurnId ? nextId : state.activeTurnId;
-        return {
-            ...metaState,
-            turns: clampTurns([...updatedTurns, nextTurn], 12),
+            markedState.activeTurnId === markedState.currentTurnId
+                ? nextId
+                : markedState.activeTurnId;
+        const nextTurns = clampTurns([...markedState.turns, nextTurn], 12);
+        const nextMappings = Object.fromEntries(
+            Object.entries(markedState.turnBySessionId).filter(([, id]) =>
+                nextTurns.some((turn) => turn.id === id),
+            ),
+        );
+        const nextState = {
+            ...markedState,
+            turns: nextTurns,
             currentTurnId: nextId,
             activeTurnId: nextActiveId,
-            systemMessages: metaState.systemMessages,
+            turnBySessionId: nextMappings,
         };
+        return normalizeActiveTurnId(nextState);
     }
 
     return updateTurn(
         appendSystemMessage(metaState, payload, updateType),
+        turnId,
         (turn) => metaUpdate(turn),
     );
 };
@@ -461,7 +628,15 @@ const TurnBox = ({
             ? `Model: ${turn.modelName}`
             : "Model: —"
         : "Model: —";
+    const requestedLabel =
+        showModel && turn.requestedModelName
+            ? `Requested: ${turn.requestedModelName}`
+            : "Requested: —";
     const agentLabel = turn.runtimeName ? `Agent: ${turn.runtimeName}` : "Agent: —";
+    const workflowSourceState = turn.workflowSourceState ?? turn.workflowState;
+    const workflowTargetState =
+        turn.workflowTargetState ??
+        resolveTransitionTarget(workflowSourceState, turn.workflowTransition);
 
     return React.createElement(
         Box,
@@ -496,6 +671,11 @@ const TurnBox = ({
                 { color: "green" },
                 modelLabel,
             ),
+        ),
+        React.createElement(
+            Box,
+            { flexDirection: "row", justifyContent: "flex-end" },
+            React.createElement(Text, { color: "gray" }, requestedLabel),
         ),
         React.createElement(
             Box,
@@ -534,7 +714,9 @@ const TurnBox = ({
                 Text,
                 { color: "cyan" },
                 turn.workflowTransition
-                    ? `Transition: ${turn.workflowTransition}`
+                    ? turn.isDecider
+                        ? `Decider: ${turn.workflowTransition}`
+                        : `Transition: ${turn.workflowTransition}`
                     : "Transition: —",
             ),
         ),
@@ -544,18 +726,12 @@ const TurnBox = ({
             React.createElement(
                 Text,
                 { color: "magenta" },
-                turn.workflowState ? `From: ${turn.workflowState}` : "From: —",
+                workflowSourceState ? `From: ${workflowSourceState}` : "From: —",
             ),
             React.createElement(
                 Text,
                 { color: "magenta" },
-                (() => {
-                    const target = resolveTransitionTarget(
-                        turn.workflowState,
-                        turn.workflowTransition,
-                    );
-                    return target ? `To: ${target}` : "To: —";
-                })(),
+                workflowTargetState ? `To: ${workflowTargetState}` : "To: —",
             ),
         ),
         React.createElement(
@@ -594,6 +770,7 @@ const App = () => {
         turns: [createTurn(1)],
         currentTurnId: 1,
         activeTurnId: 1,
+        turnBySessionId: {},
         systemMessages: [],
     });
     const [focusedBox, setFocusedBox] = useState<FocusTarget>("message");
@@ -606,32 +783,14 @@ const App = () => {
         rows: stdout.rows ?? 24,
     }));
 
-    const focusOrder: FocusTarget[] = ["system", "thought", "message"];
+    const focusOrder: FocusTarget[] = ["system", "thought", "message", "prev", "next"];
 
     useInput(
         (input, key) => {
             const isPrevTurn = key.leftArrow || input === "h" || input === "[";
             const isNextTurn = key.rightArrow || input === "l" || input === "]";
             if (isPrevTurn || isNextTurn) {
-                setState((prev) => {
-                    const orderedTurns = [...prev.turns].sort((a, b) => a.id - b.id);
-                    if (orderedTurns.length === 0) {
-                        return prev;
-                    }
-                    const currentIndex = orderedTurns.findIndex(
-                        (turn) => turn.id === prev.activeTurnId,
-                    );
-                    const safeIndex =
-                        currentIndex >= 0 ? currentIndex : orderedTurns.length - 1;
-                    const nextIndex = isPrevTurn ? safeIndex - 1 : safeIndex + 1;
-                    if (nextIndex < 0 || nextIndex >= orderedTurns.length) {
-                        return prev;
-                    }
-                    return {
-                        ...prev,
-                        activeTurnId: orderedTurns[nextIndex].id,
-                    };
-                });
+                setState((prev) => navigateTurn(prev, isPrevTurn));
                 return;
             }
 
@@ -643,21 +802,36 @@ const App = () => {
                 return;
             }
 
-        if (input === "m") {
-            setMaximizedBox((current) => (current ? null : focusedBox));
-            return;
-        }
+            if (input === "m") {
+                if (focusedBox === "system" || focusedBox === "thought" || focusedBox === "message") {
+                    setMaximizedBox((current) => (current ? null : focusedBox));
+                }
+                return;
+            }
 
-        if (key.escape && maximizedBox) {
-            setMaximizedBox(null);
-            return;
-        }
+            if (key.return || input === "\r" || input === "\n") {
+                if (focusedBox === "prev") {
+                    setState((prev) => navigateTurn(prev, true));
+                    return;
+                }
+                if (focusedBox === "next") {
+                    setState((prev) => navigateTurn(prev, false));
+                    return;
+                }
+            }
+
+            if (key.escape && maximizedBox) {
+                setMaximizedBox(null);
+                return;
+            }
 
             const now = Date.now();
             const isMouseSequence = input.startsWith("\u001b[M") || input.startsWith("\u001b[<");
             if (isMouseSequence) {
                 if (lastClickAt && now - lastClickAt < 400) {
-                    setMaximizedBox((current) => (current ? null : focusedBox));
+                    if (focusedBox === "system" || focusedBox === "thought" || focusedBox === "message") {
+                        setMaximizedBox((current) => (current ? null : focusedBox));
+                    }
                 }
                 setLastClickAt(now);
             }
@@ -844,7 +1018,11 @@ const App = () => {
             { flexDirection: "row", justifyContent: "space-between", marginTop: 1 },
             React.createElement(
                 Text,
-                { color: hasPrevTurn ? "cyan" : "gray" },
+                {
+                    color: hasPrevTurn ? "cyan" : "gray",
+                    inverse: focusedBox === "prev",
+                    bold: focusedBox === "prev",
+                },
                 hasPrevTurn ? "◀ Prev" : "◀ Prev",
             ),
             React.createElement(
@@ -856,7 +1034,11 @@ const App = () => {
             ),
             React.createElement(
                 Text,
-                { color: hasNextTurn ? "cyan" : "gray" },
+                {
+                    color: hasNextTurn ? "cyan" : "gray",
+                    inverse: focusedBox === "next",
+                    bold: focusedBox === "next",
+                },
                 hasNextTurn ? "Next ▶" : "Next ▶",
             ),
         ),

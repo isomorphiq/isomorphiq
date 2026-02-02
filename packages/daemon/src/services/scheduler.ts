@@ -1,7 +1,22 @@
+// TODO: This file is too complex (695 lines) and should be refactored into several modules.
+// Current concerns mixed: Schedule management, cron parsing, task execution,
+// dependency-aware scheduling, validation, statistics, timezone handling.
+// 
+// Proposed structure:
+// - scheduling/scheduler/index.ts - Main scheduler orchestration
+// - scheduling/scheduler/schedule-store.ts - Schedule persistence and CRUD
+// - scheduling/scheduler/cron-parser.ts - Cron expression parsing and validation
+// - scheduling/scheduler/executor.ts - Scheduled task execution
+// - scheduling/scheduler/dependency-scheduler.ts - Dependency-aware scheduling
+// - scheduling/scheduler/validator.ts - Schedule validation logic
+// - scheduling/scheduler/statistics-service.ts - Schedule statistics and reporting
+// - scheduling/scheduler/timezone-service.ts - Timezone handling
+// - scheduling/scheduler/types.ts - Scheduler-specific types
+
 import { EventEmitter } from "node:events";
 import * as cron from "node-cron";
-import type { ProductManager } from "@isomorphiq/tasks";
-import type { Task } from "@isomorphiq/tasks";
+import type { ProductManager } from "@isomorphiq/user-profile";
+import { TaskTypeSchema, type Task, type TaskType } from "@isomorphiq/tasks";
 import { DependencyGraphService } from "./dependency-graph.ts";
 
 export interface ScheduledTask {
@@ -14,7 +29,7 @@ export interface ScheduledTask {
 		title: string;
 		description: string;
 		priority: "high" | "medium" | "low";
-		type?: string;
+		type?: TaskType;
 		createdBy?: string;
 		assignedTo?: string;
 		collaborators?: string[];
@@ -50,6 +65,9 @@ export interface ScheduleValidationResult {
 	nextRuns?: string[];
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class TaskScheduler extends EventEmitter {
 	private productManager: ProductManager;
 	private scheduledTasks: Map<string, ScheduledTask> = new Map();
@@ -63,6 +81,11 @@ export class TaskScheduler extends EventEmitter {
 		this.productManager = productManager;
 		this.dependencyGraphService = new DependencyGraphService();
 	}
+
+    private resolveTaskType(raw: unknown): TaskType {
+        const parsed = TaskTypeSchema.safeParse(raw);
+        return parsed.success ? parsed.data : "task";
+    }
 
 	// Initialize the scheduler
 	async initialize(): Promise<void> {
@@ -131,11 +154,21 @@ export class TaskScheduler extends EventEmitter {
 		// Stop existing cron job if running
 		await this.stopScheduledTask(id);
 
+        const nextUpdatedAt = new Date().toISOString();
+        const existingUpdatedAt = Date.parse(existingTask.updatedAt);
+        const nextUpdatedAtMs = Date.parse(nextUpdatedAt);
+        const updatedAt =
+            Number.isNaN(existingUpdatedAt)
+            || Number.isNaN(nextUpdatedAtMs)
+            || nextUpdatedAtMs > existingUpdatedAt
+                ? nextUpdatedAt
+                : new Date(existingUpdatedAt + 1).toISOString();
+
 		// Update the task
 		const updatedTask: ScheduledTask = {
 			...existingTask,
 			...updates,
-			updatedAt: new Date().toISOString(),
+			updatedAt,
 		};
 
 		this.scheduledTasks.set(id, updatedTask);
@@ -344,7 +377,7 @@ export class TaskScheduler extends EventEmitter {
 				taskData.assignedTo,
 				taskData.collaborators,
 				taskData.watchers,
-				taskData.type,
+				this.resolveTaskType(taskData.type),
 			);
 
 			// Update execution stats

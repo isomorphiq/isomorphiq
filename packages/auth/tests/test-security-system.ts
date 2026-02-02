@@ -1,3 +1,26 @@
+// TODO: This test file is too complex (677 lines) and should be refactored into several modules.
+// Current concerns mixed: RBAC tests, security policy tests, audit logging tests,
+// security alert tests, encryption tests, compliance tests.
+// 
+// Proposed structure:
+// - auth/tests/rbac/ - RBAC-specific tests
+//   - role-management.test.ts
+//   - permission-checks.test.ts
+//   - constraint-validation.test.ts
+// - auth/tests/security/ - Security service tests
+//   - security-policies.test.ts
+//   - encryption.test.ts
+//   - ip-restriction.test.ts
+// - auth/tests/audit/ - Audit logging tests
+//   - audit-logs.test.ts
+//   - audit-queries.test.ts
+// - auth/tests/alerts/ - Security alert tests
+//   - alert-creation.test.ts
+//   - alert-management.test.ts
+// - auth/tests/compliance/ - Compliance tests
+//   - data-retention.test.ts
+//   - gdpr-compliance.test.ts
+
 import "../../../tests/test-utils/env-fetch.ts";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { expect } from "../../../test-utils/expect.ts";

@@ -1,7 +1,7 @@
 import type express from "express";
 import { CriticalPathService } from "@isomorphiq/tasks/critical-path";
 import type { Task, TaskStatus } from "@isomorphiq/tasks";
-import type { ProductManager } from "@isomorphiq/tasks";
+import type { ProductManager } from "@isomorphiq/user-profile";
 import { getUserManager } from "@isomorphiq/auth";
 import {
     authenticateToken,
@@ -201,6 +201,8 @@ export function registerTaskRoutes(
                 }
                 if (
                     ![
+                        "theme",
+                        "initiative",
                         "feature",
                         "story",
                         "task",

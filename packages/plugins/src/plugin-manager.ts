@@ -13,6 +13,7 @@ import type {
 
 /**
  * Plugin manager implementation
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class PluginManager extends EventEmitter implements PluginManagerContract {
 	private registry = new Map<string, PluginRegistryEntry>();
@@ -415,3 +416,4 @@ export class PluginManager extends EventEmitter implements PluginManagerContract
 		console.log("[PLUGIN-MANAGER] Plugin manager shutdown complete");
 	}
 }
+

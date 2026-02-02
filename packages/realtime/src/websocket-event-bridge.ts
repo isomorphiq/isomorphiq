@@ -74,6 +74,9 @@ const buildFallbackTask = (taskId: string, dependencies: string[] = []): Task =>
 	});
 
 // WebSocket event bridge that converts domain events to WebSocket events
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class WebSocketEventBridge {
 	private wsManager: EnhancedWebSocketManager;
 	private eventMappings: Map<string, (event: DomainEvent) => WebSocketEvent> = new Map();
@@ -296,6 +299,9 @@ export class WebSocketEventBridge {
 }
 
 // Enhanced WebSocket manager with event integration
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EventIntegratedWebSocketManager extends EnhancedWebSocketManager {
 	private eventBridge: WebSocketEventBridge;
 	private eventSubscriptions: Array<{
@@ -386,3 +392,4 @@ export function createEventIntegratedWebSocketManager(
 ): EventIntegratedWebSocketManager {
 	return new EventIntegratedWebSocketManager(config);
 }
+

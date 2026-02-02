@@ -19,6 +19,9 @@ import type {
     UpdateSecurityPolicyInput,
 } from "./security-types.ts";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class SecurityService {
 	private securityDb!: Level<string, SecurityPolicy>;
 	private auditDb!: Level<string, AuditLog>;
@@ -890,3 +893,4 @@ export function getSecurityService(): SecurityService {
 	}
 	return sharedSecurityService;
 }
+

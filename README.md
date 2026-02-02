@@ -47,7 +47,9 @@ Note: The current implementation spawns the opencode process for each command. E
 
 ## MCP Server Integration
 
-The application includes an MCP (Model Context Protocol) server that allows Isomorphiq agents to directly manage tasks. The MCP server exposes tools for creating, reading, updating, and prioritizing tasks stored in LevelDB.
+The application includes an MCP (Model Context Protocol) server that allows Isomorphiq agents to directly manage tasks. The MCP server exposes tools for creating, reading, updating, and prioritizing tasks stored in LevelDB via the tasks microservice.
+
+Note: MCP task and context operations currently talk directly to the tasks/context microservices (tRPC) to avoid daemon-held LevelDB locks. The long-term plan is to route these operations through the gateway once it exposes orchestration endpoints (see TODO in `packages/mcp/src/mcp-server.ts`).
 
 ### Starting the MCP Server
 ```bash
@@ -86,7 +88,7 @@ See `mcp-config.md` and `opencode-mcp-setup.md` for detailed configuration instr
 The Isomorphiq Task Manager MCP app is now **launch-ready** with full MCP server functionality and automated task processing.
 
 ### ✅ Launch Checklist Completed
-- [x] MCP server with 9 working tools
+- [x] MCP server with task + context tools
 - [x] Daemon task processing with realistic simulation
 - [x] Comprehensive error handling and detection
 - [x] End-to-end integration testing
@@ -106,8 +108,9 @@ The Isomorphiq Task Manager MCP app is now **launch-ready** with full MCP server
 
 3. **Start the task daemon:**
    ```bash
-   yarn run daemon
+   yarn run supervisor
    ```
+   This starts the daemon and the tasks microservice together.
 
 4. **Test MCP tools:**
    ```bash
@@ -124,6 +127,12 @@ The Isomorphiq Task Manager MCP app is now **launch-ready** with full MCP server
 | `update_task_status` | Update task status | ✅ Working |
 | `update_task_priority` | Change task priority | ✅ Working |
 | `delete_task` | Remove tasks | ✅ Working |
+| `create_context` | Create a workflow context record | ✅ Working |
+| `get_context` | Retrieve a context record | ✅ Working |
+| `update_context` | Merge updates into context data | ✅ Working |
+| `replace_context` | Replace full context data | ✅ Working |
+| `delete_context` | Remove a context record | ✅ Working |
+| `list_contexts` | List context records | ✅ Working |
 | `check_daemon_status` | Check daemon health | ✅ Working |
 | `start_daemon` | Start daemon if stopped | ✅ Working |
 | `restart_daemon` | Gracefully restart daemon | ✅ Working |
@@ -131,7 +140,10 @@ The Isomorphiq Task Manager MCP app is now **launch-ready** with full MCP server
 ### Architecture
 
 - **MCP Server**: Provides tools for task management to OpenCode agents
-- **Task Daemon**: Processes tasks in background with realistic simulation
+- **Gateway**: Orchestrates cross-service requests and proxies `/trpc` to the tasks microservice
+- **Tasks Microservice**: Owns task-only logic, holds the LevelDB lock, and exposes the tRPC API
+- **Context Microservice**: Owns workflow context storage, holds the LevelDB lock, and exposes the tRPC API
+- **Task Daemon**: Processes tasks in background with realistic simulation (non-task orchestration stays in gateway)
 - **LevelDB Storage**: Persistent task storage with priority management
 - **TCP Communication**: Reliable inter-process communication
 
@@ -143,7 +155,8 @@ yarn run build
 
 # Start services
 yarn run start-mcp &
-yarn run daemon &
+yarn run supervisor &
+yarn run gateway &
 
 # Monitor logs
 tail -f mcp-server.log daemon.log

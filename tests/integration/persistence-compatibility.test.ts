@@ -11,6 +11,9 @@ import { expect } from "../../tests/test-utils/expect.ts";
 import { randomUUID } from "node:crypto";
 
 // Simple in-memory adapter for testing
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class InMemoryKeyValueAdapter<K = string, V = unknown> implements KeyValueAdapter<K, V> {
     private store = new Map<K, V>();
     private isOpen = false;

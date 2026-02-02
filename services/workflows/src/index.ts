@@ -1,4 +1,4 @@
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 import { ProfileManager } from "@isomorphiq/user-profile";
 import { createWorkflowAgentRunner } from "@isomorphiq/workflow/agent-runner";
 import { ProfileWorkflowRunner } from "@isomorphiq/workflow";
@@ -16,6 +16,9 @@ export async function startWorkflowsService(): Promise<void> {
     const runner = new ProfileWorkflowRunner({
         taskProvider: () => pm.getAllTasks(),
         taskExecutor: workflowRunner.executeTask,
+        updateTaskStatus: async (id, status, updatedBy) => {
+            await pm.updateTaskStatus(id, status, updatedBy);
+        },
     });
     await runner.runLoop();
 }

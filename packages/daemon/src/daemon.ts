@@ -1,19 +1,40 @@
+// TODO: This file is too complex (2238 lines) and should be refactored into several modules.
+// Current concerns mixed: Process spawning, TCP server, HTTP server, environment management,
+// task processing, service initialization, command handling.
+// 
+// Proposed structure:
+// - daemon/tcp-server.ts - TCP command server and protocol handling
+// - daemon/http-server.ts - HTTP API endpoints
+// - daemon/process-manager.ts - Child process spawning and management
+// - daemon/environment-manager.ts - Environment service lifecycle
+// - daemon/task-processor.ts - Task execution and workflow orchestration
+// - daemon/service-factory.ts - Service initialization and dependency injection
+// - daemon/command-handlers/ - Individual command handler modules
+// - daemon/types.ts - Core daemon types and interfaces
+// - daemon/index.ts - Main daemon composition and startup
+
 import { spawn } from "node:child_process";
 import http from "node:http";
 import { createServer, type Socket } from "node:net";
 import fs from "node:fs";
 import path from "node:path";
-import { createTaskSearchService, ProductManager, type TaskSearchService } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 import { getUserManager } from "@isomorphiq/auth";
 import { WebSocketManager } from "@isomorphiq/realtime";
 import { startHttpServer } from "@isomorphiq/http-server";
 import type { Result } from "@isomorphiq/core";
 import { ConfigManager, resolveEnvironmentFromHeaders, resolveEnvironmentValue } from "@isomorphiq/core";
 import { ProfileManager } from "@isomorphiq/user-profile";
+import type { TaskServiceApi } from "@isomorphiq/tasks";
 import { createWorkflowAgentRunner } from "@isomorphiq/workflow/agent-runner";
 import { ProfileWorkflowRunner } from "@isomorphiq/workflow";
 import { startMcpServer } from "@isomorphiq/mcp";
-import { DashboardServer } from "./web/dashboard.ts";
+import {
+	DashboardAnalyticsService,
+	DashboardServer,
+	ProgressTrackingService,
+	TaskAuditService,
+} from "@isomorphiq/dashboard";
 import { TaskMonitor } from "./services/task-monitor.ts";
 import { NotificationService } from "./services/notification-service.ts";
 import { MockEmailProvider } from "./services/email-provider.ts";
@@ -22,14 +43,12 @@ import { MockSlackProvider } from "./services/slack-provider.ts";
 import { MockTeamsProvider } from "./services/teams-provider.ts";
 import { TaskScheduler } from "./services/scheduler.ts";
 import { DependencyGraphService } from "./services/dependency-graph.ts";
-import { TaskAuditService } from "./services/task-audit-service.ts";
-import { ProgressTrackingService } from "./services/progress-tracking-service.ts";
-import { DashboardAnalyticsService } from "./services/dashboard-analytics-service.ts";
 import { RecommendationAnalyticsService } from "./services/recommendation-analytics-service.ts";
 
 type EnvironmentServices = {
 	environment: string;
 	productManager: ProductManager;
+	taskManager: TaskServiceApi;
 	workflowRunner: ProfileWorkflowRunner;
 	webSocketManager: WebSocketManager;
 	taskMonitor: TaskMonitor;
@@ -39,7 +58,6 @@ type EnvironmentServices = {
 	progressTrackingService: ProgressTrackingService;
 	analyticsService: DashboardAnalyticsService;
 	recommendationService: RecommendationAnalyticsService;
-	taskSearchService: TaskSearchService;
 };
 
 const extractMentions = (text: string): string[] => {
@@ -174,11 +192,14 @@ async function main() {
 
 	const createEnvironmentServices = async (environment: string): Promise<EnvironmentServices> => {
 		const databasePath = resolveDatabasePath(environment);
-		const productManager = new ProductManager(databasePath);
+		const productManager = new ProductManager(databasePath, { environment });
 		const workflowRunnerInstance = new ProfileWorkflowRunner({
 			taskProvider: () => productManager.getAllTasks(),
 			taskExecutor: workflowRunner.executeTask,
 			environment,
+			updateTaskStatus: async (id, status, updatedBy) => {
+				await productManager.updateTaskStatus(id, status, updatedBy);
+			},
 		});
 		const webSocketManager = new WebSocketManager({ path: "/ws" });
 		const taskMonitor = new TaskMonitor();
@@ -193,17 +214,18 @@ async function main() {
 		const progressTrackingService = new ProgressTrackingService(taskAuditService);
 		await progressTrackingService.initialize();
 
-		const dashboardAnalyticsService = new DashboardAnalyticsService(productManager, taskAuditService);
+		const dashboardAnalyticsService = new DashboardAnalyticsService(productManager.taskService, taskAuditService);
 		await dashboardAnalyticsService.initialize();
+		const recommendationService = new RecommendationAnalyticsService(productManager);
+		await recommendationService.initialize();
 
 		productManager.setWebSocketManager(webSocketManager);
 		await productManager.initialize();
 
-		const taskSearchService = createTaskSearchService(productManager.taskService.getRepository());
-
 		return {
 			environment,
 			productManager,
+			taskManager: productManager.taskService,
 			workflowRunner: workflowRunnerInstance,
 			webSocketManager,
 			taskMonitor,
@@ -212,7 +234,7 @@ async function main() {
 			taskAuditService,
 			progressTrackingService,
 			analyticsService: dashboardAnalyticsService,
-			taskSearchService,
+			recommendationService,
 		};
 	};
 
@@ -256,6 +278,36 @@ async function main() {
 	};
 	const resolveServices = (environment: string): EnvironmentServices =>
 		environmentServices.get(environment) ?? fallbackServices;
+	const resolveProcessingServices = (): EnvironmentServices[] => {
+		const explicitRaw =
+			process.env.ISOMORPHIQ_PROCESS_ENVIRONMENTS ?? process.env.PROCESS_ENVIRONMENTS;
+		if (explicitRaw && explicitRaw.trim().length > 0) {
+			const requested = explicitRaw
+				.split(",")
+				.map((value) => value.trim())
+				.filter((value) => value.length > 0)
+				.map((value) => resolveEnvironmentValue(value, environmentConfig));
+			const resolved = requested
+				.map((env) => environmentServices.get(env))
+				.filter((service): service is EnvironmentServices => Boolean(service));
+			if (resolved.length > 0) {
+				return resolved;
+			}
+		}
+
+		const processAll = process.env.ISOMORPHIQ_PROCESS_ALL_ENVIRONMENTS === "true";
+		if (processAll) {
+			return Array.from(environmentServices.values());
+		}
+
+		const targetRaw =
+			process.env.ISOMORPHIQ_ENVIRONMENT
+			?? process.env.DEFAULT_ENVIRONMENT
+			?? environmentConfig.default;
+		const target = resolveEnvironmentValue(targetRaw, environmentConfig);
+		const service = environmentServices.get(target);
+		return service ? [service] : [fallbackServices];
+	};
 
 	const startMcpHttpServer = async (): Promise<void> => {
 		const transport =
@@ -534,9 +586,11 @@ async function main() {
 		const server = createServer((socket: Socket) => {
 			console.log("[DAEMON] MCP client connected");
 
-			socket.on("data", async (data) => {
+			let pendingBuffer = "";
+
+			const handleIncomingMessage = async (payload: string): Promise<void> => {
 				try {
-					const message = JSON.parse(data.toString().trim());
+					const message = JSON.parse(payload);
 					console.log("[DAEMON] Received command:", message.command);
 					const environment = resolveEnvironmentFromMessage(message);
 					const services = resolveServices(environment);
@@ -638,9 +692,8 @@ async function main() {
 						}
 						case "search_tasks": {
 							try {
-								const searchService = services.taskSearchService;
 								const query = message.data.query || {};
-								const searchResult = await searchService.searchTasks(query);
+								const searchResult = await pm.searchTasks(query);
 								result = { success: true, data: searchResult };
 							} catch (error) {
 								result = {
@@ -652,9 +705,8 @@ async function main() {
 						}
 						case "create_saved_search": {
 							try {
-								const searchService = services.taskSearchService;
 								const input = message.data;
-								const savedSearch = await searchService.createSavedSearch(input);
+								const savedSearch = await pm.createSavedSearch(input, input.createdBy ?? "system");
 								result = { success: true, data: savedSearch };
 							} catch (error) {
 								result = {
@@ -666,9 +718,8 @@ async function main() {
 						}
 						case "get_saved_search": {
 							try {
-								const searchService = services.taskSearchService;
-								const { id } = message.data;
-								const savedSearch = await searchService.getSavedSearch(id);
+								const { id, userId } = message.data;
+								const savedSearch = await pm.getSavedSearch(id, userId);
 								if (savedSearch) {
 									result = { success: true, data: savedSearch };
 								} else {
@@ -684,9 +735,8 @@ async function main() {
 						}
 						case "list_saved_searches": {
 							try {
-								const searchService = services.taskSearchService;
 								const { createdBy } = message.data || {};
-								const savedSearches = await searchService.listSavedSearches(createdBy);
+								const savedSearches = await pm.getSavedSearches(createdBy);
 								result = { success: true, data: savedSearches };
 							} catch (error) {
 								result = {
@@ -698,9 +748,9 @@ async function main() {
 						}
 						case "update_saved_search": {
 							try {
-								const searchService = services.taskSearchService;
 								const input = message.data;
-								const savedSearch = await searchService.updateSavedSearch(input);
+								const userId = input.userId ?? "system";
+								const savedSearch = await pm.updateSavedSearch(input, userId);
 								result = { success: true, data: savedSearch };
 							} catch (error) {
 								result = {
@@ -712,9 +762,8 @@ async function main() {
 						}
 						case "delete_saved_search": {
 							try {
-								const searchService = services.taskSearchService;
-								const { id } = message.data;
-								await searchService.deleteSavedSearch(id);
+								const { id, userId } = message.data;
+								await pm.deleteSavedSearch(id, userId ?? "system");
 								result = { success: true, data: { deleted: true } };
 							} catch (error) {
 								result = {
@@ -726,9 +775,12 @@ async function main() {
 						}
 						case "execute_saved_search": {
 							try {
-								const searchService = services.taskSearchService;
-								const { id } = message.data;
-								const searchResult = await searchService.executeSavedSearch(id);
+								const { id, userId } = message.data;
+								const savedSearch = await pm.getSavedSearch(id, userId);
+								if (!savedSearch) {
+									throw new Error("Saved search not found");
+								}
+								const searchResult = await pm.searchTasks(savedSearch.query);
 								result = { success: true, data: searchResult };
 							} catch (error) {
 								result = {
@@ -2176,11 +2228,33 @@ async function main() {
 							result = { success: false, error: new Error(`Unknown command: ${message.command}`) };
 					}
 
-					socket.write(`${JSON.stringify(result)}\n`);
+					const normalizedResult = result.error instanceof Error
+						? {
+							...result,
+							error: {
+								message: result.error.message,
+								name: result.error.name,
+							},
+						}
+						: result;
+					socket.write(`${JSON.stringify(normalizedResult)}\n`);
 				} catch (error) {
 					console.error("[DAEMON] Error processing command:", error);
 					const err = error instanceof Error ? error : new Error(String(error));
 					socket.write(`${JSON.stringify({ success: false, error: err.message })}\n`);
+				}
+			};
+
+			socket.on("data", async (data) => {
+				const nextBuffer = `${pendingBuffer}${data.toString()}`;
+				const lines = nextBuffer.split("\n");
+				pendingBuffer = lines.pop() ?? "";
+				for (const line of lines) {
+					const trimmed = line.trim();
+					if (!trimmed) {
+						continue;
+					}
+					await handleIncomingMessage(trimmed);
 				}
 			});
 
@@ -2217,8 +2291,12 @@ async function main() {
 		process.env.ISOMORPHIQ_ENABLE_TASK_PROCESSING === "true" || !isTestMode;
 
 	if (shouldProcessTasks) {
+		const processingServices = resolveProcessingServices();
+		console.log(
+			`[DAEMON] Task processing environments: ${processingServices.map((svc) => svc.environment).join(", ")}`,
+		);
 		// Start the continuous task processing loop in parallel
-		for (const services of environmentServices.values()) {
+		for (const services of processingServices) {
 			services.workflowRunner.runLoop().catch((error) => {
 				console.error(
 					`[DAEMON] Task processing loop error (${services.environment}):`,

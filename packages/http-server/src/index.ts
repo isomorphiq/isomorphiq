@@ -17,7 +17,8 @@ import { createTrpcMiddleware, appRouter, createTrpcContext, type TrpcContext, t
 import { setupWorkflowRoutes } from "@isomorphiq/workflow";
 import { createSecurityRoutes } from "@isomorphiq/auth";
 import { requestLogger, errorHandler } from "@isomorphiq/api-prelude";
-import { ProductManager, InMemoryTaskRepository } from "@isomorphiq/tasks";
+import { InMemoryTaskRepository } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 import type { WebSocketManager } from "@isomorphiq/realtime";
 import { ProfileManager } from "@isomorphiq/user-profile";
 

@@ -21,6 +21,9 @@ export interface LogEntry {
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class Logger {
 	private level: LogLevel = "info";
 	private service: string;
@@ -231,3 +234,4 @@ export class Logger {
 
 // Default logger instance
 export const logger = Logger.create("task-manager");
+

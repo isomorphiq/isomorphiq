@@ -14,7 +14,8 @@
     "scripts": {
         "build": "tsc -p tsconfig.json",
         "typecheck": "tsc --noEmit -p tsconfig.json",
-        "start": "node --experimental-strip-types src/init.ts"
+        "start": "node --experimental-strip-types src/init.ts",
+        "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts"
     },
     "dependencies": {
         "@isomorphiq/daemon": "workspace:*"

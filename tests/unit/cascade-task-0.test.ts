@@ -4,6 +4,7 @@ import { createAndExecuteCascadeTask0, CascadeTask0 } from "../../src/cascade-ta
 
 /**
  * Mock TCP client for testing cascade task 0 functionality
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 class MockTcpClient {
     private tasks = new Map<string, any>();

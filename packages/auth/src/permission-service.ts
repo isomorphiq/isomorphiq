@@ -36,6 +36,9 @@ const buildPermission = (input: PermissionInput): Permission => ({
 const buildPermissions = (inputs: PermissionInput[]): Permission[] =>
 	inputs.map((p) => buildPermission(p));
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class PermissionService {
 	private rolePermissions: RolePermissions;
 
@@ -210,3 +213,4 @@ export class PermissionService {
 		return Array.from(actions).sort();
 	}
 }
+

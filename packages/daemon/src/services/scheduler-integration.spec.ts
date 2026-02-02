@@ -2,9 +2,12 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import * as cron from "node-cron";
 import { TaskScheduler } from "./scheduler.ts";
-import type { ProductManager } from "@isomorphiq/tasks";
+import type { ProductManager } from "@isomorphiq/user-profile";
 
 // Mock ProductManager for integration testing
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class IntegrationTestProductManager implements ProductManager {
 	private tasks: any[] = [];
 	
@@ -86,14 +89,19 @@ class IntegrationTestProductManager implements ProductManager {
 describe("TaskScheduler Integration Tests", () => {
 	let scheduler: TaskScheduler;
 	let productManager: IntegrationTestProductManager;
-	
+	let originalConsoleLog: typeof console.log;
+
 	beforeEach(() => {
+		originalConsoleLog = console.log;
+		console.log = () => {};
+
 		productManager = new IntegrationTestProductManager();
 		scheduler = new TaskScheduler(productManager);
 	});
 	
 	afterEach(async () => {
 		await scheduler.shutdown();
+		console.log = originalConsoleLog;
 	});
 
 	describe("Cron Execution Integration", () => {

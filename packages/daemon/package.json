@@ -21,13 +21,13 @@
     "dependencies": {
         "@isomorphiq/auth": "workspace:*",
         "@isomorphiq/core": "workspace:*",
+        "@isomorphiq/dashboard": "workspace:*",
         "@isomorphiq/http-api": "workspace:*",
         "@isomorphiq/mcp": "workspace:*",
         "@isomorphiq/realtime": "workspace:*",
         "@isomorphiq/scheduling": "workspace:*",
         "@isomorphiq/tasks": "workspace:*",
         "@isomorphiq/workflow": "workspace:*",
-        "node-cron": "^3.0.3",
-        "ws": "^8.14.2"
+        "node-cron": "^3.0.3"
     }
 }

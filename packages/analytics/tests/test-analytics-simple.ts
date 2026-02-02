@@ -64,6 +64,9 @@ interface StatsData {
 	};
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class SimplifiedAnalyticsTester {
 	private results: TestResult[] = [];
 	private testTasks: Task[] = [];
@@ -601,3 +604,4 @@ class SimplifiedAnalyticsTester {
 // }
 
 export { SimplifiedAnalyticsTester };
+

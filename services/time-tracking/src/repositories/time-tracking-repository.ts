@@ -44,6 +44,7 @@ export type ITimeTrackingRepository = {
 
 /**
  * LevelDB implementation of TimeTrackingRepository
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class LevelDbTimeTrackingRepository implements ITimeTrackingRepository {
 	private timeDb: Level<string, TimeEntry>;
@@ -482,3 +483,4 @@ export class LevelDbTimeTrackingRepository implements ITimeTrackingRepository {
 		}
 	}
 }
+

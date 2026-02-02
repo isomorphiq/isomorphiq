@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Test script for automation rule engine
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 
 async function testAutomationRules() {
   console.log('[TEST] Starting automation rule engine test...')

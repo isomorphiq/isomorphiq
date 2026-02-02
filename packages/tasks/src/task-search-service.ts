@@ -20,6 +20,9 @@ export interface TaskSearchServiceApi {
     executeSavedSearch(id: string): Promise<TaskSearchResult>;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class TaskSearchService implements TaskSearchServiceApi {
     private savedSearches: Map<string, TaskSavedSearch> = new Map();
     private repository: TaskRepository;
@@ -249,7 +252,15 @@ export class TaskSearchService implements TaskSearchServiceApi {
         // Generate suggestions for common misspellings
         const suggestions: string[] = [];
         if (query.q && query.q.length > 2) {
-            const commonTerms = ["task", "bug", "feature", "improvement", "documentation"];
+            const commonTerms = [
+                "task",
+                "bug",
+                "theme",
+                "initiative",
+                "feature",
+                "improvement",
+                "documentation",
+            ];
             const queryLower = query.q.toLowerCase();
             
             commonTerms.forEach(term => {

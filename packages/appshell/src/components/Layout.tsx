@@ -1,3 +1,19 @@
+// TODO: This file is too complex (715 lines) and should be refactored into several modules.
+// Current concerns mixed: Layout structure, navigation, environment management,
+// mobile responsiveness, admin settings, user menu, theme toggle.
+// 
+// Proposed structure:
+// - components/layout/ - Component directory
+//   - layout.tsx - Main layout shell
+//   - navigation.tsx - Navigation menu component
+//   - environment-selector.tsx - Environment switching UI
+//   - user-menu.tsx - User dropdown menu
+//   - mobile-nav.tsx - Mobile navigation handling
+//   - admin-settings.tsx - Admin settings panel
+//   - hooks/ - Custom hooks for layout state
+//   - types.ts - Layout component types
+// - components/layout/index.ts - Component exports
+
 import { useAtomValue } from "jotai";
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useState } from "react";

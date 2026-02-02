@@ -26,6 +26,9 @@ export interface SlackMessage {
 }
 
 // Slack webhook provider
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class SlackWebhookProvider implements SlackProvider {
     private defaultUsername: string;
     private defaultIcon: string;
@@ -152,6 +155,9 @@ export class SlackWebhookProvider implements SlackProvider {
 }
 
 // Mock Slack provider for testing
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class MockSlackProvider implements SlackProvider {
     private sentMessages: Array<{
         webhookUrl: string;

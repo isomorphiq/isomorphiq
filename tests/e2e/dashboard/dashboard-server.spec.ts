@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert";
-import { DashboardServer } from "@isomorphiq/daemon";
+import { DashboardServer } from "@isomorphiq/dashboard";
 
 describe("DashboardServer", () => {
     let dashboardServer: DashboardServer;

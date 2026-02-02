@@ -38,6 +38,7 @@ export interface ILogger {
 
 /**
  * File logger implementation
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class FileLogger implements ILogger {
 	private logFile: string;
@@ -205,6 +206,7 @@ export class FileLogger implements ILogger {
 
 /**
  * Console logger implementation
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class ConsoleLogger implements ILogger {
 	error(message: string, context?: string, metadata?: Record<string, unknown>): void {
@@ -267,6 +269,7 @@ export class ConsoleLogger implements ILogger {
 
 /**
  * Null logger (disables logging)
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class NullLogger implements ILogger {
 	error(): void {}
@@ -337,3 +340,4 @@ export const LoggerFactory = (() => {
 		},
 	};
 })();
+

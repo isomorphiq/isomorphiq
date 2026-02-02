@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { ProductManager } from './src/product-manager.ts';
+import { ProductManager } from "@isomorphiq/user-profile";
 import path from 'node:path';
 import { createConnection } from "node:net";
 

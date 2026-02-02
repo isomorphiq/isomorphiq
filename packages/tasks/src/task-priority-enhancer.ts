@@ -11,6 +11,9 @@ type PriorityMetrics = {
     averageCompletionTime: Record<string, number>;
 };
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class TaskPriorityEnhancer {
     private metrics: PriorityMetrics;
 
@@ -110,3 +113,4 @@ Recommendations:
 // Export the enhanced priority management system
 export { TaskPriorityEnhancer };
 export type { PriorityMetrics };
+

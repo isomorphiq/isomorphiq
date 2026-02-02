@@ -34,6 +34,9 @@ export const DependencyAnalysisSchema = z.object({
 });
 export type DependencyAnalysis = z.output<typeof DependencyAnalysisSchema>;
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class DependencyValidator {
     private taskMap: Map<string, TaskEntity> = new Map();
 
@@ -227,3 +230,4 @@ export class DependencyValidator {
         return maxDepth;
     }
 }
+

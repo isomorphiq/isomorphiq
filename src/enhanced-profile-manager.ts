@@ -12,6 +12,7 @@ type RoutedTask = Record<string, unknown> & {
 
 /**
  * Enhanced profile manager that integrates with the plugin system
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class EnhancedProfileManager extends ProfileManager {
 	private pluginManager: PluginManager;
@@ -347,3 +348,4 @@ interface PluginSystemStatus {
 
 // Export for use in other modules
 export { EnhancedProfileManager as default };
+

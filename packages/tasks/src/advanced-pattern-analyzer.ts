@@ -1,3 +1,16 @@
+// TODO: This file is too complex (796 lines) and should be refactored into several modules.
+// Current concerns mixed: Feature extraction, clustering algorithms, sequence pattern detection,
+// temporal analysis, pattern scoring, recommendation generation.
+// 
+// Proposed structure:
+// - patterns/analyzer/index.ts - Main analyzer orchestration
+// - patterns/analyzer/feature-extractor.ts - Task feature vector extraction
+// - patterns/analyzer/clustering-service.ts - K-means and hierarchical clustering
+// - patterns/analyzer/sequence-detector.ts - Sequential pattern mining
+// - patterns/analyzer/temporal-analyzer.ts - Time-based pattern analysis
+// - patterns/analyzer/scoring-service.ts - Pattern confidence scoring
+// - patterns/analyzer/types.ts - Pattern analysis types
+
 import { randomUUID } from "node:crypto";
 import type { Task, TaskStatus, TaskPriority } from "@isomorphiq/types";
 import type { TaskPattern, RecommendationContext } from "@isomorphiq/core";
@@ -64,6 +77,9 @@ interface DependencyPattern {
     avgDelay: number;
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class AdvancedPatternAnalyzer implements PatternAnalyzer {
     private taskCache: Map<string, Task> = new Map();
     private featureCache: Map<string, TaskFeatureVector> = new Map();
@@ -80,6 +96,17 @@ export class AdvancedPatternAnalyzer implements PatternAnalyzer {
         }
 
         console.log("[PATTERN-ANALYSIS] Starting advanced pattern analysis");
+
+        if (tasks.length === 0) {
+            this.taskCache.clear();
+            this.featureCache.clear();
+            this.clusters = [];
+            this.sequences = [];
+            this.dependencies = [];
+            this.lastAnalysisTime = now;
+            console.log("[PATTERN-ANALYSIS] No tasks available for analysis");
+            return [];
+        }
         
         this.taskCache.clear();
         tasks.forEach(task => this.taskCache.set(task.id, task));

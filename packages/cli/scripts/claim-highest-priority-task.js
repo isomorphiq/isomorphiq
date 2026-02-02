@@ -1,4 +1,4 @@
-import { ProductManager } from "./src/product-manager.ts";
+import { ProductManager } from "@isomorphiq/user-profile";
 
 async function claimHighestPriorityTodoTask() {
     const productManager = new ProductManager();

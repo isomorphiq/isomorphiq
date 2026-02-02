@@ -134,6 +134,7 @@ const normalizeTaskEntity = (value: unknown, key?: string): TaskEntity | null =>
 /**
  * LevelDB-backed task repository used by the tasks domain.
  * Stores tasks under a configurable path (default: db/tasks).
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class LevelDbTaskRepository implements TaskRepository {
     private db: LevelKeyValueAdapter<string, TaskEntity>;
@@ -524,3 +525,4 @@ export class LevelDbTaskRepository implements TaskRepository {
         }
     }
 }
+

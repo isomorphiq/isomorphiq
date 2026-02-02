@@ -4,11 +4,20 @@ import type { RuntimeState, WorkflowTask } from "./workflow-factory.ts";
 import { isWorkflowTaskActionable, isWorkflowTaskTextComplete } from "./task-readiness.ts";
 
 const normalizeTaskType = (value: string | undefined): string => (value ?? "").trim().toLowerCase();
+const normalizeTaskStatus = (value: string | undefined): string =>
+    (value ?? "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+
+const isActiveStatus = (value: string | undefined): boolean => {
+    const status = normalizeTaskStatus(value);
+    return status === "todo" || status === "in-progress";
+};
 
 const isImplementationTask = (task: WorkflowTask): boolean => {
     const type = normalizeTaskType(task.type);
     return type === "implementation" || type === "task";
 };
+
+const isLikelyTaskId = (value: string): boolean => value.startsWith("task-");
 
 export type TaskValidityServices = {
     taskExecutor?: WorkflowTaskExecutor;
@@ -33,6 +42,13 @@ export type TaskValidityPayload = {
 
 type TaskReviewDecision = {
     decision: "proceed" | "close";
+    reason: string;
+    execution?: WorkflowExecutionResult;
+    durationMs: number;
+};
+
+type TaskCoverageDecision = {
+    decision: "proceed" | "need-more-tasks";
     reason: string;
     execution?: WorkflowExecutionResult;
     durationMs: number;
@@ -73,6 +89,24 @@ const parseReviewDecision = (
         return null;
     }
     const decision = decisionMatch[1].toLowerCase() as "proceed" | "close";
+    const reasonLine = lines.find((line) => /^reason\s*:/i.test(line));
+    const reason = reasonLine ? reasonLine.replace(/^reason\s*:\s*/i, "").trim() : "";
+    return { decision, reason };
+};
+
+const parseCoverageDecision = (
+    text: string,
+): { decision: "proceed" | "need-more-tasks"; reason: string } | null => {
+    const lines = normalizeLines(text);
+    const decisionLine = lines.find((line) => /^decision\s*:/i.test(line));
+    if (!decisionLine) {
+        return null;
+    }
+    const decisionMatch = decisionLine.match(/decision\s*:\s*(proceed|need-more-tasks)/i);
+    if (!decisionMatch) {
+        return null;
+    }
+    const decision = decisionMatch[1].toLowerCase() as "proceed" | "need-more-tasks";
     const reasonLine = lines.find((line) => /^reason\s*:/i.test(line));
     const reason = reasonLine ? reasonLine.replace(/^reason\s*:\s*/i, "").trim() : "";
     return { decision, reason };
@@ -154,6 +188,8 @@ const dependenciesSatisfied = (task: WorkflowTask, tasks: WorkflowTask[]): boole
     });
 };
 
+const isStoryTask = (task: WorkflowTask): boolean => normalizeTaskType(task.type) === "story";
+
 const selectReviewCandidate = (tasks: WorkflowTask[]): WorkflowTask | null => {
     const candidates = tasks.filter(
         (task) =>
@@ -177,6 +213,74 @@ const selectReviewCandidate = (tasks: WorkflowTask[]): WorkflowTask | null => {
     return sorted[0] ?? null;
 };
 
+const selectStoryForCoverage = (tasks: WorkflowTask[]): WorkflowTask | null => {
+    const candidates = tasks.filter((task) => isStoryTask(task) && isActiveStatus(task.status));
+    if (candidates.length === 0) {
+        return null;
+    }
+    const sorted = [...candidates].sort((left, right) => {
+        const leftScore = priorityScore(left.priority);
+        const rightScore = priorityScore(right.priority);
+        if (leftScore !== rightScore) {
+            return rightScore - leftScore;
+        }
+        const leftTitle = left.title ?? "";
+        const rightTitle = right.title ?? "";
+        return leftTitle.localeCompare(rightTitle);
+    });
+    return sorted[0] ?? null;
+};
+
+const selectChildImplementationTasks = (
+    story: WorkflowTask,
+    tasks: WorkflowTask[],
+): WorkflowTask[] => {
+    const storyDependencies = story.dependencies ?? [];
+    const byStoryDependencies =
+        storyDependencies.length > 0
+            ? tasks.filter((task) => {
+                if (!isImplementationTask(task)) {
+                    return false;
+                }
+                if (!task.id) {
+                    return false;
+                }
+                return storyDependencies.includes(task.id);
+            })
+            : [];
+    if (byStoryDependencies.length > 0) {
+        return byStoryDependencies;
+    }
+    if (!story.id) {
+        return [];
+    }
+    return tasks.filter((task) => {
+        if (!isImplementationTask(task)) {
+            return false;
+        }
+        const deps = task.dependencies ?? [];
+        return deps.includes(story.id);
+    });
+};
+
+const selectDependencyTasks = (story: WorkflowTask, tasks: WorkflowTask[]): WorkflowTask[] => {
+    const storyDependencies = story.dependencies ?? [];
+    if (storyDependencies.length === 0) {
+        return [];
+    }
+    return storyDependencies.flatMap((depId) => {
+        const dep = tasks.find((task) => task.id === depId);
+        return dep ? [dep] : [];
+    });
+};
+
+const hasMissingDependencyTasks = (story: WorkflowTask, tasks: WorkflowTask[]): boolean => {
+    const storyDependencies = story.dependencies ?? [];
+    return storyDependencies
+        .filter((depId) => isLikelyTaskId(depId))
+        .some((depId) => !tasks.some((task) => task.id === depId));
+};
+
 const buildProjectManagerState = (
     baseState: RuntimeState,
     promptHint: string,
@@ -185,6 +289,47 @@ const buildProjectManagerState = (
     profile: "project-manager",
     promptHint,
 });
+
+const buildBusinessAnalystState = (
+    baseState: RuntimeState,
+    promptHint: string,
+): RuntimeState => ({
+    ...baseState,
+    profile: "business-analyst",
+    promptHint,
+});
+
+const buildCoverageReviewTask = (
+    story: WorkflowTask,
+    childTasks: WorkflowTask[],
+): WorkflowTask => {
+    const storyId = story.id ?? "unknown";
+    const storyTitle = story.title ?? "Untitled";
+    const storyDescription = story.description ?? "No description provided.";
+    const taskLines = childTasks.map((task) => {
+        const taskId = task.id ?? "unknown";
+        const taskTitle = task.title ?? "Untitled";
+        const taskDescription = task.description ?? "No description provided.";
+        return `- ${taskId}: ${taskTitle} — ${taskDescription}`;
+    });
+    return {
+        title: `Coverage review for story: ${storyTitle}`,
+        description: [
+            "Story:",
+            `ID: ${storyId}`,
+            `Title: ${storyTitle}`,
+            `Description: ${storyDescription}`,
+            "",
+            "Child implementation tasks:",
+            ...taskLines,
+            "",
+            "Decide if these tasks fully satisfy the story acceptance criteria.",
+        ].join("\n"),
+        type: "analysis",
+        status: "todo",
+        priority: story.priority,
+    };
+};
 
 const reviewTaskValidity = async (
     task: WorkflowTask,
@@ -249,30 +394,64 @@ const reviewTaskValidity = async (
     return { decision, reason, execution, durationMs };
 };
 
-export const decideTasksPreparedTransition = async (
-    tasks: WorkflowTask[],
-    context: unknown,
+const reviewStoryCoverage = async (
+    story: WorkflowTask,
+    childTasks: WorkflowTask[],
+    allTasks: WorkflowTask[],
     baseState: RuntimeState,
-): Promise<string> => {
-    const services = resolveServices(context);
-    const candidate = selectReviewCandidate(tasks);
-    if (candidate) {
-        const decision = await reviewTaskValidity(candidate, baseState, services);
-        if (decision?.decision === "close") {
-            return "close-invalid-task";
-        }
-        if (decision?.decision === "proceed") {
-            return "begin-implementation";
-        }
-    }
-
-    const hasActionableTasks = tasks.some(
+    services: TaskValidityServices,
+): Promise<TaskCoverageDecision | null> => {
+    const hasActionableChildren = childTasks.some(
         (task) =>
             isImplementationTask(task) &&
             isWorkflowTaskActionable(task) &&
-            dependenciesSatisfied(task, tasks),
+            dependenciesSatisfied(task, allTasks),
     );
-    return hasActionableTasks ? "begin-implementation" : "need-more-tasks";
+    if (!services.taskExecutor) {
+        const decision = hasActionableChildren ? "proceed" : "need-more-tasks";
+        const reason = decision === "proceed"
+            ? "Implementation tasks appear to cover the story requirements"
+            : "Implementation tasks do not fully cover the story requirements";
+        return { decision, reason, durationMs: 0 };
+    }
+
+    const reviewState = buildBusinessAnalystState(
+        baseState,
+        "Evaluate whether the child implementation tasks fully satisfy the story acceptance criteria. Provide a thorough analysis that covers:\n" +
+        "- Which acceptance criteria are fully addressed by the existing tasks\n" +
+        "- Which acceptance criteria are partially addressed or missing\n" +
+        "- Any gaps, dependencies, or technical considerations that should be addressed\n" +
+        "- Specific recommendations for additional tasks if needed\n\n" +
+        "Only choose need-more-tasks when you can name specific acceptance criteria that are not covered. If the existing tasks fully cover the criteria, choose proceed.\n\n" +
+        "Write your response for an audience of senior technical staff. Be comprehensive and clear—use as much detail as necessary to fully capture the scope and rationale.\n\n" +
+        "Conclude with:\n" +
+        "Decision: proceed|need-more-tasks\n" +
+        "Reason: <thorough summary of your evaluation and recommendations>",
+    );
+    const reviewTask = buildCoverageReviewTask(story, childTasks);
+    const startTime = Date.now();
+    const execution = await services.taskExecutor({
+        task: reviewTask,
+        workflowState: reviewState,
+        workflowTransition: "review-story-coverage",
+    });
+    const durationMs = Date.now() - startTime;
+    const parsed =
+        parseCoverageDecision(execution.output) ??
+        parseCoverageDecision(execution.summary ?? "");
+    const fallbackDecision = hasActionableChildren ? "proceed" : "need-more-tasks";
+    const decision = parsed?.decision ?? fallbackDecision;
+    const reason =
+        parsed?.reason && parsed.reason.length > 0
+            ? parsed.reason
+            : formatExecutionLine(
+                execution.output || execution.error,
+                decision === "proceed"
+                    ? "Implementation tasks appear to cover the story requirements"
+                    : "Implementation tasks do not fully cover the story requirements",
+            );
+
+    return { decision, reason, execution, durationMs };
 };
 
 const selectInvalidTaskForClosure = (tasks: WorkflowTask[]): WorkflowTask | null => {
@@ -288,6 +467,84 @@ const selectInvalidTaskForClosure = (tasks: WorkflowTask[]): WorkflowTask | null
     }
     const fallback = candidates.find((task) => !isWorkflowTaskTextComplete(task));
     return fallback ?? null;
+};
+
+export const decideTasksPreparedTransition = async (
+    tasks: WorkflowTask[],
+    context: unknown,
+    baseState: RuntimeState,
+): Promise<string> => {
+    const services = resolveServices(context);
+    const invalidTask = selectInvalidTaskForClosure(tasks);
+    if (invalidTask) {
+        return "close-invalid-task";
+    }
+    const story = selectStoryForCoverage(tasks);
+    if (!story) {
+        const hasActionableTasks = tasks.some(
+            (task) =>
+                isImplementationTask(task) &&
+                isWorkflowTaskActionable(task) &&
+                dependenciesSatisfied(task, tasks),
+        );
+        const hasInProgressTasks = tasks.some(
+            (task) => isImplementationTask(task) && task.status === "in-progress",
+        );
+        return hasInProgressTasks || hasActionableTasks ? "begin-implementation" : "need-more-tasks";
+    }
+
+    const dependencyTasks = selectDependencyTasks(story, tasks);
+    const hasMissingDependencies = hasMissingDependencyTasks(story, tasks);
+    const hasImplementationDependency = dependencyTasks.some(isImplementationTask);
+    const dependenciesComplete =
+        dependencyTasks.length > 0 && dependencyTasks.every(isWorkflowTaskTextComplete);
+    const hasActionableDependency = dependencyTasks.some(
+        (task) =>
+            isImplementationTask(task) &&
+            isWorkflowTaskActionable(task) &&
+            dependenciesSatisfied(task, tasks),
+    );
+    const hasInProgressDependency = dependencyTasks.some(
+        (task) => isImplementationTask(task) && task.status === "in-progress",
+    );
+    const dependenciesFleshedOut =
+        dependenciesComplete && hasImplementationDependency && !hasMissingDependencies;
+    if (dependenciesFleshedOut && (hasActionableDependency || hasInProgressDependency)) {
+        return "begin-implementation";
+    }
+
+    const childTasks = selectChildImplementationTasks(story, tasks);
+    if (childTasks.length === 0) {
+        return "need-more-tasks";
+    }
+
+    const coverageDecision = await reviewStoryCoverage(
+        story,
+        childTasks,
+        tasks,
+        baseState,
+        services,
+    );
+    if (coverageDecision?.decision === "proceed") {
+        return "begin-implementation";
+    }
+    if (coverageDecision?.decision === "need-more-tasks") {
+        return "need-more-tasks";
+    }
+
+    const hasActionableTasks = tasks.some(
+        (task) =>
+            isImplementationTask(task) &&
+            isWorkflowTaskActionable(task) &&
+            dependenciesSatisfied(task, tasks),
+    );
+    const hasInProgressTasks = tasks.some(
+        (task) => isImplementationTask(task) && task.status === "in-progress",
+    );
+    if (hasInProgressTasks) {
+        return "begin-implementation";
+    }
+    return hasActionableTasks ? "begin-implementation" : "need-more-tasks";
 };
 
 export const handleCloseInvalidTaskTransition = async (

@@ -1,3 +1,19 @@
+// TODO: This file is too complex (2019 lines) and should be refactored into several modules.
+// Current concerns mixed: Database initialization, ACP session management, task CRUD operations,
+// workflow execution, automation rules, search functionality, WebSocket handling.
+// 
+// Proposed structure:
+// - core/database.ts - LevelDB initialization and connection management
+// - core/acp-session.ts - ACP connection and session lifecycle
+// - tasks/crud-service.ts - Task create, read, update, delete operations
+// - tasks/search-service.ts - Task search and filtering logic
+// - tasks/automation-service.ts - Automation rule engine and triggers
+// - workflow/engine.ts - Workflow execution and token management
+// - websocket/handler.ts - WebSocket event handling
+// - api/routes.ts - API endpoint definitions
+// - types/index.ts - Centralized type definitions
+// - index.ts - Main application composition
+
 import path from "node:path";
 import { z } from "zod";
 import { Effect } from "effect";
@@ -173,6 +189,9 @@ const getErrorCode = (error: unknown): string | undefined => {
 };
 
 // Product Manager class to handle task operations
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ProductManager {
 	private profileManager: ProfileManager;
 	private templateManager: TemplateManager;
@@ -804,9 +823,17 @@ export class ProductManager {
 	): Promise<{ output: string; errorOutput: string }> {
 		type ConnectionResult = Awaited<ReturnType<typeof ACPConnectionManager.createConnection>>;
 		let connectionResult: ConnectionResult | null = null;
+        const profile = this.profileManager.getProfile(profileName);
 		try {
 			// Create ACP connection
-			connectionResult = await ACPConnectionManager.createConnection();
+			connectionResult = await ACPConnectionManager.createConnection(undefined, {
+                modelName: profile?.modelName,
+                runtimeName: profile?.runtimeName,
+                modeName: profile?.acpMode,
+                sandbox: profile?.acpSandbox,
+                approvalPolicy: profile?.acpApprovalPolicy,
+                mcpServers: profile?.mcpServers,
+            });
 			connectionResult.taskClient.profileName = profileName;
 
 			// Send prompt
@@ -827,8 +854,6 @@ export class ProductManager {
 			}
 
 			// Get task client from connection for response checking
-			const profile = this.profileManager.getProfile(profileName);
-
 			// Wait for completion using the actual task client that receives updates
 			const result = await ACPConnectionManager.waitForTaskCompletion(
 				connectionResult.taskClient,
@@ -870,7 +895,20 @@ export class ProductManager {
 				// cleanup old session if switching profiles
 				await Effect.runPromise(acpCleanupEffect(existing));
 			}
-			const session = await startAcpSession(profile, { state: token.state });
+            const profileConfig = this.profileManager.getProfile(profile);
+			const session = await startAcpSession(
+                profile,
+                { state: token.state },
+                undefined,
+                {
+                    modelName: profileConfig?.modelName,
+                    runtimeName: profileConfig?.runtimeName,
+                    modeName: profileConfig?.acpMode,
+                    sandbox: profileConfig?.acpSandbox,
+                    approvalPolicy: profileConfig?.acpApprovalPolicy,
+                    mcpServers: profileConfig?.mcpServers,
+                },
+            );
 			token.context.session = session;
 			return session;
 		};
@@ -910,10 +948,25 @@ export class ProductManager {
 					Effect.gen(function* () {
 						const eff = acpEffect(
 							"product-manager",
-							`Generate exactly ONE Feature ticket.
-- Title should read like a feature request (avoid story/task phrasing).
-- Include: description, user value, acceptance criteria, priority.
-- Do NOT output stories or tasks here.`,
+							`Generate exactly ONE feature using MCP tools.
+
+You MUST use MCP tool calls (no XML tags like <parameter>). Do NOT output a plain-text ticket without tool calls.
+
+Step-by-step:
+1) Call create_task exactly once with JSON parameters:
+   {
+     "title": "<feature request title>",
+     "description": "<description with user value + acceptance criteria>",
+     "type": "feature",
+     "priority": "low|medium|high",
+     "createdBy": "product-manager"
+   }
+2) Call list_tasks to confirm it exists.
+
+Tool names are namespaced by MCP server. Use the exact tool name shown in the TurnBox list
+(for example: task-manager_create_task or task_manager_create_task).
+
+Return a short summary after tool calls.`,
 						);
 						// swallow ACP failures to allow retry via state loop
 						yield* Effect.catchAll(eff(), (err) =>
@@ -1007,10 +1060,6 @@ export class ProductManager {
 				"pick-up-next-task": acpEffect(
 					"development",
 					"Task closed. Announce completion and request next task.",
-				),
-				"research-new-features": acpEffect(
-					"product-manager",
-					"Identify new feature opportunities now that a task was delivered.",
 				),
 				"prioritize-features": acpEffect(
 					"product-manager",
@@ -1670,6 +1719,8 @@ export class ProductManager {
 		};
 
 		const typeCounts: Record<import("./types.ts").TaskType, number> = {
+			"theme": 0,
+			"initiative": 0,
 			"feature": 0,
 			"story": 0,
 			"task": 0,

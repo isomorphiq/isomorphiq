@@ -5,7 +5,7 @@ import type {
     UpdateSavedSearchInput,
 } from "@isomorphiq/tasks";
 import type { User } from "@isomorphiq/auth";
-import type { ProductManager } from "@isomorphiq/tasks";
+import type { ProductManager } from "@isomorphiq/user-profile";
 import { getUserManager } from "@isomorphiq/auth";
 import {
     authenticateToken,

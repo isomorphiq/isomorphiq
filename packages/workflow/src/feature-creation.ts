@@ -53,12 +53,54 @@ const resolveServices = (payload: unknown): FeatureCreationServices => {
     };
 };
 
+const normalizeTaskType = (value: string | undefined): string => (value ?? "").trim().toLowerCase();
+const normalizeTaskStatus = (value: string | undefined): string =>
+    (value ?? "").trim().toLowerCase().replace(/[_\s]+/g, "-");
+
+const isActiveStatus = (value: string | undefined): boolean => {
+    const status = normalizeTaskStatus(value);
+    return status === "todo" || status === "in-progress";
+};
+
+const priorityScore = (priority: string | undefined): number => {
+    switch ((priority ?? "").toLowerCase()) {
+        case "high":
+            return 3;
+        case "medium":
+            return 2;
+        case "low":
+            return 1;
+        default:
+            return 0;
+    }
+};
+
+const selectInitiativeCandidate = (tasks: WorkflowTask[]): WorkflowTask | null => {
+    const candidates = tasks.filter(
+        (task) => normalizeTaskType(task.type) === "initiative" && isActiveStatus(task.status),
+    );
+    if (candidates.length === 0) {
+        return null;
+    }
+    const sorted = [...candidates].sort((left, right) => {
+        const leftScore = priorityScore(left.priority);
+        const rightScore = priorityScore(right.priority);
+        if (leftScore !== rightScore) {
+            return rightScore - leftScore;
+        }
+        const leftTitle = left.title ?? "";
+        const rightTitle = right.title ?? "";
+        return leftTitle.localeCompare(rightTitle);
+    });
+    return sorted[0] ?? null;
+};
+
 const buildProductResearchState = (baseState: RuntimeState): RuntimeState => ({
     ...baseState,
     profile: "product-manager",
     targetType: "feature",
     promptHint:
-        "Use MCP tool calls to create features. Call create_task with type \"feature\" for each item, then call list_tasks to confirm.",
+        "Use MCP tool calls to create features. Call create_task with type \"feature\" for each item, then call list_tasks to confirm. If an initiative context is provided, include its id as a dependency.",
 });
 
 const summarizeExistingFeatures = (tasks: WorkflowTask[]): string => {
@@ -91,12 +133,18 @@ export const handleProductResearchTransition = async (
         return;
     }
 
+    const initiative = selectInitiativeCandidate(tasks);
     const researchState = buildProductResearchState(baseState);
     const existingSummary = summarizeExistingFeatures(tasks);
+    const initiativeSummary =
+        initiative?.id && initiative.title
+            ? `Selected initiative: ${initiative.title} (id: ${initiative.id}). Include this id as a dependency on each feature.`
+            : "No initiative selected; create features without initiative dependencies if none are provided.";
     const researchDescription = [
         "Generate one or more high-value features for the product backlog.",
         "Do not propose duplicates of existing features.",
         existingSummary,
+        initiativeSummary,
     ].join("\n");
     const start = Date.now();
     const execution = await services.taskExecutor({

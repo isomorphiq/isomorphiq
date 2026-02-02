@@ -54,6 +54,7 @@ const toStringArray = (value: unknown): string[] =>
 
 /**
  * Automation rule engine for processing task events and executing rules
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class AutomationRuleEngine {
 	private rules: AutomationRule[] = [];
@@ -503,3 +504,4 @@ export class AutomationRuleEngine {
 		return { total, enabled, disabled };
 	}
 }
+

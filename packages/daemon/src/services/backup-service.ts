@@ -1,9 +1,24 @@
+// TODO: This file is too complex (823 lines) and should be refactored into several modules.
+// Current concerns mixed: Backup creation and restoration, compression, cloud storage,
+// integrity checking, retention management, scheduling, metadata tracking.
+// 
+// Proposed structure:
+// - backup/backup-service.ts - Main backup orchestration
+// - backup/creation-service.ts - Backup creation logic
+// - backup/restoration-service.ts - Backup restoration logic
+// - backup/compression-service.ts - Compression and decompression
+// - backup/cloud-providers/ - Cloud storage implementations (S3, Azure, GCS)
+// - backup/integrity-service.ts - Checksum and integrity verification
+// - backup/retention-service.ts - Backup retention and cleanup
+// - backup/scheduler.ts - Backup scheduling
+// - backup/types.ts - Backup-specific types
+
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import * as cron from "node-cron";
-import type { ProductManager } from "@isomorphiq/tasks";
+import type { ProductManager } from "@isomorphiq/user-profile";
 import type { Task } from "@isomorphiq/tasks";
 
 export interface BackupConfig {
@@ -119,6 +134,9 @@ export interface BackupExportData {
 	};
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class BackupService extends EventEmitter {
 	private productManager: ProductManager;
 	private config: BackupConfig;

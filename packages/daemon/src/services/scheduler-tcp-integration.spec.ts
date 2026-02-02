@@ -1,67 +1,176 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
-import { setTimeout } from "node:timers/promises";
-import { mkdtemp, rm } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
+import { mkdtemp, rm, mkdir } from "node:fs/promises";
+import * as net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-describe("Scheduler TCP Integration Test", () => {
+const canUseTcp = await canConnectTcp();
+const formatTcpError = (response: any): string => {
+	if (!response) {
+		return "No response payload";
+	}
+	const error = response.error;
+	if (!error) {
+		return "Unknown error";
+	}
+	if (typeof error === "string") {
+		return error;
+	}
+	if (typeof error.message === "string") {
+		return error.message;
+	}
+	try {
+		return JSON.stringify(error);
+	} catch {
+		return String(error);
+	}
+};
+
+const assertSuccess = (response: any, message: string): void => {
+	assert.strictEqual(response.success, true, `${message}. ${formatTcpError(response)}`);
+};
+
+describe("Scheduler TCP Integration Test", { skip: !canUseTcp }, () => {
 	let daemonProcess: any;
 	let tcpPort: number;
+    let httpPort: number;
+    let dashboardPort: number;
 	let testDbRoot: string;
+    let daemonExitError: Error | null = null;
+    let daemonLogs: string[] = [];
 	
-	before(async () => {
-		// Use a different port for testing to avoid conflicts
-		tcpPort = 3002;
-		process.env.TCP_PORT = tcpPort.toString();
-		process.env.SKIP_TCP = "false"; // Ensure TCP server is enabled
+    before(async () => {
+        testDbRoot = await mkdtemp(path.join(tmpdir(), "isomorphiq-daemon-test-"));
+        const dbPath = path.join(testDbRoot, "db");
+        const savedSearchesPath = path.join(testDbRoot, "saved-searches-db");
+        const auditPath = path.join(testDbRoot, "task-audit");
 
-		testDbRoot = await mkdtemp(path.join(tmpdir(), "isomorphiq-daemon-test-"));
-		const dbPath = path.join(testDbRoot, "db");
-		const savedSearchesPath = path.join(testDbRoot, "saved-searches-db");
-		const auditPath = path.join(testDbRoot, "task-audit");
-		
-		// Start the daemon
-		daemonProcess = spawn("yarn", ["run", "daemon"], {
-			cwd: process.cwd(),
-			env: {
-				...process.env,
-				NODE_ENV: "test",
-				ISOMORPHIQ_TEST_MODE: "true",
-				ISOMORPHIQ_STORAGE_MODE: "memory",
-				TCP_PORT: tcpPort.toString(),
-				DB_PATH: dbPath,
-				SAVED_SEARCHES_DB_PATH: savedSearchesPath,
-				TASK_AUDIT_DB_PATH: auditPath,
-				SKIP_TCP: "false",
-			},
-			stdio: "pipe",
-			detached: false,
-			shell: true
-		});
-		
-		// Wait for daemon to start
-		await setTimeout(3000);
-		
-		// Handle daemon output
-		if (daemonProcess.stdout) {
-			daemonProcess.stdout.on("data", (data: Buffer) => {
-				console.log("[DAEMON-OUTPUT]", data.toString());
-			});
-		}
-		
-		if (daemonProcess.stderr) {
-			daemonProcess.stderr.on("data", (data: Buffer) => {
-				console.error("[DAEMON-ERROR]", data.toString());
-			});
-		}
-	});
+        await Promise.all([
+            mkdir(dbPath, { recursive: true }),
+            mkdir(savedSearchesPath, { recursive: true }),
+            mkdir(auditPath, { recursive: true }),
+        ]);
+
+        const daemonEntry = fileURLToPath(new URL("../daemon.ts", import.meta.url));
+        const daemonCwd = path.join(path.dirname(daemonEntry), "..");
+        const shouldLogDaemonOutput = process.env.ISOMORPHIQ_TEST_VERBOSE === "true";
+        const maxAttempts = 3;
+        let lastError: Error | null = null;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            tcpPort = await findAvailablePort();
+            httpPort = await findAvailablePort();
+            dashboardPort = await findAvailablePort();
+            process.env.TCP_PORT = tcpPort.toString();
+            process.env.SKIP_TCP = "false"; // Ensure TCP server is enabled
+
+            daemonExitError = null;
+            daemonLogs = [];
+            daemonProcess = spawn(process.execPath, ["--experimental-strip-types", daemonEntry], {
+                cwd: daemonCwd,
+                env: {
+                    ...process.env,
+                    NODE_ENV: "test",
+                    ISOMORPHIQ_TEST_MODE: "true",
+                    ISOMORPHIQ_STORAGE_MODE: "memory",
+                    ISOMORPHIQ_MCP_TRANSPORT: "stdio",
+                    TCP_PORT: tcpPort.toString(),
+                    DAEMON_HTTP_PORT: httpPort.toString(),
+                    DASHBOARD_PORT: dashboardPort.toString(),
+                    DB_PATH: dbPath,
+                    SAVED_SEARCHES_DB_PATH: savedSearchesPath,
+                    TASK_AUDIT_DB_PATH: auditPath,
+                    SKIP_TCP: "false",
+                },
+                stdio: "pipe",
+                detached: false,
+            });
+
+            const recordLog = (label: string, data: Buffer) => {
+                const text = data.toString();
+                if (!text.trim()) {
+                    return;
+                }
+                daemonLogs.push(`[${label}] ${text}`);
+                if (daemonLogs.length > 200) {
+                    daemonLogs.shift();
+                }
+            };
+
+            if (daemonProcess.stdout) {
+                daemonProcess.stdout.on("data", (data: Buffer) => recordLog("stdout", data));
+            }
+            if (daemonProcess.stderr) {
+                daemonProcess.stderr.on("data", (data: Buffer) => recordLog("stderr", data));
+            }
+
+            if (shouldLogDaemonOutput && daemonProcess.stdout) {
+                daemonProcess.stdout.on("data", (data: Buffer) => {
+                    console.log("[DAEMON-OUTPUT]", data.toString());
+                });
+            }
+
+            if (shouldLogDaemonOutput && daemonProcess.stderr) {
+                daemonProcess.stderr.on("data", (data: Buffer) => {
+                    console.error("[DAEMON-ERROR]", data.toString());
+                });
+            }
+
+            const daemonExit = new Promise<never>((_resolve, reject) => {
+                daemonProcess.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+                    const details = daemonLogs.length > 0 ? `\nDaemon logs:\n${daemonLogs.join("")}` : "";
+                    const error = new Error(
+                        `Daemon exited early with code ${code ?? "unknown"} (${signal ?? "no signal"})${details}`,
+                    );
+                    daemonExitError = error;
+                    reject(error);
+                });
+            });
+
+            const abortReason = (): string | null => {
+                const joined = daemonLogs.join("");
+                if (joined.includes(`TCP port ${tcpPort} in use`)) {
+                    return `TCP port ${tcpPort} in use`;
+                }
+                if (joined.includes("TCP server disabled via SKIP_TCP=true")) {
+                    return "TCP server disabled via SKIP_TCP=true";
+                }
+                return null;
+            };
+
+            try {
+                await Promise.race([
+                    waitForTcpServer(tcpPort, 30000, abortReason, daemonLogs),
+                    daemonExit,
+                ]);
+                await waitForTcpReady();
+                return;
+            } catch (error) {
+                lastError = error instanceof Error ? error : new Error(String(error));
+                if (daemonProcess) {
+                    daemonProcess.kill("SIGTERM");
+                    await delay(1000);
+                }
+                if (lastError.message.includes("in use") && attempt < maxAttempts) {
+                    continue;
+                }
+                throw lastError;
+            }
+        }
+
+        if (lastError) {
+            throw lastError;
+        }
+    });
 	
 	after(async () => {
 		if (daemonProcess) {
 			daemonProcess.kill("SIGTERM");
-			await setTimeout(1000);
+			await delay(1000);
 		}
 		if (testDbRoot) {
 			await rm(testDbRoot, { recursive: true, force: true });
@@ -70,35 +179,96 @@ describe("Scheduler TCP Integration Test", () => {
 
 	function sendTcpCommand(command: string, data: any = {}): Promise<any> {
 		return new Promise((resolve, reject) => {
-			const net = require("net");
+            if (daemonExitError) {
+                reject(daemonExitError);
+                return;
+            }
 			const socket = new net.Socket();
+            let buffer = "";
+            let settled = false;
+            const timeout = setTimeout(() => {
+                socket.destroy();
+                if (!settled) {
+                    settled = true;
+                    reject(new Error(`TCP command timeout${formatDaemonLogTail()}`));
+                }
+            }, 10000);
+
+            const finish = (error?: Error, response?: any) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                clearTimeout(timeout);
+                socket.destroy();
+                if (error) {
+                    reject(error);
+                    return;
+                }
+                resolve(response);
+            };
 			
-			socket.connect(tcpPort, "localhost", () => {
+			socket.connect(tcpPort, "127.0.0.1", () => {
 				const message = JSON.stringify({ command, data });
-				socket.write(message + "\\n");
+				socket.end(`${message}\n`);
 			});
 			
 			socket.on("data", (data: Buffer) => {
+                buffer += data.toString();
+                if (!buffer.includes("\n")) {
+                    return;
+                }
 				try {
-					const response = JSON.parse(data.toString().trim());
-					resolve(response);
+					const response = JSON.parse(buffer.trim());
+					finish(undefined, response);
 				} catch (error) {
-					reject(error);
+					finish(error instanceof Error ? error : new Error(String(error)));
 				}
-				socket.end();
 			});
 			
 			socket.on("error", (error: Error) => {
-				reject(error);
+                const nextError = daemonExitError ?? error;
+                finish(nextError);
 			});
-			
-			// Timeout after 5 seconds
-			setTimeout(() => {
-				socket.destroy();
-				reject(new Error("TCP command timeout"));
-			}, 5000);
+
+            socket.on("close", () => {
+                if (!settled) {
+                    const nextError = daemonExitError ?? new Error(`TCP socket closed${formatDaemonLogTail()}`);
+                    finish(nextError);
+                }
+            });
 		});
 	}
+
+    const formatDaemonLogTail = (): string => {
+        if (daemonLogs.length === 0) {
+            return "";
+        }
+        const tail = daemonLogs.slice(-20).join("");
+        return `\nDaemon logs:\n${tail}`;
+    };
+
+    const waitForTcpReady = async (): Promise<void> => {
+        const maxReadyAttempts = 5;
+        let lastError: Error | null = null;
+        for (let attempt = 1; attempt <= maxReadyAttempts; attempt += 1) {
+            try {
+                const response = await sendTcpCommand("get_scheduler_stats");
+                if (response?.success) {
+                    return;
+                }
+                lastError = new Error(
+                    `TCP server responded with failure${formatDaemonLogTail()}`,
+                );
+            } catch (error) {
+                lastError = error instanceof Error ? error : new Error(String(error));
+            }
+            await delay(250);
+        }
+        if (lastError) {
+            throw lastError;
+        }
+    };
 
 	it("should create a scheduled task via TCP", async () => {
 		const taskData = {
@@ -271,3 +441,73 @@ describe("Scheduler TCP Integration Test", () => {
 		}
 	});
 });
+
+async function canConnectTcp(): Promise<boolean> {
+	return new Promise((resolve) => {
+		const socket = new net.Socket();
+		const timer = setTimeout(() => {
+			socket.destroy();
+			resolve(true);
+		}, 250);
+
+		socket.once("error", (error: NodeJS.ErrnoException) => {
+			clearTimeout(timer);
+			socket.destroy();
+			resolve(error.code !== "EPERM");
+		});
+
+		socket.connect(9, "127.0.0.1", () => {
+			clearTimeout(timer);
+			socket.destroy();
+			resolve(true);
+		});
+	});
+}
+
+async function findAvailablePort(): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const server = net.createServer();
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", () => {
+			const address = server.address();
+			server.close(() => {
+				if (address && typeof address === "object") {
+					resolve(address.port);
+					return;
+				}
+				reject(new Error("Failed to resolve available TCP port"));
+			});
+		});
+	});
+}
+
+async function waitForTcpServer(
+    port: number,
+    timeoutMs: number,
+    abortReason?: () => string | null,
+    logs?: string[],
+): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const reason = abortReason?.();
+        if (reason) {
+            const details = logs && logs.length > 0 ? `\nDaemon logs:\n${logs.join("")}` : "";
+            throw new Error(`${reason}${details}`);
+        }
+        try {
+            await new Promise<void>((resolve, reject) => {
+                const socket = new net.Socket();
+                socket.once("error", reject);
+                socket.connect(port, "127.0.0.1", () => {
+                    socket.end();
+                    resolve();
+                });
+            });
+            return;
+        } catch {
+            await delay(200);
+        }
+    }
+    const details = logs && logs.length > 0 ? `\nDaemon logs:\n${logs.join("")}` : "";
+    throw new Error(`Timed out waiting for TCP server on port ${port}${details}`);
+}

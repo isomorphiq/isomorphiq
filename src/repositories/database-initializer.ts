@@ -1,6 +1,9 @@
 import { DatabaseSchemaManager, AuthenticationRepository } from "@isomorphiq/auth";
 import type { CreateUserInput, User } from "@isomorphiq/auth";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class DatabaseInitializer {
 	private schemaManager: DatabaseSchemaManager;
 	private authRepository: AuthenticationRepository;
@@ -209,3 +212,4 @@ async function main() {
 if (import.meta.url === `file://${process.argv[1]}`) {
 	main().catch(console.error);
 }
+

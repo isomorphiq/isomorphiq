@@ -10,6 +10,9 @@ type State = {
 	error: Error | null;
 };
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ErrorBoundary extends React.Component<Props, State> {
 	state: State = { hasError: false, error: null };
 
@@ -57,3 +60,4 @@ export class ErrorBoundary extends React.Component<Props, State> {
 		return this.props.children;
 	}
 }
+

@@ -38,6 +38,7 @@ export type TaskRepository = {
 
 /**
  * In-memory implementation of TaskRepository for testing
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class InMemoryTaskRepository implements TaskRepository {
 	private tasks: Map<string, TaskEntity> = new Map();
@@ -347,3 +348,4 @@ export class InMemoryTaskRepository implements TaskRepository {
 		}
 	}
 }
+

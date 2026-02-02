@@ -1,6 +1,9 @@
 import type { DomainEvent, EventHandler, EventStore } from "./events.ts";
 
 // In-memory event store implementation
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class InMemoryEventStore implements EventStore {
 	private events: DomainEvent[] = [];
 	private maxEvents: number;
@@ -92,6 +95,9 @@ export class InMemoryEventStore implements EventStore {
 }
 
 // LevelDB-based event store implementation
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class LevelDBEventStore implements EventStore {
 	private db: Map<string, unknown>;
 	private namespace: string;
@@ -197,6 +203,9 @@ export class LevelDBEventStore implements EventStore {
 }
 
 // Event replay service
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EventReplayService {
 	private eventStore: EventStore;
 	private eventHandlers: Map<string, EventHandler[]> = new Map();
@@ -310,6 +319,9 @@ export class EventReplayService {
 }
 
 // Event snapshot service for performance optimization
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class EventSnapshotService {
 	private eventStore: EventStore;
 	private snapshots: Map<
@@ -414,3 +426,4 @@ export class EventSnapshotService {
 		return result;
 	}
 }
+

@@ -15,9 +15,14 @@
         "build": "tsc -p tsconfig.json",
         "typecheck": "tsc --noEmit -p tsconfig.json",
         "lint": "echo \"Lint not configured yet for @isomorphiq/search\"",
-        "test": "echo \"Tests not configured yet for @isomorphiq/search\""
+        "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts",
+        "start": "node --experimental-strip-types src/search-service-server.ts"
     },
     "dependencies": {
+        "@isomorphiq/core": "workspace:*",
+        "@isomorphiq/persistence-level": "workspace:*",
+        "@trpc/client": "^11.7.2",
+        "@trpc/server": "^11.7.2",
         "@tsimpl/core": "0.1.1",
         "@tsimpl/runtime": "0.1.1",
         "@tsimpl/validation": "0.1.1",

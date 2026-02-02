@@ -11,6 +11,7 @@ import type {
 
 /**
  * Service for managing workflow definitions and templates
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class WorkflowService {
 	private workflows: Map<string, WorkflowDefinition> = new Map();
@@ -340,3 +341,4 @@ export class WorkflowService {
 		console.log("[WORKFLOW] Workflow service closed");
 	}
 }
+

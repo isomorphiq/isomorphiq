@@ -1,4 +1,4 @@
-import { ConflictError, NotFoundError, UnauthorizedError, type Result } from "@isomorphiq/core";
+import { ConflictError, NotFoundError, UnauthorizedError, ValidationError, type Result } from "@isomorphiq/core";
 import {
     TaskDomainRules,
     TaskFactory,
@@ -66,6 +66,7 @@ export type TaskServiceApi = {
 
 /**
  * Task service implementation
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class TaskService implements TaskServiceApi {
 	private readonly taskRepository: TaskRepository;
@@ -73,6 +74,42 @@ export class TaskService implements TaskServiceApi {
 	constructor(taskRepository: TaskRepository) {
 		this.taskRepository = taskRepository;
 	}
+
+    private async ensureDependenciesInSameEnvironment(
+        taskId: string,
+        dependencies: string[],
+    ): Promise<Result<void>> {
+        const validationResult = TaskDomainRules.validateDependencies(dependencies);
+        if (!validationResult.success) {
+            return validationResult;
+        }
+
+        const uniqueDependencies = Array.from(new Set(dependencies));
+        for (const depId of uniqueDependencies) {
+            if (depId === taskId) {
+                return {
+                    success: false,
+                    error: new ValidationError("Task cannot depend on itself", "dependencies"),
+                };
+            }
+
+            const dependencyResult = await this.taskRepository.findById(depId);
+            if (!dependencyResult.success) {
+                return { success: false, error: dependencyResult.error };
+            }
+            if (!dependencyResult.data) {
+                return {
+                    success: false,
+                    error: new ValidationError(
+                        `Dependency ${depId} must reference a task in the same environment as task ${taskId}`,
+                        "dependencies",
+                    ),
+                };
+            }
+        }
+
+        return { success: true, data: undefined };
+    }
 
 	async createTask(
 		input: CreateTaskInputWithPriority,
@@ -89,6 +126,16 @@ export class TaskService implements TaskServiceApi {
 		if (!taskResult.success) {
 			return taskResult;
 		}
+
+        if (taskResult.data.dependencies.length > 0) {
+            const dependencyResult = await this.ensureDependenciesInSameEnvironment(
+                taskResult.data.id,
+                taskResult.data.dependencies,
+            );
+            if (!dependencyResult.success) {
+                return { success: false, error: dependencyResult.error };
+            }
+        }
 
 		// Save to repository
 		return await this.taskRepository.create(taskResult.data);
@@ -137,6 +184,16 @@ export class TaskService implements TaskServiceApi {
 		if (!validationResult.success) {
 			return { success: false, error: validationResult.error };
 		}
+
+        if (input.dependencies) {
+            const dependencyResult = await this.ensureDependenciesInSameEnvironment(
+                id,
+                input.dependencies,
+            );
+            if (!dependencyResult.success) {
+                return { success: false, error: dependencyResult.error };
+            }
+        }
 
 		// Update task using factory
 		const updateResult = TaskFactory.update(existingTask, input);
@@ -361,6 +418,11 @@ export class TaskService implements TaskServiceApi {
 
 		const task = taskResult.data;
 
+        const dependencyCheck = await this.ensureDependenciesInSameEnvironment(taskId, [dependsOn]);
+        if (!dependencyCheck.success) {
+            return { success: false, error: dependencyCheck.error };
+        }
+
 		// Check if dependency already exists
 		if (task.dependencies.includes(dependsOn)) {
 			return {
@@ -482,3 +544,4 @@ export class TaskService implements TaskServiceApi {
 		return false;
 	}
 }
+

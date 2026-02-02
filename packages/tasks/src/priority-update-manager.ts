@@ -7,6 +7,7 @@ import type { TaskPriorityChangedEvent } from "@isomorphiq/realtime";
  * 
  * This module ensures that priority updates are consistent across all data sources
  * and provides optimized processing to avoid redundant operations.
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class PriorityUpdateManager {
     private static instance: PriorityUpdateManager;
@@ -108,6 +109,7 @@ export class PriorityUpdateManager {
  * Optimized priority update service
  * 
  * Provides efficient priority update operations with caching and consistency guarantees.
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class OptimizedPriorityService {
     private priorityCache: Map<string, TaskPriority> = new Map();
@@ -233,6 +235,7 @@ export class OptimizedPriorityService {
  * Priority consistency validator
  * 
  * Provides comprehensive validation of priority consistency across the system.
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class PriorityConsistencyValidator {
     /**
@@ -367,3 +370,4 @@ export class PriorityConsistencyValidator {
 // Export singleton instances
 export const priorityUpdateManager = PriorityUpdateManager.getInstance();
 export const optimizedPriorityService = new OptimizedPriorityService();
+

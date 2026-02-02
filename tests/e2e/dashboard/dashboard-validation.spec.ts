@@ -7,6 +7,9 @@ const DASHBOARD_PORT = 3005;
 const DASHBOARD_URL = `http://localhost:${DASHBOARD_PORT}`;
 let serverAvailable = false;
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class DashboardValidator {
     private results: Record<string, "PASS" | "FAIL" | "SKIP"> = {};
 
@@ -264,3 +267,4 @@ describe("Dashboard E2E Validation", () => {
         expect(failures.length).toBe(0);
     });
 });
+

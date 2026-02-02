@@ -1,3 +1,19 @@
+// TODO: This file is too complex (716 lines) and should be refactored into several modules.
+// Current concerns mixed: Search UI, filters, saved searches, suggestions, results display,
+// query building, API integration.
+// 
+// Proposed structure:
+// - components/search/ - Component directory
+//   - search-panel.tsx - Main search interface
+//   - filter-builder.tsx - Filter construction UI
+//   - saved-searches.tsx - Saved search management
+//   - suggestions.tsx - Search suggestions
+//   - results-list.tsx - Search results display
+//   - query-builder.tsx - Query construction logic
+//   - hooks/ - Custom hooks for search operations
+//   - types.ts - Search component types
+// - components/search/index.ts - Component exports
+
 import { useState, useEffect } from "react";
 import type { SearchQuery, SearchResult, SavedSearch } from "@isomorphiq/tasks/types";
 
@@ -10,7 +26,20 @@ interface AdvancedSearchProps {
 // Mock API calls - replace with actual API integration
 const mockSearchSuggestions = async (query: string): Promise<string[]> => {
 	// Mock suggestions based on common task terms
-	const commonTerms = ["feature", "bug", "fix", "implement", "refactor", "test", "documentation", "api", "ui", "backend"];
+	const commonTerms = [
+		"theme",
+		"initiative",
+		"feature",
+		"bug",
+		"fix",
+		"implement",
+		"refactor",
+		"test",
+		"documentation",
+		"api",
+		"ui",
+		"backend",
+	];
 	return commonTerms.filter(term => term.includes(query.toLowerCase())).slice(0, 5);
 };
 
@@ -371,6 +400,8 @@ export function AdvancedSearch({ onSearch, searchResult, isLoading }: AdvancedSe
 									minHeight: "80px",
 								}}
 							>
+								<option value="theme">Theme</option>
+								<option value="initiative">Initiative</option>
 								<option value="feature">Feature</option>
 								<option value="story">Story</option>
 								<option value="task">Task</option>

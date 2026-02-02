@@ -6,7 +6,7 @@ import "../../../tests/test-utils/env-fetch.ts";
  * Tests the /api/analytics endpoint for data accuracy and consistency
  */
 
-import { ProductManager } from "@isomorphiq/tasks";
+import { ProductManager } from "@isomorphiq/user-profile";
 import type { Task } from "@isomorphiq/tasks";
 
 interface TestResult {
@@ -60,6 +60,9 @@ interface StatsData {
 	};
 }
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class AnalyticsTester {
 	private pm: ProductManager;
 	private results: TestResult[] = [];
@@ -503,3 +506,4 @@ if (require.main === module) {
 }
 
 export { AnalyticsTester };
+
