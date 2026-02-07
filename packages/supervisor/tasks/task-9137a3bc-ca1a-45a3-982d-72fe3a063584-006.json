@@ -1,0 +1,1 @@
+"{\"id\":\"task-9137a3bc-ca1a-45a3-982d-72fe3a063584-006\",\"title\":\"Implement Layout Persistence Tests\",\"type\":\"implementation\",\"priority\":\"medium\",\"createdBy\":\"principal-architect\",\"description\":\"Write comprehensive tests for layout persistence, covering serialization, deserialization, integrity under power loss; acceptance: all tests pass.\"}"

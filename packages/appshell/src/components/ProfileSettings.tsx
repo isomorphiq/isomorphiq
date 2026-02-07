@@ -41,7 +41,7 @@ export function ProfileSettings() {
 		setMessage(null);
 
 		try {
-			const response = await fetch("/api/auth/profile", {
+			const response = await fetch("/api/users/me/profile", {
 				method: "PUT",
 				headers: {
 					"Content-Type": "application/json",

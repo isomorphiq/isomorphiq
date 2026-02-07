@@ -16,7 +16,8 @@
         "typecheck": "tsc --noEmit -p tsconfig.json",
         "lint": "echo \"Lint not configured yet for @isomorphiq/search\"",
         "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts",
-        "start": "node --experimental-strip-types src/search-service-server.ts"
+        "start": "node --experimental-strip-types src/search-service-server.ts",
+        "start:watch": "node --watch --experimental-strip-types src/search-service-server.ts"
     },
     "dependencies": {
         "@isomorphiq/core": "workspace:*",
@@ -27,5 +28,8 @@
         "@tsimpl/runtime": "0.1.1",
         "@tsimpl/validation": "0.1.1",
         "zod": "^3.24.2"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
     }
 }

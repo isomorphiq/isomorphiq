@@ -2,7 +2,7 @@ import { describe, it, before, after, beforeEach } from "node:test";
 import { strict as assert } from "node:assert";
 import { unlinkSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 import type { TaskStatus } from "@isomorphiq/tasks";
 
 // Test database path - clean up before/after tests

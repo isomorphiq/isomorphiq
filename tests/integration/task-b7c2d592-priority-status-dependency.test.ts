@@ -1,7 +1,7 @@
 import { describe, it, before, beforeEach, after } from "node:test";
 import { strict as assert } from "node:assert";
 import { DaemonTcpClient, type Task } from "../e2e/dashboard/tcp-client.ts";
-import { PriorityStatusDeadlockDetector, type PriorityStatusDependency } from "../../packages/daemon/src/services/priority-status-deadlock-detector.ts";
+import { PriorityStatusDeadlockDetector, type PriorityStatusDependency } from "../../packages/worker/src/services/priority-status-deadlock-detector.ts";
 
 describe("Task b7c2d592 Priority-Status Dependency Implementation", () => {
     const TASK_ID_PREFIX = "task-b7c2d592-deadlock-detection";

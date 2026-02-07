@@ -27,7 +27,7 @@ export default defineConfig({
             '/trpc': {
                 target: 'http://localhost:3003',
                 changeOrigin: true,
-                ws: true,
+                ws: false,
                 secure: false,
                 xfwd: true
             },

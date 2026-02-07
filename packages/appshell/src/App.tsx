@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-661b7ee4-568e-4bcf-9ab8-4436cfee3b87"
+
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { ProtectedRoute } from "./components/ProtectedRoute.tsx";
 import { TaskDetailPage } from "./components/TaskDetailPage.tsx";
@@ -8,10 +10,13 @@ import { WorkflowPage } from "./components/WorkflowPage.tsx";
 import { useRouteProgress } from "./hooks/useRouteProgress.ts";
 import { ActivityPage } from "./pages/ActivityPage.tsx";
 import { AnalyticsPage } from "./pages/AnalyticsPage.tsx";
+import { ContextDetailPage } from "./pages/ContextDetailPage.tsx";
+import { ContextListPage } from "./pages/ContextListPage.tsx";
 import { DashboardPage } from "./pages/DashboardPage.tsx";
 import { DependencyAnalysisRoute } from "./pages/DependencyAnalysisRoute.tsx";
 import { LoginPage } from "./pages/LoginPage.tsx";
 import { ProfileAnalyticsPage } from "./pages/ProfileAnalyticsPage.tsx";
+import { PortfolioPage } from "./pages/PortfolioPage.tsx";
 import { ProfilesPage } from "./pages/ProfilesPage.tsx";
 import { RegisterPage } from "./pages/RegisterPage.tsx";
 import { SecurityPage } from "./pages/SecurityPage.tsx";
@@ -58,9 +63,41 @@ export function App() {
                             </ProtectedRoute>
                         }
                     />
-                    <Route path="/analytics" element={<AnalyticsPage />} />
+                    <Route
+                        path="/analytics"
+                        element={
+                            <ProtectedRoute>
+                                <AnalyticsPage />
+                            </ProtectedRoute>
+                        }
+                    />
                     <Route path="/activity" element={<ActivityPage />} />
+                    <Route
+                        path="/portfolio"
+                        element={
+                            <ProtectedRoute>
+                                <PortfolioPage />
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/context"
+                        element={
+                            <ProtectedRoute>
+                                <ContextListPage />
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/context/:contextId"
+                        element={
+                            <ProtectedRoute>
+                                <ContextDetailPage />
+                            </ProtectedRoute>
+                        }
+                    />
                     <Route path="/profiles" element={<ProfilesPage />} />
+                    <Route path="/profiles/:profileName" element={<ProfilesPage />} />
                     <Route
                         path="/profile-analytics"
                         element={<ProfileAnalyticsPage />}

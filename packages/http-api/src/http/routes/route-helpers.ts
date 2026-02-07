@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
-import type { ProductManager } from "@isomorphiq/user-profile";
-import type { ProfileManager } from "@isomorphiq/user-profile";
+import type { ProductManager } from "@isomorphiq/profiles";
+import type { ProfileManager } from "@isomorphiq/profiles";
 
 export type ProductManagerResolver = (req: { headers: IncomingHttpHeaders }) => ProductManager;
 export type ProfileManagerResolver = (req: { headers: IncomingHttpHeaders }) => ProfileManager;

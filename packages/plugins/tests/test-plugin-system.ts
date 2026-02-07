@@ -1,7 +1,7 @@
 import { PluginManager } from "../src/plugin-manager.ts";
 import { PluginSecurityManager } from "../src/plugin-sandbox.ts";
 import { BaseProfilePlugin } from "../src/plugin-system.ts";
-import type { ACPProfile } from "@isomorphiq/user-profile";
+import type { ACPProfile } from "@isomorphiq/profiles";
 import fs from "fs/promises";
 import path from "path";
 
@@ -267,7 +267,7 @@ class PluginSystemTester {
             // Create a simple test plugin file
             const testPluginContent = `
 import { BaseProfilePlugin } from "../../src/plugin-system.ts";
-import type { ACPProfile } from "@isomorphiq/user-profile";
+import type { ACPProfile } from "@isomorphiq/profiles";
 
 /**
  * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.

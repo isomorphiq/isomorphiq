@@ -24,7 +24,8 @@
         "typecheck": "tsc --noEmit -p tsconfig.json",
         "lint": "echo \"Lint not configured yet for @isomorphiq/tasks\"",
         "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts",
-        "start": "node --experimental-strip-types src/task-service-server.ts"
+        "start": "node --experimental-strip-types src/task-service-server.ts",
+        "start:watch": "node --watch --experimental-strip-types src/task-service-server.ts"
     },
     "dependencies": {
         "@isomorphiq/core": "workspace:*",
@@ -40,5 +41,8 @@
         "level": "^10.0.0",
         "ws": "^8.18.3",
         "zod": "^3.24.2"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
     }
 }

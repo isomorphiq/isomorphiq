@@ -166,7 +166,7 @@ const statusChange = mockRealTimeUpdates.generateStatusChange(
 ### Accessing the Dashboard
 ```bash
 # Start the daemon
-yarn run daemon
+yarn run worker
 
 # Access dashboard (default port 3005)
 http://localhost:3005

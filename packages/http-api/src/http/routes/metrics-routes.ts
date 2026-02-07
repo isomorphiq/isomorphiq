@@ -1,5 +1,5 @@
 import express from "express";
-import type { ProductManager } from "@isomorphiq/user-profile";
+import type { ProductManager } from "@isomorphiq/profiles";
 import { normalizeProductManagerResolver, type ProductManagerResolver } from "./route-helpers.ts";
 
 export function registerMetricsRoutes(

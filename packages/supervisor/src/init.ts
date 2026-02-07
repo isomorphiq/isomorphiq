@@ -1,79 +1,41 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import {
+    createSupervisorServiceCatalog,
+    pathExists,
+    type SupervisorServiceConfig,
+} from "./service-catalog.ts";
 
-// Lightweight supervisor for the daemon and core microservices (tasks/search).
+// Lightweight supervisor for workers, gateway, and core microservices.
+// (auth/profiles/tasks/search/context/gateway).
 // - Runs each service in a separate Node process (fresh V8 each time)
-// - Auto-restarts on crash/exit only (no file-watching)
+// - Optional watch mode delegates file watching to each service's start:watch script
 // - Minimal deps, no nodemon/systemd required
 
-const pathExists = (candidate: string): boolean => {
-    try {
-        fs.accessSync(candidate, fs.constants.F_OK);
-        return true;
-    } catch {
-        return false;
-    }
+const { root: ROOT, services } = createSupervisorServiceCatalog();
+const serviceById = new Map(
+    services.map((service) => [service.id, service] as const),
+);
+const WATCH_MODE =
+    process.env.SUPERVISOR_WATCH === "1"
+    || process.argv.includes("--watch");
+
+const serviceWorkspaceById: Record<SupervisorServiceConfig["id"], string> = {
+    "auth-service": "@isomorphiq/auth",
+    "profiles-service": "@isomorphiq/profiles",
+    "tasks-service": "@isomorphiq/tasks",
+    "search-service": "@isomorphiq/search",
+    "context-service": "@isomorphiq/context",
+    "notifications-service": "@isomorphiq/notifications",
+    "gateway": "@isomorphiq/gateway",
+    "worker": "@isomorphiq/worker",
+    "mcp-service": "@isomorphiq/mcp",
 };
-
-const hasDaemonEntry = (root: string): boolean =>
-    pathExists(path.join(root, "packages", "daemon", "src", "daemon.ts"));
-
-const hasWorkspaceConfig = (root: string): boolean => {
-    const pkgPath = path.join(root, "package.json");
-    if (!pathExists(pkgPath)) {
-        return false;
-    }
-    try {
-        const raw = fs.readFileSync(pkgPath, "utf8");
-        const parsed = JSON.parse(raw) as { workspaces?: unknown };
-        return Array.isArray(parsed.workspaces) && parsed.workspaces.length > 0;
-    } catch {
-        return false;
-    }
-};
-
-const findRepoRoot = (start: string): string | null => {
-    let current = start;
-    for (;;) {
-        if (hasDaemonEntry(current) || hasWorkspaceConfig(current)) {
-            return current;
-        }
-        const parent = path.dirname(current);
-        if (parent === current) {
-            return null;
-        }
-        current = parent;
-    }
-};
-
-const resolveRoot = (): string => {
-    const seeds = [
-        process.env.INIT_CWD,
-        process.cwd(),
-        path.dirname(fileURLToPath(import.meta.url)),
-    ].filter((value): value is string => typeof value === "string" && value.length > 0);
-
-    for (const seed of seeds) {
-        const found = findRepoRoot(seed);
-        if (found) {
-            return found;
-        }
-    }
-
-    return process.cwd();
-};
-
-const ROOT = resolveRoot();
-const DAEMON_ENTRY = path.join(ROOT, "packages", "daemon", "src", "daemon.ts");
-const TASKS_ENTRY = path.join(ROOT, "packages", "tasks", "src", "task-service-server.ts");
-const SEARCH_ENTRY = path.join(ROOT, "packages", "search", "src", "search-service-server.ts");
-const CONTEXT_ENTRY = path.join(ROOT, "packages", "context", "src", "context-service-server.ts");
 
 let shuttingDown = false;
 const MAX_DELAY_MS = 10000;
 const MIN_UPTIME_MS = 5000;
+const WORKER_PORT_RANGE_START = 9001;
+const WORKER_PORT_RANGE_END = 9099;
 
 const log = (...args: unknown[]) => console.log("[INIT]", ...args);
 
@@ -87,47 +49,61 @@ const buildEnv = (
     ),
 });
 
-const readInteractiveFlag = (): boolean => {
-    for (const arg of process.argv.slice(2)) {
-        if (!arg.startsWith("--interactive")) {
-            continue;
-        }
-        const [, value] = arg.split("=");
-        if (!value) {
-            return true;
-        }
-        const normalized = value.trim().toLowerCase();
-        if (["false", "0", "no"].includes(normalized)) {
-            return false;
-        }
-        if (["true", "1", "yes"].includes(normalized)) {
-            return true;
-        }
+const getServiceConfig = (
+    serviceId: SupervisorServiceConfig["id"],
+): SupervisorServiceConfig => {
+    const service = serviceById.get(serviceId);
+    if (!service) {
+        throw new Error(`Supervisor service config missing: ${serviceId}`);
     }
-    return true;
+    return service;
 };
 
-const createServiceSupervisor = (config: {
-    name: string;
-    entry: string;
-    env: Record<string, string | undefined>;
-}): { start: (reason?: string) => void; stop: (signal?: NodeJS.Signals) => Promise<void> } => {
+type ServiceSupervisorOptions = {
+    envOverrides?: Record<string, string | undefined>;
+    instanceName?: string;
+    scriptName?: string;
+};
+
+const resolveServiceLaunch = (
+    config: SupervisorServiceConfig,
+    options?: ServiceSupervisorOptions,
+): { command: string; args: string[] } => {
+    const workspaceName = serviceWorkspaceById[config.id];
+    const scriptName = options?.scriptName ?? (WATCH_MODE ? "start:watch" : "start");
+    return {
+        command: "yarn",
+        args: ["workspace", workspaceName, scriptName],
+    };
+};
+
+const createServiceSupervisor = (
+    config: SupervisorServiceConfig,
+    options: ServiceSupervisorOptions = {},
+): { start: (reason?: string) => void; stop: (signal?: NodeJS.Signals) => Promise<void> } => {
     let child: ChildProcess | null = null;
     let restartDelayMs = 1000;
     let lastStart = 0;
+    const serviceName = options.instanceName ?? config.name;
+    const effectiveEnv = {
+        ...config.env,
+        ...(options.envOverrides ?? {}),
+    };
 
     const start = (reason: string = "boot") => {
         if (child) return;
         if (!pathExists(config.entry)) {
-            log(`${config.name} entry not found at ${config.entry}; skipping.`);
+            log(`${serviceName} entry not found at ${config.entry}; skipping.`);
             return;
         }
         lastStart = Date.now();
-        log(`Starting ${config.name} (${reason})...`);
+        const launchMode = WATCH_MODE ? "watch" : "normal";
+        log(`Starting ${serviceName} (${reason}, mode=${launchMode})...`);
+        const launch = resolveServiceLaunch(config, options);
 
-        child = spawn("node", ["--experimental-strip-types", config.entry], {
+        child = spawn(launch.command, launch.args, {
             cwd: ROOT,
-            env: buildEnv(process.env, config.env),
+            env: buildEnv(process.env, effectiveEnv),
             stdio: "inherit",
         });
 
@@ -135,7 +111,7 @@ const createServiceSupervisor = (config: {
             child = null;
             if (shuttingDown) return;
             if (code === 0 && !signal) {
-                log(`${config.name} exited cleanly (code=0). Not restarting.`);
+                log(`${serviceName} exited cleanly (code=0). Not restarting.`);
                 return;
             }
 
@@ -147,7 +123,7 @@ const createServiceSupervisor = (config: {
             }
 
             log(
-                `${config.name} exited (code=${code}, signal=${signal}). Restarting in ${restartDelayMs}ms...`,
+                `${serviceName} exited (code=${code}, signal=${signal}). Restarting in ${restartDelayMs}ms...`,
             );
             setTimeout(() => start("restart"), restartDelayMs);
         });
@@ -160,7 +136,7 @@ const createServiceSupervisor = (config: {
             const proc = child;
             const killTimer = setTimeout(() => {
                 if (proc && !proc.killed) {
-                    log(`Force killing ${config.name} after graceful timeout`);
+                    log(`Force killing ${serviceName} after graceful timeout`);
                     proc.kill("SIGKILL");
                 }
             }, 5000);
@@ -177,73 +153,149 @@ const createServiceSupervisor = (config: {
     return { start, stop };
 };
 
-const createDaemonSupervisor = (): ReturnType<typeof createServiceSupervisor> => {
-    const interactive = readInteractiveFlag();
-    return createServiceSupervisor({
-        name: "daemon",
-        entry: DAEMON_ENTRY,
-        env: {
-            // Keep TCP enabled by default; can be overridden with SKIP_TCP=true
-            SKIP_TCP: process.env.SKIP_TCP ?? "false",
-            HTTP_PORT: process.env.HTTP_PORT ?? "3003",
-            ACP_SESSION_UPDATE_STREAM: interactive ? process.env.ACP_SESSION_UPDATE_STREAM : "",
-            ACP_SESSION_UPDATE_PATH: interactive ? process.env.ACP_SESSION_UPDATE_PATH : "",
-            ACP_SESSION_UPDATE_QUIET: interactive
-                ? process.env.ACP_SESSION_UPDATE_QUIET
-                : "0",
-        },
-    });
-};
+const createAuthSupervisor = (): ReturnType<typeof createServiceSupervisor> =>
+    createServiceSupervisor(getServiceConfig("auth-service"));
+
+const createProfilesSupervisor = (): ReturnType<typeof createServiceSupervisor> =>
+    createServiceSupervisor(getServiceConfig("profiles-service"));
 
 const createTasksSupervisor = (): ReturnType<typeof createServiceSupervisor> =>
-    createServiceSupervisor({
-        name: "tasks-service",
-        entry: TASKS_ENTRY,
-        env: {},
-    });
+    createServiceSupervisor(getServiceConfig("tasks-service"));
 
 const createSearchSupervisor = (): ReturnType<typeof createServiceSupervisor> =>
-    createServiceSupervisor({
-        name: "search-service",
-        entry: SEARCH_ENTRY,
-        env: {},
-    });
+    createServiceSupervisor(getServiceConfig("search-service"));
 
 const createContextSupervisor = (): ReturnType<typeof createServiceSupervisor> =>
-    createServiceSupervisor({
-        name: "context-service",
-        entry: CONTEXT_ENTRY,
-        env: {},
+    createServiceSupervisor(getServiceConfig("context-service"));
+
+const createNotificationsSupervisor = (): ReturnType<typeof createServiceSupervisor> =>
+    createServiceSupervisor(getServiceConfig("notifications-service"));
+
+const createGatewaySupervisor = (): ReturnType<typeof createServiceSupervisor> =>
+    createServiceSupervisor(getServiceConfig("gateway"));
+
+const createMcpSupervisor = (): ReturnType<typeof createServiceSupervisor> =>
+    createServiceSupervisor(getServiceConfig("mcp-service"), {
+        scriptName: "start",
     });
+
+const resolveWorkerCountFromArgv = (): number | null => {
+    const args = process.argv.slice(2);
+    const workersPrefix = "--workers=";
+    const workerCountPrefix = "--worker-count=";
+    for (let index = 0; index < args.length; index += 1) {
+        const arg = args[index];
+        if (arg.startsWith(workersPrefix)) {
+            const parsed = Number.parseInt(arg.slice(workersPrefix.length).trim(), 10);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        }
+        if (arg.startsWith(workerCountPrefix)) {
+            const parsed = Number.parseInt(arg.slice(workerCountPrefix.length).trim(), 10);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        }
+        if (arg === "--workers" || arg === "--worker-count") {
+            const nextArg = args[index + 1];
+            if (!nextArg || nextArg.startsWith("--")) {
+                return null;
+            }
+            const parsed = Number.parseInt(nextArg.trim(), 10);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        }
+    }
+    return null;
+};
+
+const resolveWorkerCount = (): number => {
+    const fromArgs = resolveWorkerCountFromArgv();
+    if (fromArgs !== null) {
+        return fromArgs;
+    }
+    const raw =
+        process.env.ISOMORPHIQ_WORKER_COUNT
+        ?? process.env.WORKER_COUNT
+        ?? "1";
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed < 1) {
+        return 1;
+    }
+    return parsed;
+};
+
+const createWorkerSupervisors = (): Array<ReturnType<typeof createServiceSupervisor>> => {
+    const workerConfig = getServiceConfig("worker");
+    const workerCount = resolveWorkerCount();
+    const maxWorkers = WORKER_PORT_RANGE_END - WORKER_PORT_RANGE_START + 1;
+    if (workerCount > maxWorkers) {
+        throw new Error(
+            `WORKER_COUNT=${workerCount} exceeds supported range size ${maxWorkers} (${WORKER_PORT_RANGE_START}-${WORKER_PORT_RANGE_END})`,
+        );
+    }
+
+    const gatewayHost = process.env.GATEWAY_HOST ?? "127.0.0.1";
+    const gatewayPort = process.env.GATEWAY_PORT ?? "3003";
+    const gatewayBaseUrl = `http://${gatewayHost}:${gatewayPort}`;
+    return Array.from({ length: workerCount }, (_, index) => {
+        const workerPort = WORKER_PORT_RANGE_START + index;
+        const workerName = `worker-${index + 1}`;
+        return createServiceSupervisor(workerConfig, {
+            instanceName: workerName,
+            scriptName: WATCH_MODE ? "start:worker:watch" : "start:worker",
+            envOverrides: {
+                ISOMORPHIQ_WORKER_ID: workerName,
+                WORKER_SERVER_PORT: String(workerPort),
+                WORKER_GATEWAY_URL: gatewayBaseUrl,
+                ACP_MCP_PREFERENCE: "command",
+                ISOMORPHIQ_ACP_MCP_PREFERENCE: "command",
+            },
+        });
+    });
+};
 
 async function shutdown(signal: NodeJS.Signals) {
     if (shuttingDown) return;
     shuttingDown = true;
     log(`Received ${signal}, shutting down supervisor...`);
     await Promise.all([
-        daemonSupervisor.stop(signal),
+        ...workerSupervisors.map((workerSupervisor) => workerSupervisor.stop(signal)),
+        mcpSupervisor.stop(signal),
         tasksSupervisor.stop(signal),
         searchSupervisor.stop(signal),
         contextSupervisor.stop(signal),
+        notificationsSupervisor.stop(signal),
+        authSupervisor.stop(signal),
+        profilesSupervisor.stop(signal),
+        gatewaySupervisor.stop(signal),
     ]);
     process.exit(0);
 }
 
 function main() {
-    log("Lightweight daemon supervisor starting");
-    daemonSupervisor.start("boot");
+    log(
+        `Lightweight worker supervisor starting (mode=${WATCH_MODE ? "watch" : "normal"}, workers=${workerSupervisors.length})`,
+    );
+    authSupervisor.start("boot");
+    profilesSupervisor.start("boot");
     tasksSupervisor.start("boot");
     searchSupervisor.start("boot");
     contextSupervisor.start("boot");
+    notificationsSupervisor.start("boot");
+    gatewaySupervisor.start("boot");
+    mcpSupervisor.start("boot");
+    workerSupervisors.forEach((workerSupervisor) => workerSupervisor.start("boot"));
 
     process.on("SIGINT", () => shutdown("SIGINT"));
     process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
-const daemonSupervisor = createDaemonSupervisor();
+const workerSupervisors = createWorkerSupervisors();
+const mcpSupervisor = createMcpSupervisor();
 const tasksSupervisor = createTasksSupervisor();
 const searchSupervisor = createSearchSupervisor();
 const contextSupervisor = createContextSupervisor();
+const notificationsSupervisor = createNotificationsSupervisor();
+const authSupervisor = createAuthSupervisor();
+const profilesSupervisor = createProfilesSupervisor();
+const gatewaySupervisor = createGatewaySupervisor();
 
 main();
 

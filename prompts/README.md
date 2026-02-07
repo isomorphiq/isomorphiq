@@ -45,6 +45,13 @@ This directory contains various prompt templates for instructing the OpenCode ag
 - User guides
 - Technical specifications
 
+### 🔧 MCP Tooling (`mcp-tool-calling.md`)
+**Recommended Mode:** `build` or `ask`
+- Tool calling format (JSON arguments)
+- Read/write/verify sequencing
+- Expected responses from list/get/create/update tools
+- File context tracking via `get_file_context`
+
 ## Usage Instructions
 
 1. **Choose the appropriate prompt template** based on your task type
@@ -73,6 +80,7 @@ All prompts work with the MCP task management server. The agent can:
 - Update task status as work progresses
 - Prioritize tasks based on importance
 - Track completion and dependencies
+- Attach and update file-level context using `get_file_context`
 
 ## Best Practices
 

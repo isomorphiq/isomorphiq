@@ -10,7 +10,7 @@ async function killAndRestartDaemon() {
 
         // Find and kill existing daemon process
         const { exec } = require("child_process");
-        exec("pkill -f \"packages/daemon/src/daemon.ts\"", (error) => {
+        exec("pkill -f \"packages/worker/src/daemon.ts\"", (error) => {
             if (error) {
                 console.log("No daemon process found to kill");
             } else {
@@ -20,7 +20,7 @@ async function killAndRestartDaemon() {
             // Wait a moment
             setTimeout(() => {
                 console.log("🚀 Starting new daemon instance...");
-                const daemon = spawn("yarn", ["run", "daemon"], {
+                const daemon = spawn("yarn", ["run", "worker"], {
                     stdio: ["ignore", "pipe", "pipe"],
                     detached: true,
                 });

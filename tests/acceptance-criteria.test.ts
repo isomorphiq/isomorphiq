@@ -2,7 +2,7 @@ import { describe, it, before, after } from "node:test";
 import { strict as assert } from "node:assert";
 import { unlinkSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 
 describe("Acceptance Criteria Validation", () => {
     let pm: ProductManager;

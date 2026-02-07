@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { strict as assert } from "node:assert";
-import { PriorityStatusDeadlockDetector, type PriorityStatusDependency } from "../../packages/daemon/src/services/priority-status-deadlock-detector.ts";
-import { PriorityStatusDependencyValidator } from "../../packages/daemon/src/services/priority-status-dependency-validator.ts";
+import { PriorityStatusDeadlockDetector, type PriorityStatusDependency } from "../../packages/worker/src/services/priority-status-deadlock-detector.ts";
+import { PriorityStatusDependencyValidator } from "../../packages/worker/src/services/priority-status-dependency-validator.ts";
 import type { Task } from "../../packages/dashboard/src/web/tcp-client.ts";
 
 describe("Priority-Status Dependency Deadlock Detection Task b7c2d592", () => {

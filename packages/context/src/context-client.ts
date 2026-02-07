@@ -5,6 +5,7 @@ import type {
     ContextData,
     ContextRecord,
     CreateContextInput,
+    FileContextLookupInput,
 } from "./context-domain.ts";
 import type { ContextServiceRouter } from "./context-service-router.ts";
 
@@ -16,6 +17,7 @@ export type ContextClientOptions = {
 
 export type ContextClient = {
     createContext: (input?: CreateContextInput) => Promise<ContextRecord>;
+    getOrCreateFileContext: (input: FileContextLookupInput) => Promise<ContextRecord>;
     getContext: (id: string) => Promise<ContextRecord | null>;
     updateContext: (id: string, patch: ContextData) => Promise<ContextRecord>;
     replaceContext: (id: string, data: ContextData) => Promise<ContextRecord>;
@@ -79,6 +81,7 @@ export const createContextClient = (options: ContextClientOptions = {}): Context
 
     return {
         createContext: async (input) => client.create.mutate(input ?? {}),
+        getOrCreateFileContext: async (input) => client.getOrCreateFile.mutate(input),
         getContext: async (id) => client.get.query({ id }),
         updateContext: async (id, patch) => client.update.mutate({ id, patch }),
         replaceContext: async (id, data) => client.replace.mutate({ id, data }),

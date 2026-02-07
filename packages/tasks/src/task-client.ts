@@ -36,6 +36,7 @@ export type TaskClient = {
         Promise<TaskEntity>;
     deleteTask: (id: string, deletedBy?: string) => Promise<void>;
     updateTaskStatus: (id: string, status: TaskStatus, updatedBy?: string) => Promise<TaskEntity>;
+    claimTask: (id: string, workerId: string) => Promise<TaskEntity | null>;
     updateTaskPriority: (id: string, priority: TaskPriority, updatedBy?: string) => Promise<TaskEntity>;
     assignTask: (id: string, assignedTo: string, assignedBy?: string) => Promise<TaskEntity>;
     addCollaborator: (id: string, userId: string, updatedBy?: string) => Promise<TaskEntity>;
@@ -193,6 +194,8 @@ export const createTaskClient = (options: TaskClientOptions = {}): TaskClient =>
         },
         updateTaskStatus: async (id, status, updatedBy) =>
             normalizeTask(await client.updateStatus.mutate({ id, status, updatedBy })),
+        claimTask: async (id, workerId) =>
+            normalizeOptionalTask(await client.claimTask.mutate({ id, workerId })),
         updateTaskPriority: async (id, priority, updatedBy) =>
             normalizeTask(await client.updatePriority.mutate({ id, priority, updatedBy })),
         assignTask: async (id, assignedTo, assignedBy) =>

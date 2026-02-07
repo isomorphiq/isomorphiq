@@ -10,9 +10,21 @@ type AdminSettings = {
 	allowNonAdminWrites: boolean;
 };
 
+const parseJsonResponse = async (response: Response): Promise<Record<string, unknown> | null> => {
+	const raw = await response.text();
+	if (!raw) {
+		return null;
+	}
+	try {
+		return JSON.parse(raw) as Record<string, unknown>;
+	} catch {
+		return null;
+	}
+};
+
 export function SecurityPage() {
 	const [auth] = useAtom(authAtom);
-	const isAdmin = auth.user?.username === "nyan";
+	const isAdmin = auth.user?.username === "nyan" || auth.user?.username === "admin";
 	const [adminSettings, setAdminSettings] = useState<AdminSettings>({
 		registrationEnabled: false,
 		allowNonAdminWrites: false,
@@ -29,12 +41,15 @@ export function SecurityPage() {
 						Authorization: `Bearer ${auth.token}`,
 					},
 				});
-				const data = await response.json();
+				const data = await parseJsonResponse(response);
 				if (response.ok && data?.settings) {
 					setAdminSettings(data.settings as AdminSettings);
 					setAdminError(null);
 				} else {
-					setAdminError(data.error || "Failed to load admin settings");
+					const errorMessage = typeof data?.error === "string"
+						? data.error
+						: "Failed to load admin settings";
+					setAdminError(errorMessage);
 				}
 			} catch (error) {
 				console.error("Failed to load admin settings", error);
@@ -56,12 +71,15 @@ export function SecurityPage() {
 				},
 				body: JSON.stringify(patch),
 			});
-			const data = await response.json();
+			const data = await parseJsonResponse(response);
 			if (response.ok && data?.settings) {
 				setAdminSettings(data.settings as AdminSettings);
 				setAdminError(null);
 			} else {
-				setAdminError(data.error || "Failed to update admin settings");
+				const errorMessage = typeof data?.error === "string"
+					? data.error
+					: "Failed to update admin settings";
+				setAdminError(errorMessage);
 			}
 		} catch (error) {
 			console.error("Failed to update admin settings", error);
@@ -77,7 +95,7 @@ export function SecurityPage() {
 			<div style={{ padding: "1rem", display: "grid", gap: "16px", maxWidth: "960px" }}>
 				<SectionCard
 					title={isAdmin ? "Admin controls" : "Read-only mode"}
-					countLabel={isAdmin ? "Only nyan can change these" : undefined}
+					countLabel={isAdmin ? "Only nyan/admin can change these" : undefined}
 				>
 					{isAdmin ? (
 						<div style={{ display: "grid", gap: "12px" }}>
@@ -130,8 +148,8 @@ export function SecurityPage() {
 						</div>
 					) : (
 						<p style={{ margin: 0, color: "var(--color-text-muted)" }}>
-							You are in read-only mode. Only the admin user nyan can change system settings or
-							write data.
+							You are in read-only mode. Only admin users (nyan/admin) can change system
+							settings or write data.
 						</p>
 					)}
 				</SectionCard>

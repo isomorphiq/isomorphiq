@@ -63,3 +63,20 @@ export const ReplaceContextInputStruct = struct.name("ReplaceContextInput")<
     z.input<typeof ReplaceContextInputSchema>
 >(ReplaceContextInputSchema);
 export type ReplaceContextInput = StructSelf<typeof ReplaceContextInputStruct>;
+
+export const FileContextLookupInputSchema = z.object({
+    filePath: z.string().min(1),
+    contextId: z.string().optional(),
+    operation: z.string().optional(),
+    taskId: z.string().optional(),
+    taskTitle: z.string().optional(),
+    reason: z.string().optional(),
+    relatedFiles: z.array(z.string()).optional(),
+    todos: z.array(z.string()).optional(),
+});
+
+export const FileContextLookupInputStruct = struct.name("FileContextLookupInput")<
+    z.output<typeof FileContextLookupInputSchema>,
+    z.input<typeof FileContextLookupInputSchema>
+>(FileContextLookupInputSchema);
+export type FileContextLookupInput = StructSelf<typeof FileContextLookupInputStruct>;

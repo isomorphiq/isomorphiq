@@ -19,6 +19,9 @@
     },
     "dependencies": {
         "@isomorphiq/core": "workspace:*",
-        "@isomorphiq/user-profile": "workspace:*"
+        "@isomorphiq/profiles": "workspace:*"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
     }
 }

@@ -8,6 +8,11 @@ type DomWritable = globalThis.WritableStream<Uint8Array>;
 
 export type AcpRuntime = "opencode" | "codex";
 
+export type CodexConfigOverride = {
+    key: string;
+    value: string;
+};
+
 export interface ProcessResult<InputStream = DomWritable, OutputStream = DomReadable> {
 	process: ChildProcessWithoutNullStreams;
 	input: InputStream;
@@ -18,9 +23,10 @@ export const ProcessSpawner = {
     spawnAcpServer(
         runtime: AcpRuntime,
         envOverrides?: Record<string, string>,
+        codexConfigOverrides?: CodexConfigOverride[],
     ): ProcessResult<DomWritable, DomReadable> {
         return runtime === "codex"
-            ? ProcessSpawner.spawnCodex(envOverrides)
+            ? ProcessSpawner.spawnCodex(envOverrides, codexConfigOverrides)
             : ProcessSpawner.spawnOpencode(envOverrides);
     },
 
@@ -45,17 +51,42 @@ export const ProcessSpawner = {
         };
     },
 
-    spawnCodex(envOverrides?: Record<string, string>): ProcessResult<DomWritable, DomReadable> {
+    spawnCodex(
+        envOverrides?: Record<string, string>,
+        codexConfigOverrides?: CodexConfigOverride[],
+    ): ProcessResult<DomWritable, DomReadable> {
         console.log("[PROCESS] Spawning codex ACP server...");
 
         const codexCommand = resolveCodexCommand();
         const env = { ...process.env, ...envOverrides };
-        const sandboxMode = normalizeSandboxMode(process.env.CODEX_ACP_SANDBOX ?? "workspace-write");
-        const approvalPolicy = (process.env.CODEX_ACP_APPROVAL_POLICY ?? "never").trim();
-        const codexArgs = [
-            ...(sandboxMode.length > 0 ? ["-c", `sandbox_mode="${sandboxMode}"`] : []),
-            ...(approvalPolicy.length > 0 ? ["-c", `approval_policy=${approvalPolicy}`] : []),
-        ];
+        const sandboxMode = normalizeSandboxMode(env.CODEX_ACP_SANDBOX ?? "workspace-write");
+        const approvalPolicy = (env.CODEX_ACP_APPROVAL_POLICY ?? "never").trim();
+        const overrideMap = new Map<string, string>();
+        if (sandboxMode.length > 0) {
+            overrideMap.set("sandbox_mode", `"${escapeTomlStringLiteral(sandboxMode)}"`);
+        }
+        if (approvalPolicy.length > 0) {
+            overrideMap.set("approval_policy", `"${escapeTomlStringLiteral(approvalPolicy)}"`);
+        }
+        const normalizedOverrides = (codexConfigOverrides ?? []).filter(
+            (entry): entry is CodexConfigOverride => {
+                return (
+                    entry !== null
+                    && typeof entry === "object"
+                    && typeof entry.key === "string"
+                    && entry.key.trim().length > 0
+                    && typeof entry.value === "string"
+                    && entry.value.trim().length > 0
+                );
+            },
+        );
+        for (const override of normalizedOverrides) {
+            overrideMap.set(override.key.trim(), override.value.trim());
+        }
+        const codexArgs = Array.from(overrideMap.entries()).flatMap(([key, value]) => [
+            "-c",
+            `${key}=${value}`,
+        ]);
         const finalProcess = spawn(codexCommand, codexArgs, {
             stdio: ["pipe", "pipe", "pipe"],
             cwd: resolveSpawnCwd(),
@@ -88,12 +119,50 @@ export const ProcessSpawner = {
 	},
 };
 
-const resolveSpawnCwd = (): string => {
-    const initCwd = process.env.INIT_CWD;
-    if (initCwd && initCwd.trim().length > 0) {
-        return path.resolve(initCwd);
+const hasWorkspaceMarkers = (candidateDir: string): boolean => {
+    const hasMcpConfig = existsSync(
+        path.join(candidateDir, "packages", "mcp", "config", "mcp-server-config.json"),
+    );
+    if (hasMcpConfig) {
+        return true;
     }
-    return process.cwd();
+    return (
+        existsSync(path.join(candidateDir, "package.json"))
+        && existsSync(path.join(candidateDir, "prompts"))
+    );
+};
+
+const findWorkspaceRoot = (startDir: string): string => {
+    let currentDir = path.resolve(startDir);
+    while (true) {
+        if (hasWorkspaceMarkers(currentDir)) {
+            return currentDir;
+        }
+        const parentDir = path.dirname(currentDir);
+        if (parentDir === currentDir) {
+            return path.resolve(startDir);
+        }
+        currentDir = parentDir;
+    }
+};
+
+const resolveSpawnCwd = (): string => {
+    const candidates = [
+        process.env.INIT_CWD,
+        process.cwd(),
+    ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+    const resolvedCandidates = candidates.map((value) => path.resolve(value.trim()));
+    const uniqueCandidates = resolvedCandidates.reduce<string[]>(
+        (acc, candidate) => (acc.includes(candidate) ? acc : [...acc, candidate]),
+        [],
+    );
+    for (const candidate of uniqueCandidates) {
+        const resolved = findWorkspaceRoot(candidate);
+        if (hasWorkspaceMarkers(resolved)) {
+            return resolved;
+        }
+    }
+    return uniqueCandidates[0] ?? process.cwd();
 };
 
 const normalizeSandboxMode = (value: string): string => {
@@ -107,6 +176,11 @@ const normalizeSandboxMode = (value: string): string => {
     }
     return trimmed;
 };
+
+const escapeTomlStringLiteral = (value: string): string =>
+    value
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, "\\\"");
 
 const resolveCodexCommand = (): string => {
     const override = process.env.CODEX_ACP_BINARY ?? process.env.CODEX_ACP_COMMAND;

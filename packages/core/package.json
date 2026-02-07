@@ -16,5 +16,8 @@
         "typecheck": "tsc --noEmit -p tsconfig.json",
         "lint": "echo \"Lint not configured yet for @isomorphiq/core\"",
         "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
     }
 }

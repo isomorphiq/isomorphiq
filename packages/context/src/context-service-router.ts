@@ -2,6 +2,7 @@ import { initTRPC } from "@trpc/server";
 import { z } from "zod";
 import {
     CreateContextInputSchema,
+    FileContextLookupInputSchema,
     ReplaceContextInputSchema,
     UpdateContextInputSchema,
 } from "./context-domain.ts";
@@ -18,6 +19,9 @@ export const contextServiceRouter = t.router({
     create: t.procedure
         .input(CreateContextInputSchema)
         .mutation(async ({ ctx, input }) => ctx.contextService.createContext(input)),
+    getOrCreateFile: t.procedure
+        .input(FileContextLookupInputSchema)
+        .mutation(async ({ ctx, input }) => ctx.contextService.getOrCreateFileContext(input)),
     get: t.procedure
         .input(z.object({ id: z.string() }))
         .query(async ({ ctx, input }) => ctx.contextService.getContext(input.id)),

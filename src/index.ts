@@ -24,13 +24,14 @@ import {
     ProfileManager,
     type ProfileMetrics,
     type ProfileState,
-} from "@isomorphiq/user-profile";
+} from "@isomorphiq/profiles";
 import { AutomationRuleEngine } from "@isomorphiq/tasks";
 import { acpCleanupEffect } from "@isomorphiq/acp";
 import { acpTurnEffect } from "@isomorphiq/acp";
 import { gitCommitIfChanges } from "./git-utils.ts";
-import { runLintAndTests } from "./run-tests.ts";
 import { TemplateManager, optimizedPriorityService } from "@isomorphiq/tasks";
+import { exec as execCallback } from "node:child_process";
+import { promisify } from "node:util";
 import {
 	TaskPrioritySchema,
 	TaskSchema,
@@ -145,23 +146,26 @@ const getContextTaskId = (context: Record<string, unknown>): string | undefined 
 const getErrorMessage = (error: unknown): string =>
     error instanceof Error ? error.message : String(error);
 
+const execAsync = promisify(execCallback);
+
 const getLastTestResult = (
     value: unknown,
-): { output?: string; passed?: boolean } | undefined => {
+): { output?: string; passed?: boolean; success?: boolean } | undefined => {
     if (!isRecord(value)) {
         return undefined;
     }
     const output = typeof value.output === "string" ? value.output : undefined;
     const passed = typeof value.passed === "boolean" ? value.passed : undefined;
-    if (output === undefined && passed === undefined) {
+    const success = typeof value.success === "boolean" ? value.success : undefined;
+    if (output === undefined && passed === undefined && success === undefined) {
         return undefined;
     }
-    return { output, passed };
+    return { output, passed, success };
 };
 
 const getLastTestResultFromToken = (
     tokenValue: unknown,
-): { output?: string; passed?: boolean } | undefined => {
+): { output?: string; passed?: boolean; success?: boolean } | undefined => {
     if (!isRecord(tokenValue)) {
         return undefined;
     }
@@ -171,7 +175,7 @@ const getLastTestResultFromToken = (
 
 const getLastTestResultFromPayload = (
     payload: unknown,
-): { output?: string; passed?: boolean } | undefined => {
+): { output?: string; passed?: boolean; success?: boolean } | undefined => {
     if (!isRecord(payload)) {
         return undefined;
     }
@@ -922,25 +926,73 @@ export class ProductManager {
 				return result;
 			});
 
-		const runTestsEffect = (payload?: { token?: typeof token }) =>
-			Effect.promise(async () => {
-				const res = await runLintAndTests();
-				if (payload?.token) {
-					if (!payload.token.context) payload.token.context = {};
-					payload.token.context.lastTestResult = res;
-				}
-				if (!res.passed) {
-					const summary = [
-						res.lintPassed ? "lint:pass" : "lint:fail",
-						res.testPassed ? "tests:pass" : "tests:fail",
-					].join(" ");
-					console.log(`[TESTS] failed -> ${summary}`);
-					// Do not throw; allow workflow to advance to tests-completed and let the decider route to tests-failed.
-					return res;
-				}
-				console.log("[TESTS] passed");
-				return res;
-			});
+			const runQaGateEffect = (
+				stage: "lint" | "typecheck" | "unit-tests" | "e2e-tests" | "coverage",
+				command: string,
+				payload?: { token?: typeof token },
+			) =>
+				Effect.promise(async () => {
+					let output = "";
+					let success = false;
+					try {
+						const result = await execAsync(command, {
+							timeout: stage === "lint" || stage === "typecheck" ? 300_000 : 900_000,
+							maxBuffer: 10 * 1024 * 1024,
+						});
+						const stdout = (result.stdout ?? "").toString();
+						const stderr = (result.stderr ?? "").toString();
+						output = [
+							`[${stage}] command: ${command}`,
+							`[${stage}] stdout:`,
+							stdout.length > 0 ? stdout : "(empty)",
+							`[${stage}] stderr:`,
+							stderr.length > 0 ? stderr : "(empty)",
+						].join("\n");
+						success = true;
+					} catch (error) {
+						const errorRecord = isRecord(error) ? error : {};
+						const stdout = typeof errorRecord.stdout === "string" ? errorRecord.stdout : "";
+						const stderr = typeof errorRecord.stderr === "string" ? errorRecord.stderr : "";
+						const message =
+							typeof errorRecord.message === "string"
+								? errorRecord.message
+								: getErrorMessage(error);
+						output = [
+							`[${stage}] command: ${command}`,
+							`[${stage}] error: ${message}`,
+							`[${stage}] stdout:`,
+							stdout.length > 0 ? stdout : "(empty)",
+							`[${stage}] stderr:`,
+							stderr.length > 0 ? stderr : "(empty)",
+						].join("\n");
+						success = false;
+					}
+					const statusLine = `Test status: ${success ? "passed" : "failed"}`;
+					const qaResult = {
+						passed: success,
+						success,
+						stage,
+						output: `${output}\n${statusLine}`.trim(),
+					};
+					if (payload?.token) {
+						if (!payload.token.context) payload.token.context = {};
+						payload.token.context.lastTestResult = qaResult;
+					}
+					console.log(`[QA:${stage}] ${success ? "passed" : "failed"}`);
+					return qaResult;
+				});
+
+			const runQaFailureEffect = (
+				stageLabel: string,
+				payload?: unknown,
+			) =>
+				(() => {
+					const lastOutput = getLastTestResultFromPayload(payload)?.output;
+					return acpEffect(
+						"development",
+						`${stageLabel} failed. Here is the output:\n${lastOutput ?? "No output"}\nImplement targeted fixes and summarize what changed.`,
+					)();
+				})();
 
 		const workflow = buildWorkflowWithEffects({
 			"new-feature-proposed": {
@@ -963,8 +1015,8 @@ Step-by-step:
    }
 2) Call list_tasks to confirm it exists.
 
-Tool names are namespaced by MCP server. Use the exact tool name shown in the TurnBox list
-(for example: task-manager_create_task or task_manager_create_task).
+Tool names are namespaced by MCP server. Use the exact tool name shown in the ACP tool list
+(for example: functions.mcp__task-manager__create_task).
 
 Return a short summary after tool calls.`,
 						);
@@ -1019,44 +1071,75 @@ Return a short summary after tool calls.`,
 					"No stories ready. Request more stories or unblock refinement.",
 				),
 			},
-			"task-in-progress": {
-				"run-tests": (payload) =>
-					Effect.catchAll(runTestsEffect(payload), (err) =>
-						Effect.sync(() => {
-							console.error("[TESTS] run-tests effect failed", err);
-						}),
+				"task-in-progress": {
+					"run-lint": (payload) =>
+						Effect.catchAll(runQaGateEffect("lint", "yarn run lint", payload), (err) =>
+							Effect.sync(() => {
+								console.error("[QA] run-lint effect failed", err);
+							}),
+						),
+					"refine-task": acpEffect(
+						"refinement",
+						"No actionable task; request refinement or split work.",
 					),
-				"refine-task": acpEffect(
-					"refinement",
-					"No actionable task; request refinement or split work.",
-				),
 				},
-				"tests-completed": {
+				"lint-completed": {
+					"run-typecheck": (payload) =>
+						Effect.catchAll(runQaGateEffect("typecheck", "yarn run typecheck", payload), (err) =>
+							Effect.sync(() => {
+								console.error("[QA] run-typecheck effect failed", err);
+							}),
+						),
+					"lint-failed": (payload) => runQaFailureEffect("Lint", payload),
+				},
+				"typecheck-completed": {
+					"run-unit-tests": (payload) =>
+						Effect.catchAll(runQaGateEffect("unit-tests", "yarn run test", payload), (err) =>
+							Effect.sync(() => {
+								console.error("[QA] run-unit-tests effect failed", err);
+							}),
+						),
+					"typecheck-failed": (payload) => runQaFailureEffect("Typecheck", payload),
+				},
+				"unit-tests-completed": {
+					"run-e2e-tests": (payload) =>
+						Effect.catchAll(runQaGateEffect("e2e-tests", "npx playwright test", payload), (err) =>
+							Effect.sync(() => {
+								console.error("[QA] run-e2e-tests effect failed", err);
+							}),
+						),
+					"unit-tests-failed": (payload) => runQaFailureEffect("Unit tests", payload),
+				},
+				"e2e-tests-completed": {
+					"ensure-coverage": (payload) =>
+						Effect.catchAll(
+							runQaGateEffect("coverage", "yarn run test -- --coverage", payload),
+							(err) =>
+								Effect.sync(() => {
+									console.error("[QA] ensure-coverage effect failed", err);
+								}),
+						),
+					"e2e-tests-failed": (payload) => runQaFailureEffect("E2E tests", payload),
+				},
+				"coverage-completed": {
 					"tests-passing": () =>
 						Effect.gen(function* () {
 							const commitMsg = `Automated: tests passing (${new Date().toISOString()})`;
 							try {
 								const result = yield* Effect.promise(() => gitCommitIfChanges(commitMsg));
-							console.log("[GIT] Commit result:", result);
-						} catch (err) {
-							console.error("[GIT] Commit failed:", err);
-						}
+								console.log("[GIT] Commit result:", result);
+							} catch (err) {
+								console.error("[GIT] Commit failed:", err);
+							}
 
-						yield* acpEffect(
-							"qa-specialist",
-							"Tests passed. Confirm readiness and summarize what was validated.",
-						)();
-					}),
-				"tests-failed": (payload) =>
-					(() => {
-						const lastOutput = getLastTestResultFromPayload(payload)?.output;
-						return acpEffect(
-							"qa-specialist",
-							`Tests failed. Here is the output:\n${lastOutput ?? "No output"}\nPropose fixes and plan next steps.`,
-						)();
-					})(),
-			},
-			"task-completed": {
+							yield* acpEffect(
+								"qa-specialist",
+								"All QA gates passed. Confirm readiness and summarize what was validated.",
+							)();
+						}),
+					"coverage-failed": (payload) => runQaFailureEffect("Coverage", payload),
+				},
+				"task-completed": {
 				"pick-up-next-task": acpEffect(
 					"development",
 					"Task closed. Announce completion and request next task.",
@@ -1084,15 +1167,9 @@ Return a short summary after tool calls.`,
 				const decider = workflow[token.state]?.decider;
 				let transition = decider ? decider(tasks) : undefined;
 
-				if (token.state === "tests-completed") {
-					const lastResult = getLastTestResultFromToken(token);
-					const passed = lastResult?.passed === true;
-					transition = passed ? "tests-passing" : "tests-failed";
-				}
-
-				if (!transition) {
-					throw new Error(`No transition chosen for state ${token.state}`);
-				}
+					if (!transition) {
+						throw new Error(`No transition chosen for state ${token.state}`);
+					}
 				console.log(
 					`[WORKFLOW] Token state=${token.state} transition=${transition} tasks=${tasks.length}`,
 				);

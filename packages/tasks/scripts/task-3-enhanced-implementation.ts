@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 
 /**
  * Task 3 Enhancement: Advanced Task Analytics and Reporting

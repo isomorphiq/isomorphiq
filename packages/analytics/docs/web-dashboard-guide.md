@@ -30,7 +30,7 @@ The Task Manager Web Dashboard provides a real-time interface for monitoring and
 2. **Start the backend services:**
    ```bash
    # Start the task daemon (required)
-   yarn run daemon
+   yarn run worker
    
    # Start the HTTP API server (required)
    yarn run http-api
@@ -221,7 +221,7 @@ yarn run ws-client
 
 ```bash
 # Start all services
-yarn run daemon &      # Background task processing
+yarn run worker &      # Background task processing
 yarn run http-api &    # REST API server
 yarn run web:dev       # Development frontend
 ```
@@ -233,7 +233,7 @@ yarn run web:dev       # Development frontend
 yarn run web:build
 
 # Start production services
-yarn run daemon &      # Serves static files from ./dist/
+yarn run worker &      # Serves static files from ./dist/
 yarn run http-api &
 ```
 

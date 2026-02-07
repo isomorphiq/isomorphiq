@@ -1,0 +1,8 @@
+{
+  "id": "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-008",
+  "title": "Implement Widget Size Options and Resize Functionality",
+  "description": "Extend the dashboard system to support widget resizing with predefined size options (small, medium, large) and manual resize handles. This builds on the existing WidgetSizeSchema and layout computation to add resize interactions, size constraint validation, and responsive sizing that maintains layout integrity. Acceptance criteria: Widgets support 3 predefined size options with appropriate defaults for each widget type, resize handles appear on hover/focus with visual feedback, resize operations validate constraints and prevent overlap using existing collision detection, layout persistence includes widget size changes, responsive behavior adapts widget sizes appropriately for different viewports, resize interactions work on both desktop (mouse drag) and mobile (touch pinch) devices.",
+  "priority": "high",
+  "type": "implementation",
+  "createdBy": "refinement"
+}

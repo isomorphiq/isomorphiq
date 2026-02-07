@@ -1,5 +1,5 @@
 import { BaseProfilePlugin } from "@isomorphiq/plugins";
-import type { ACPProfile } from "@isomorphiq/user-profile";
+import type { ACPProfile } from "@isomorphiq/profiles";
 
 /**
  * Example: Documentation Generator Plugin

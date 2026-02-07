@@ -11,7 +11,8 @@ import {
     type SearchResult,
     type UpdateSavedSearchInput,
 } from "./search-domain.ts";
-import type { SearchServiceRouter } from "./search-service-router.ts";
+
+type SearchServiceRouter = import("./search-service-router.ts").SearchServiceRouter;
 
 export type SearchClientOptions = {
     url?: string;

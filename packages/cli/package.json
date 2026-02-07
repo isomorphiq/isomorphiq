@@ -25,5 +25,8 @@
         "@isomorphiq/tasks": "workspace:*",
         "ink": "^4.3.0",
         "react": "^18.3.1"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
     }
 }

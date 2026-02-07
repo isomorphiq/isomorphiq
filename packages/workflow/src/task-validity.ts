@@ -417,16 +417,7 @@ const reviewStoryCoverage = async (
 
     const reviewState = buildBusinessAnalystState(
         baseState,
-        "Evaluate whether the child implementation tasks fully satisfy the story acceptance criteria. Provide a thorough analysis that covers:\n" +
-        "- Which acceptance criteria are fully addressed by the existing tasks\n" +
-        "- Which acceptance criteria are partially addressed or missing\n" +
-        "- Any gaps, dependencies, or technical considerations that should be addressed\n" +
-        "- Specific recommendations for additional tasks if needed\n\n" +
-        "Only choose need-more-tasks when you can name specific acceptance criteria that are not covered. If the existing tasks fully cover the criteria, choose proceed.\n\n" +
-        "Write your response for an audience of senior technical staff. Be comprehensive and clear—use as much detail as necessary to fully capture the scope and rationale.\n\n" +
-        "Conclude with:\n" +
-        "Decision: proceed|need-more-tasks\n" +
-        "Reason: <thorough summary of your evaluation and recommendations>",
+        "SOP: evaluate acceptance-criteria coverage for this story. Choose need-more-tasks only when specific criteria are missing or partially covered. Return exactly two lines: Decision: proceed|need-more-tasks and Reason: <one concise sentence naming uncovered criteria or stating full coverage>.",
     );
     const reviewTask = buildCoverageReviewTask(story, childTasks);
     const startTime = Date.now();
@@ -515,6 +506,18 @@ export const decideTasksPreparedTransition = async (
 
     const childTasks = selectChildImplementationTasks(story, tasks);
     if (childTasks.length === 0) {
+        return "need-more-tasks";
+    }
+    const hasActionableChildTasks = childTasks.some(
+        (task) =>
+            isImplementationTask(task) &&
+            isWorkflowTaskActionable(task) &&
+            dependenciesSatisfied(task, tasks),
+    );
+    const hasInProgressChildTasks = childTasks.some(
+        (task) => isImplementationTask(task) && task.status === "in-progress",
+    );
+    if (!hasActionableChildTasks && !hasInProgressChildTasks) {
         return "need-more-tasks";
     }
 

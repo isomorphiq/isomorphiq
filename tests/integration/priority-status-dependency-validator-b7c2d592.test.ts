@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import { strict as assert } from "node:assert";
-import { PriorityStatusDeadlockDetector } from "../../packages/daemon/src/services/priority-status-deadlock-detector.ts";
+import { PriorityStatusDeadlockDetector } from "../../packages/worker/src/services/priority-status-deadlock-detector.ts";
 import type { Task } from "../../packages/dashboard/src/web/tcp-client.ts";
 
 interface TestTask extends Task {

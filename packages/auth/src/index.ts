@@ -13,3 +13,4 @@ export * from "./http-middleware.ts";
 export * from "./admin-settings.ts";
 export * from "./types.ts";
 export * from "./security-types.ts";
+export * from "./auth-client.ts";

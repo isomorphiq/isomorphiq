@@ -6,6 +6,7 @@ import type {
     UpdateProfileInput,
     User,
 } from "./types.ts";
+import { createUserProfileClient } from "@isomorphiq/profiles";
 import { loadAdminSettings } from "./admin-settings.ts";
 import { getUserManager } from "./user-manager.ts";
 import {
@@ -15,6 +16,45 @@ import {
 } from "./http-middleware.ts";
 
 export function registerAuthRoutes(app: express.Application) {
+    const userProfileClient = createUserProfileClient();
+    const mergeProfileData = async <T extends {
+        id?: string;
+        profile?: Record<string, unknown>;
+        preferences?: Record<string, unknown>;
+    }>(
+        user: T,
+    ): Promise<T> => {
+        if (!user.id) {
+            return user;
+        }
+        try {
+            const profileRecord = await userProfileClient.getOrCreateProfile(user.id, {
+                profile: user.profile ?? {},
+                preferences: user.preferences ?? {},
+            });
+            return {
+                ...user,
+                profile: profileRecord.profile,
+                preferences: profileRecord.preferences,
+            };
+        } catch (error) {
+            console.warn("[HTTP API] Failed to read user-profile service; using auth profile fallback:", error);
+            return user;
+        }
+    };
+
+    const sendCurrentUser = async (req: AuthContextRequest, res: express.Response): Promise<void> => {
+        const requestUser = req.user as User;
+        const userManager = getUserManager();
+        const fresh = await userManager.getUserById(requestUser.id);
+        if (!fresh) {
+            res.status(404).json({ error: "User not found" });
+            return;
+        }
+        const merged = await mergeProfileData(fresh);
+        res.json({ user: { ...merged, passwordHash: undefined } });
+    };
+
     // GET /api/auth/registration-status - Public status endpoint
     app.get("/api/auth/registration-status", (_req, res) => {
         const disabled = process.env.DISABLE_REGISTRATION === "true";
@@ -65,6 +105,7 @@ export function registerAuthRoutes(app: express.Application) {
                 password,
                 role: role && typeof role === "string" ? role : "developer",
             });
+            const mergedUser = await mergeProfileData(user);
 
             const auth = await userManager.authenticateUser({ username, password });
             if (!auth.success || !auth.token) {
@@ -72,7 +113,7 @@ export function registerAuthRoutes(app: express.Application) {
             }
 
             return res.status(201).json({
-                user: { ...user, passwordHash: undefined },
+                user: { ...mergedUser, passwordHash: undefined },
                 token: auth.token,
                 message: "Registration successful",
             });
@@ -100,9 +141,10 @@ export function registerAuthRoutes(app: express.Application) {
                 password,
             });
 
-            if (result.success) {
+            if (result.success && result.user && result.token) {
+                const merged = await mergeProfileData(result.user);
                 res.json({
-                    user: result.user,
+                    user: merged,
                     token: result.token,
                     message: "Login successful",
                 });
@@ -140,13 +182,14 @@ export function registerAuthRoutes(app: express.Application) {
     // GET /api/auth/me - Get current user info (fresh from DB)
     app.get("/api/auth/me", authenticateToken, async (req: AuthContextRequest, res, next) => {
         try {
-            const requestUser = req.user as User;
-            const userManager = getUserManager();
-            const fresh = await userManager.getUserById(requestUser.id);
-            if (!fresh) {
-                return res.status(404).json({ error: "User not found" });
-            }
-            res.json({ user: { ...fresh, passwordHash: undefined } });
+            await sendCurrentUser(req, res);
+        } catch (error) {
+            next(error);
+        }
+    });
+    app.get("/api/users/me", authenticateToken, async (req: AuthContextRequest, res, next) => {
+        try {
+            await sendCurrentUser(req, res);
         } catch (error) {
             next(error);
         }
@@ -190,10 +233,31 @@ export function registerAuthRoutes(app: express.Application) {
                 const updateData: UpdateProfileInput = { userId: user.id };
                 if (profile) updateData.profile = profile;
                 if (preferences) updateData.preferences = preferences;
-
-                const updatedUser = await userManager.updateProfile(updateData);
-
-                res.json({ user: { ...updatedUser, passwordHash: undefined } });
+                await userProfileClient.upsertProfile({
+                    userId: user.id,
+                    profile: updateData.profile,
+                    preferences: updateData.preferences,
+                });
+                await sendCurrentUser(req, res);
+            } catch (error) {
+                next(error);
+            }
+        },
+    );
+    app.put(
+        "/api/users/me/profile",
+        authenticateToken,
+        enforceAdminWriteAccess,
+        async (req: AuthContextRequest, res, next) => {
+            try {
+                const user = req.user as User;
+                const { profile, preferences } = req.body as UpdateProfileInput;
+                await userProfileClient.upsertProfile({
+                    userId: user.id,
+                    profile,
+                    preferences,
+                });
+                await sendCurrentUser(req, res);
             } catch (error) {
                 next(error);
             }
@@ -273,12 +337,13 @@ export function registerAuthRoutes(app: express.Application) {
 
                 const userManager = getUserManager();
                 const permissions = await userManager.getUserPermissions(user);
-                const matrix = userManager.getPermissionMatrix();
+                const matrix = await userManager.getPermissionMatrix();
+                const availableResources = await userManager.getAvailableResources();
 
                 res.json({
                     userPermissions: permissions,
                     permissionMatrix: matrix,
-                    availableResources: userManager.getAvailableResources(),
+                    availableResources,
                 });
             } catch (error) {
                 next(error);

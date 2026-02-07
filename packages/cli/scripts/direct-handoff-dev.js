@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 
 async function directHandoffToDevelopment() {
   console.log("🎯 Direct handoff: Finding highest priority task for development...");

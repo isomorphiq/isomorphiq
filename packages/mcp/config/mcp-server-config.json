@@ -8,8 +8,8 @@
   "env": [
     { "name": "NODE_ENV", "value": "development" },
     { "name": "LOG_LEVEL", "value": "debug" },
-    { "name": "TASKS_SERVICE_URL", "value": "http://127.0.0.1:3006/trpc" },
-    { "name": "CONTEXT_SERVICE_URL", "value": "http://127.0.0.1:3008/trpc" }
+    { "name": "TASKS_SERVICE_URL", "value": "http://127.0.0.1:3003/trpc/tasks-service" },
+    { "name": "CONTEXT_SERVICE_URL", "value": "http://127.0.0.1:3003/trpc/context-service" }
   ],
   "description": "Task management MCP server for OpenCode",
   "tools": [
@@ -24,6 +24,7 @@
     "delete_task",
     "create_context",
     "get_context",
+    "get_file_context",
     "update_context",
     "replace_context",
     "delete_context",

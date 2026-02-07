@@ -222,7 +222,7 @@ The real-time task dashboard with WebSocket integration has been **successfully 
 
 ### Start the Dashboard
 ```bash
-yarn run daemon
+yarn run worker
 ```
 
 ### Access URLs

@@ -1,5 +1,9 @@
+// FILE_CONTEXT: "context-3d6319e1-6b87-4446-8a2d-a366d6197444"
+
 import { useCallback, useEffect, useState } from "react";
 import type { Task } from "@isomorphiq/tasks/types";
+import { useAtom } from "jotai";
+import { authAtom } from "../authAtoms.ts";
 
 interface AnalyticsData {
 	overview: {
@@ -44,6 +48,7 @@ interface AnalyticsDashboardProps {
 }
 
 export function AnalyticsDashboard({ _tasks }: AnalyticsDashboardProps) {
+	const [auth, setAuth] = useAtom(authAtom);
 	const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -54,9 +59,31 @@ export function AnalyticsDashboard({ _tasks }: AnalyticsDashboardProps) {
 			setLoading(true);
 			setError(null);
 
-			const response = await fetch("/api/analytics");
+			const response = await fetch("/api/analytics", {
+				headers: auth.token
+					? {
+						Authorization: `Bearer ${auth.token}`,
+					}
+					: undefined,
+			});
 			if (!response.ok) {
-				throw new Error("Failed to fetch analytics");
+				if (response.status === 401) {
+					localStorage.removeItem("authToken");
+					localStorage.removeItem("user");
+					setAuth({
+						user: null,
+						token: null,
+						isAuthenticated: false,
+						isLoading: false,
+					});
+					throw new Error("Session expired. Please sign in again.");
+				}
+				const errorData = await response.json().catch(() => null);
+				const errorMessage =
+					errorData && typeof errorData.error === "string"
+						? errorData.error
+						: "Failed to fetch analytics";
+				throw new Error(errorMessage);
 			}
 
 			const data = await response.json();
@@ -66,7 +93,7 @@ export function AnalyticsDashboard({ _tasks }: AnalyticsDashboardProps) {
 		} finally {
 			setLoading(false);
 		}
-	}, []);
+	}, [auth.token, setAuth]);
 
 	useEffect(() => {
 		fetchAnalytics();

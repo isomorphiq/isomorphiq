@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-aad67ced-4b88-4ccc-b48b-6ac0bd11531c"
+
 // TODO: This file is too complex (4389 lines) and should be refactored into several modules.
 // Current concerns mixed: WebSocket management, HTTP request handling, notification filtering,
 // real-time updates, dashboard analytics, client connection management.
@@ -94,7 +96,12 @@ type DashboardWidgetState = {
     hiddenWidgetIds: WidgetVisibilityState | null;
     widgetSizes: WidgetSizeState | null;
 };
+type JsonParseResult = { success: true; data: unknown } | { success: false; error: Error };
 const WIDGET_CONTAINER_ORDER = ["overview-metrics", "queue-metrics", "health-grid"];
+
+const isJsonParseError = (result: JsonParseResult): result is { success: false; error: Error } => {
+    return result.success === false;
+};
 
 export interface DashboardMetrics {
 	daemon: {
@@ -257,6 +264,16 @@ export class DashboardServer {
         return "medium";
     }
 
+    private normalizeTaskTimestamp(value: unknown): string {
+        if (value instanceof Date) {
+            return value.toISOString();
+        }
+        if (typeof value === "string" && value.length > 0) {
+            return value;
+        }
+        return new Date().toISOString();
+    }
+
     private async loadTasksResult(
         services: EnvironmentServices,
     ): Promise<{ success: true; data: Task[] } | { success: false; error: Error }> {
@@ -268,11 +285,24 @@ export class DashboardServer {
                     error: result.error ?? new Error("Failed to load tasks"),
                 };
             }
-            const normalized = result.data.map((task) => ({
-                ...task,
-                status: this.normalizeTaskStatus(task.status),
-                priority: this.normalizeTaskPriority(task.priority),
-            }));
+            const normalized = result.data.reduce<Task[]>((acc, task) => {
+                if (!task || typeof task.id !== "string" || task.id.length === 0) {
+                    return acc;
+                }
+                const title = typeof task.title === "string" ? task.title : "Untitled task";
+                const description = typeof task.description === "string" ? task.description : "";
+                const normalizedTask: Task = {
+                    ...task,
+                    id: task.id,
+                    title,
+                    description,
+                    status: this.normalizeTaskStatus(task.status),
+                    priority: this.normalizeTaskPriority(task.priority),
+                    createdAt: this.normalizeTaskTimestamp(task.createdAt),
+                    updatedAt: this.normalizeTaskTimestamp(task.updatedAt),
+                };
+                return acc.concat(normalizedTask);
+            }, []);
             return { success: true, data: normalized };
         } catch (error) {
             console.error("[DASHBOARD] Failed to load tasks:", error);
@@ -1824,7 +1854,7 @@ export class DashboardServer {
 		});
 	}
 
-    private parseJsonBody(body: string): { success: true; data: unknown } | { success: false; error: Error } {
+    private parseJsonBody(body: string): JsonParseResult {
         try {
             return { success: true, data: JSON.parse(body) };
         } catch (error) {
@@ -1844,7 +1874,7 @@ export class DashboardServer {
             await this.ensureWidgetLayoutPreferencesLoaded();
             const body = await this.parseRequestBody(req);
             const parsed = this.parseJsonBody(body);
-            if (!parsed.success) {
+            if (isJsonParseError(parsed)) {
                 res.writeHead(400, { "Content-Type": "application/json" });
                 res.end(JSON.stringify({ error: parsed.error.message }));
                 return;
@@ -1888,7 +1918,7 @@ export class DashboardServer {
             await this.ensureWidgetVisibilityPreferencesLoaded();
             const body = await this.parseRequestBody(req);
             const parsed = this.parseJsonBody(body);
-            if (!parsed.success) {
+            if (isJsonParseError(parsed)) {
                 res.writeHead(400, { "Content-Type": "application/json" });
                 res.end(JSON.stringify({ error: parsed.error.message }));
                 return;
@@ -2310,8 +2340,8 @@ export class DashboardServer {
 					title: t.title,
 					status: t.status,
 					priority: t.priority,
-					createdAt: t.createdAt instanceof Date ? t.createdAt.toISOString() : t.createdAt,
-					updatedAt: t.updatedAt instanceof Date ? t.updatedAt.toISOString() : t.updatedAt,
+                        createdAt: this.normalizeTaskTimestamp(t.createdAt),
+                        updatedAt: this.normalizeTaskTimestamp(t.updatedAt),
 					createdBy: t.createdBy,
 					assignedTo: t.assignedTo,
 				})),
@@ -2427,6 +2457,12 @@ export class DashboardServer {
     <title>Task Manager Dashboard</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --priority-high-color: #ef4444;
+            --priority-medium-color: #f59e0b;
+            --priority-low-color: #10b981;
+        }
         
         /* Base styles */
         body { 
@@ -2519,7 +2555,16 @@ export class DashboardServer {
             transform: translateY(-2px);
             box-shadow: 0 8px 25px rgba(0,0,0,0.15);
         }
-        
+
+        .metric-card.clickable {
+            cursor: pointer;
+        }
+
+        .metric-card.clickable:focus-visible {
+            outline: 2px solid rgba(59, 130, 246, 0.5);
+            outline-offset: 2px;
+        }
+
         .metric-card::before {
             content: '';
             position: absolute;
@@ -2530,6 +2575,371 @@ export class DashboardServer {
             background: linear-gradient(90deg, #3b82f6, #8b5cf6);
         }
 
+        .priority-breakdown {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .priority-breakdown-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .priority-breakdown-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .priority-breakdown-subtitle {
+            font-size: 0.75rem;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+
+        .priority-breakdown-total {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #111827;
+            text-align: right;
+        }
+
+        .priority-breakdown-bar {
+            display: flex;
+            height: 10px;
+            border-radius: 999px;
+            overflow: hidden;
+            background: #f3f4f6;
+            box-shadow: inset 0 0 0 1px #e5e7eb;
+        }
+
+        .priority-breakdown-segment {
+            height: 100%;
+            transition: width 0.4s ease;
+        }
+
+        .priority-breakdown-segment.high { background: var(--priority-high-color); }
+        .priority-breakdown-segment.medium { background: var(--priority-medium-color); }
+        .priority-breakdown-segment.low { background: var(--priority-low-color); }
+
+        .priority-breakdown-rows {
+            display: grid;
+            gap: 10px;
+        }
+
+        .priority-breakdown-row {
+            display: grid;
+            grid-template-columns: minmax(120px, 1fr) auto minmax(90px, 1fr);
+            gap: 12px;
+            align-items: center;
+        }
+
+        .priority-breakdown-row.clickable {
+            cursor: pointer;
+        }
+
+        .priority-breakdown-row.clickable:focus-visible {
+            outline: 2px solid rgba(59, 130, 246, 0.35);
+            outline-offset: 2px;
+        }
+
+        .priority-breakdown-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .priority-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+        }
+
+        .priority-dot.high { background: var(--priority-high-color); }
+        .priority-dot.medium { background: var(--priority-medium-color); }
+        .priority-dot.low { background: var(--priority-low-color); }
+
+        .priority-breakdown-value {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-weight: 700;
+            color: #111827;
+        }
+
+        .priority-breakdown-count {
+            font-size: 1.2rem;
+        }
+
+        .priority-breakdown-percent {
+            font-size: 0.75rem;
+            color: #6b7280;
+            font-weight: 500;
+        }
+
+        .priority-sparkline {
+            width: 100%;
+            height: 24px;
+        }
+
+        .priority-sparkline-line {
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            opacity: 0.9;
+        }
+
+        .priority-sparkline-line.high { stroke: var(--priority-high-color); }
+        .priority-sparkline-line.medium { stroke: var(--priority-medium-color); }
+        .priority-sparkline-line.low { stroke: var(--priority-low-color); }
+
+        .status-breakdown {
+            --status-high-color: var(--priority-high-color);
+            --status-medium-color: var(--priority-medium-color);
+            --status-low-color: var(--priority-low-color);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .status-breakdown-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+        }
+
+        .status-breakdown-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .status-breakdown-subtitle {
+            font-size: 0.75rem;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+
+        .status-breakdown-total {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #111827;
+            text-align: right;
+        }
+
+        .status-breakdown-empty {
+            background: #f9fafb;
+            border-radius: 10px;
+            border: 1px dashed #e5e7eb;
+            padding: 12px 14px;
+            color: #6b7280;
+            font-size: 0.9rem;
+        }
+
+        .status-breakdown-rows {
+            display: grid;
+            gap: 10px;
+        }
+
+        .status-breakdown-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding-top: 6px;
+            border-top: 1px solid #f3f4f6;
+        }
+
+        .status-breakdown-row.clickable {
+            cursor: pointer;
+        }
+
+        .status-breakdown-row.clickable:focus-visible {
+            outline: 2px solid rgba(59, 130, 246, 0.35);
+            outline-offset: 2px;
+        }
+
+        .status-breakdown-row:first-child {
+            border-top: none;
+            padding-top: 0;
+        }
+
+        .status-breakdown-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .status-breakdown-value {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            min-width: 48px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+        }
+
+        .status-dot.pending { background: var(--status-high-color); }
+        .status-dot.in-progress { background: var(--status-medium-color); }
+        .status-dot.completed { background: var(--status-low-color); }
+
+        .status-breakdown-count {
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: #111827;
+        }
+
+        .status-breakdown-row.pending .status-breakdown-count { color: var(--status-high-color); }
+        .status-breakdown-row.in-progress .status-breakdown-count { color: var(--status-medium-color); }
+        .status-breakdown-row.completed .status-breakdown-count { color: var(--status-low-color); }
+
+        .activity-widget {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            grid-column: span 2;
+        }
+
+        .activity-widget-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .activity-widget-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .activity-widget-subtitle {
+            font-size: 0.75rem;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+
+        .activity-widget-action {
+            border: 1px solid #e5e7eb;
+            background: #f9fafb;
+            color: #374151;
+            border-radius: 999px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 6px 12px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .activity-widget-action:hover {
+            border-color: #cbd5f5;
+            background: #eef2ff;
+        }
+
+        .activity-widget-action:focus-visible {
+            outline: 2px solid rgba(59, 130, 246, 0.45);
+            outline-offset: 2px;
+        }
+
+        .activity-widget-list {
+            display: grid;
+            gap: 10px;
+            max-height: 280px;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        .activity-widget-loading {
+            opacity: 0.7;
+        }
+
+        .activity-widget-list .loading,
+        .activity-widget-empty,
+        .activity-widget-error {
+            padding: 16px;
+            font-size: 0.9rem;
+            text-align: left;
+            background: #f9fafb;
+            border-radius: 10px;
+            border: 1px dashed #e5e7eb;
+            color: #6b7280;
+        }
+
+        .activity-widget-item {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            width: 100%;
+            appearance: none;
+            -webkit-appearance: none;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 12px;
+            background: #f8fafc;
+            color: inherit;
+            text-align: left;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s, transform 0.2s;
+        }
+
+        .activity-widget-item:hover {
+            background: #eef2ff;
+            border-color: rgba(99, 102, 241, 0.35);
+            transform: translateY(-1px);
+        }
+
+        .activity-widget-item:focus-visible {
+            outline: 2px solid rgba(59, 130, 246, 0.4);
+            outline-offset: 2px;
+        }
+
+        .activity-widget-item-main {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .activity-widget-message {
+            font-weight: 600;
+            color: #111827;
+            font-size: 0.95rem;
+        }
+
+        .activity-widget-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .activity-widget-time {
+            font-size: 0.75rem;
+            color: #6b7280;
+            white-space: nowrap;
+            margin-top: 2px;
+        }
+
+        @media (max-width: 900px) {
+            .activity-widget {
+                grid-column: span 1;
+            }
+        }
+
         .widget-container {
             transition: background 0.2s, outline 0.2s;
         }
@@ -2538,6 +2948,15 @@ export class DashboardServer {
             outline: 2px dashed rgba(59, 130, 246, 0.35);
             outline-offset: 4px;
             background: rgba(59, 130, 246, 0.03);
+        }
+
+        .widget-container.drag-hover {
+            outline-color: rgba(59, 130, 246, 0.6);
+            background: rgba(59, 130, 246, 0.08);
+        }
+
+        .widget-container.drag-active .widget-card {
+            transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
         }
 
         .widget-card {
@@ -2600,9 +3019,11 @@ export class DashboardServer {
         }
 
         .widget-card.dragging {
-            opacity: 0.45;
+            opacity: 0.25;
             transform: scale(0.98);
             box-shadow: none;
+            cursor: grabbing;
+            filter: grayscale(0.2);
         }
 
         .widget-card.drag-over {
@@ -2611,10 +3032,41 @@ export class DashboardServer {
         }
 
         .widget-drop-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            max-width: 100%;
+            min-height: 120px;
             border: 2px dashed rgba(59, 130, 246, 0.5);
             border-radius: 12px;
             background: rgba(59, 130, 246, 0.08);
             pointer-events: none;
+            position: relative;
+            overflow: hidden;
+            box-sizing: border-box;
+        }
+
+        .widget-drop-ghost {
+            width: 100%;
+            height: 100%;
+            border-radius: 10px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.04));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #2563eb;
+            font-weight: 600;
+            font-size: 0.8rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .widget-drop-label {
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 6px 16px rgba(37, 99, 235, 0.2);
         }
 
         .widget-ghost {
@@ -2656,6 +3108,57 @@ export class DashboardServer {
         .widget-size-btn:focus {
             outline: 2px solid rgba(59, 130, 246, 0.7);
             outline-offset: 1px;
+        }
+
+        .widget-remove-controls {
+            position: absolute;
+            top: calc(var(--widget-padding) / 2);
+            right: calc(var(--widget-padding) / 2);
+            display: flex;
+            gap: 6px;
+            padding: 4px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.92);
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-4px);
+            transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
+            pointer-events: none;
+            z-index: 3;
+        }
+
+        .widget-card:hover .widget-remove-controls,
+        .widget-card:focus .widget-remove-controls,
+        .widget-card:focus-within .widget-remove-controls {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+
+        .widget-remove-btn {
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            background: rgba(254, 226, 226, 0.9);
+            color: #b91c1c;
+            border-radius: 999px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 4px 10px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .widget-remove-btn:hover {
+            background: #ef4444;
+            color: #ffffff;
+            border-color: #dc2626;
+        }
+
+        .widget-remove-btn:focus {
+            outline: 2px solid rgba(239, 68, 68, 0.7);
+            outline-offset: 2px;
         }
 
         .widget-hidden {
@@ -2713,6 +3216,47 @@ export class DashboardServer {
             display: flex;
             flex-direction: column;
             gap: 20px;
+        }
+
+        .dashboard-empty-state {
+            margin: 16px 0 28px;
+        }
+
+        .dashboard-empty-card {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            padding: 28px;
+            border-radius: 16px;
+            border: 1px solid #e5e7eb;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(255, 255, 255, 0.95));
+            box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+        }
+
+        .dashboard-empty-content h2 {
+            margin: 0 0 8px;
+            font-size: 1.4rem;
+            color: #111827;
+        }
+
+        .dashboard-empty-content p {
+            margin: 0;
+            color: #6b7280;
+            max-width: 520px;
+        }
+
+        .dashboard-empty-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-empty-card {
+                align-items: flex-start;
+            }
         }
 
         .widget-library-list {
@@ -2784,6 +3328,49 @@ export class DashboardServer {
             cursor: not-allowed;
             opacity: 0.6;
         }
+
+        .widget-library-add {
+            border: 1px solid #2563eb;
+            background: #3b82f6;
+            color: #ffffff;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 6px 14px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+        }
+
+        .widget-library-add:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 12px rgba(59, 130, 246, 0.25);
+            background: #2563eb;
+            border-color: #1d4ed8;
+        }
+
+        .widget-library-add:disabled {
+            background: #e5e7eb;
+            border-color: #d1d5db;
+            color: #6b7280;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
+        }
+
+        .widget-library-add.is-loading {
+            background: #f59e0b;
+            border-color: #d97706;
+            color: #111827;
+        }
+
+        .widget-library-add.is-success {
+            background: #10b981;
+            border-color: #059669;
+        }
         
         .metric-value { 
             font-size: var(--widget-metric-value-size); 
@@ -2817,6 +3404,52 @@ export class DashboardServer {
         .metric-change.negative {
             background: #fee2e2;
             color: #991b1b;
+        }
+
+        @keyframes metricsPulse {
+            0% {
+                opacity: 0.55;
+            }
+            50% {
+                opacity: 0.9;
+            }
+            100% {
+                opacity: 0.55;
+            }
+        }
+
+        .metrics,
+        .health-grid {
+            transition: opacity 0.3s ease;
+        }
+
+        .metrics.metrics-loading,
+        .health-grid.metrics-loading {
+            opacity: 0.7;
+        }
+
+        .metrics.metrics-loading .metric-value,
+        .metrics.metrics-loading .metric-change,
+        .metrics.metrics-loading .status-breakdown-total,
+        .metrics.metrics-loading .status-breakdown-count,
+        .metrics.metrics-loading .priority-breakdown-total,
+        .metrics.metrics-loading .priority-breakdown-count,
+        .metrics.metrics-loading .priority-breakdown-percent,
+        .health-grid.metrics-loading .health-metric-value {
+            animation: metricsPulse 1.2s ease-in-out infinite;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .metrics.metrics-loading .metric-value,
+            .metrics.metrics-loading .metric-change,
+            .metrics.metrics-loading .status-breakdown-total,
+            .metrics.metrics-loading .status-breakdown-count,
+            .metrics.metrics-loading .priority-breakdown-total,
+            .metrics.metrics-loading .priority-breakdown-count,
+            .metrics.metrics-loading .priority-breakdown-percent,
+            .health-grid.metrics-loading .health-metric-value {
+                animation: none;
+            }
         }
         
         /* Forms */
@@ -2958,6 +3591,21 @@ export class DashboardServer {
         .filter-group select:focus {
             outline: none;
             border-color: #3b82f6;
+        }
+
+        .filter-group select.priority-highlight-high {
+            border-color: var(--priority-high-color);
+            box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
+        }
+
+        .filter-group select.priority-highlight-medium {
+            border-color: var(--priority-medium-color);
+            box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15);
+        }
+
+        .filter-group select.priority-highlight-low {
+            border-color: var(--priority-low-color);
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15);
         }
         
         /* Tasks Section */
@@ -3246,6 +3894,14 @@ export class DashboardServer {
             .metric-value {
                 font-size: 2rem;
             }
+
+            .priority-breakdown-row {
+                grid-template-columns: 1fr auto;
+            }
+
+            .priority-sparkline {
+                grid-column: 1 / -1;
+            }
             
             .form-row {
                 grid-template-columns: 1fr;
@@ -3295,8 +3951,16 @@ export class DashboardServer {
                 margin: 20px;
                 width: calc(100% - 40px);
             }
+
+            .widget-drop-indicator {
+                min-height: 96px;
+            }
+
+            .widget-drop-ghost {
+                font-size: 0.75rem;
+            }
         }
-        
+
         @media (max-width: 480px) {
             .container {
                 padding: 8px;
@@ -3312,6 +3976,10 @@ export class DashboardServer {
             
             .metric-value {
                 font-size: 1.75rem;
+            }
+
+            .widget-drop-indicator {
+                min-height: 84px;
             }
         }
         
@@ -3633,6 +4301,7 @@ export class DashboardServer {
             padding: var(--widget-padding);
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
             border-left: 4px solid #10b981;
+            position: relative;
         }
         
         .health-card.warning {
@@ -3716,36 +4385,162 @@ export class DashboardServer {
 
         <!-- Overview Tab -->
         <div id="overview-tab" class="tab-content active">
+            <div id="dashboardEmptyState" class="dashboard-empty-state" hidden>
+                <div class="dashboard-empty-card">
+                    <div class="dashboard-empty-content">
+                        <h2>Your dashboard is ready for its first widget</h2>
+                        <p>Open the widget library to review available widgets and add the signals you want to track.</p>
+                    </div>
+                    <div class="dashboard-empty-actions">
+                        <button class="btn btn-primary" type="button" id="openWidgetLibraryBtn" aria-controls="widgetLibraryList">
+                            View widget library
+                        </button>
+                        <button class="btn btn-secondary" type="button" id="showAllWidgetsEmptyBtn">
+                            Add all widgets
+                        </button>
+                    </div>
+                </div>
+            </div>
             <div class="metrics" data-widget-container="overview-metrics">
-                <div class="metric-card" data-widget-id="overview-total">
+                <div class="metric-card clickable" data-widget-id="overview-total" data-task-nav="tasks" tabindex="0" role="button" aria-label="View all tasks">
                     <div class="metric-value" id="totalTasks">-</div>
                     <div class="metric-label">Total Tasks</div>
                     <div class="metric-change positive" id="totalTasksChange">+0 today</div>
                 </div>
-                <div class="metric-card" data-widget-id="overview-pending">
+                <div class="metric-card clickable" data-widget-id="overview-pending" data-task-nav="tasks" data-task-status="todo" tabindex="0" role="button" aria-label="View pending tasks">
                     <div class="metric-value" id="pendingTasks">-</div>
                     <div class="metric-label">Pending</div>
                     <div class="metric-change" id="pendingTasksChange">0% completion</div>
                 </div>
-                <div class="metric-card" data-widget-id="overview-in-progress">
+                <div class="metric-card clickable" data-widget-id="overview-in-progress" data-task-nav="tasks" data-task-status="in-progress" tabindex="0" role="button" aria-label="View in-progress tasks">
                     <div class="metric-value" id="inProgressTasks">-</div>
                     <div class="metric-label">In Progress</div>
                     <div class="metric-change" id="inProgressTasksChange">Active now</div>
                 </div>
-                <div class="metric-card" data-widget-id="overview-completed">
+                <div class="metric-card clickable" data-widget-id="overview-completed" data-task-nav="tasks" data-task-status="done" tabindex="0" role="button" aria-label="View completed tasks">
                     <div class="metric-value" id="completedTasks">-</div>
                     <div class="metric-label">Completed</div>
                     <div class="metric-change positive" id="completedTasksChange">+0 today</div>
                 </div>
-                <div class="metric-card" data-widget-id="overview-connections">
+                <div class="metric-card clickable" data-widget-id="overview-connections" data-task-nav="tasks" tabindex="0" role="button" aria-label="View task list">
                     <div class="metric-value" id="wsConnections">-</div>
                     <div class="metric-label">Live Connections</div>
                     <div class="metric-change" id="connectionStatus">WebSocket</div>
                 </div>
-                <div class="metric-card" data-widget-id="overview-high-priority">
+                <div class="metric-card clickable" data-widget-id="overview-high-priority" data-task-nav="tasks" data-task-priority="high" tabindex="0" role="button" aria-label="View high priority tasks">
                     <div class="metric-value" id="highPriorityTasks">-</div>
                     <div class="metric-label">High Priority</div>
                     <div class="metric-change negative" id="highPriorityUrgent">Needs attention</div>
+                </div>
+                <div class="metric-card status-breakdown clickable" data-widget-id="overview-status-breakdown" data-widget-label="Status Breakdown" data-task-nav="tasks" tabindex="0" role="button" aria-label="View tasks by status">
+                    <div class="status-breakdown-header">
+                        <div>
+                            <div class="status-breakdown-title">Status Breakdown</div>
+                            <div class="status-breakdown-subtitle">Totals by workflow stage</div>
+                        </div>
+                        <div class="status-breakdown-total" id="statusBreakdownTotal" aria-live="polite">-</div>
+                    </div>
+                    <div class="status-breakdown-empty" id="statusBreakdownEmpty" hidden>
+                        No tasks yet - create your first one!
+                    </div>
+                    <div class="status-breakdown-rows" id="statusBreakdownRows">
+                        <div class="status-breakdown-row pending clickable" data-task-nav="tasks" data-task-status="todo" tabindex="0" role="button" aria-label="View pending tasks">
+                            <div class="status-breakdown-label">
+                                <span class="status-dot pending"></span>
+                                <span>Pending</span>
+                            </div>
+                            <div class="status-breakdown-value">
+                                <span class="status-breakdown-count" id="statusBreakdownPending" aria-live="polite">-</span>
+                            </div>
+                        </div>
+                        <div class="status-breakdown-row in-progress clickable" data-task-nav="tasks" data-task-status="in-progress" tabindex="0" role="button" aria-label="View in-progress tasks">
+                            <div class="status-breakdown-label">
+                                <span class="status-dot in-progress"></span>
+                                <span>In Progress</span>
+                            </div>
+                            <div class="status-breakdown-value">
+                                <span class="status-breakdown-count" id="statusBreakdownInProgress" aria-live="polite">-</span>
+                            </div>
+                        </div>
+                        <div class="status-breakdown-row completed clickable" data-task-nav="tasks" data-task-status="done" tabindex="0" role="button" aria-label="View completed tasks">
+                            <div class="status-breakdown-label">
+                                <span class="status-dot completed"></span>
+                                <span>Completed</span>
+                            </div>
+                            <div class="status-breakdown-value">
+                                <span class="status-breakdown-count" id="statusBreakdownCompleted" aria-live="polite">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="metric-card priority-breakdown clickable" data-widget-id="overview-priority-breakdown" data-task-nav="tasks" tabindex="0" role="button" aria-label="View tasks by priority">
+                    <div class="priority-breakdown-header">
+                        <div>
+                            <div class="priority-breakdown-title">Priority Breakdown</div>
+                            <div class="priority-breakdown-subtitle">Distribution across task priorities</div>
+                        </div>
+                        <div class="priority-breakdown-total" id="priorityBreakdownTotal" aria-live="polite">-</div>
+                    </div>
+                    <div class="priority-breakdown-bar" role="img" aria-label="Priority distribution">
+                        <div class="priority-breakdown-segment high" id="priorityBreakdownHighBar" style="width: 0%;"></div>
+                        <div class="priority-breakdown-segment medium" id="priorityBreakdownMediumBar" style="width: 0%;"></div>
+                        <div class="priority-breakdown-segment low" id="priorityBreakdownLowBar" style="width: 0%;"></div>
+                    </div>
+                    <div class="priority-breakdown-rows">
+                        <div class="priority-breakdown-row clickable" data-task-nav="tasks" data-task-priority="high" tabindex="0" role="button" aria-label="View high priority tasks">
+                            <div class="priority-breakdown-label">
+                                <span class="priority-dot high"></span>
+                                <span>High</span>
+                            </div>
+                            <div class="priority-breakdown-value">
+                                <span class="priority-breakdown-count" id="priorityBreakdownHigh" aria-live="polite">-</span>
+                                <span class="priority-breakdown-percent" id="priorityBreakdownHighPct">0%</span>
+                            </div>
+                            <svg class="priority-sparkline" viewBox="0 0 100 24" aria-hidden="true">
+                                <polyline class="priority-sparkline-line high" id="prioritySparklineHigh" points="0,12 100,12"></polyline>
+                            </svg>
+                        </div>
+                        <div class="priority-breakdown-row clickable" data-task-nav="tasks" data-task-priority="medium" tabindex="0" role="button" aria-label="View medium priority tasks">
+                            <div class="priority-breakdown-label">
+                                <span class="priority-dot medium"></span>
+                                <span>Medium</span>
+                            </div>
+                            <div class="priority-breakdown-value">
+                                <span class="priority-breakdown-count" id="priorityBreakdownMedium" aria-live="polite">-</span>
+                                <span class="priority-breakdown-percent" id="priorityBreakdownMediumPct">0%</span>
+                            </div>
+                            <svg class="priority-sparkline" viewBox="0 0 100 24" aria-hidden="true">
+                                <polyline class="priority-sparkline-line medium" id="prioritySparklineMedium" points="0,12 100,12"></polyline>
+                            </svg>
+                        </div>
+                        <div class="priority-breakdown-row clickable" data-task-nav="tasks" data-task-priority="low" tabindex="0" role="button" aria-label="View low priority tasks">
+                            <div class="priority-breakdown-label">
+                                <span class="priority-dot low"></span>
+                                <span>Low</span>
+                            </div>
+                            <div class="priority-breakdown-value">
+                                <span class="priority-breakdown-count" id="priorityBreakdownLow" aria-live="polite">-</span>
+                                <span class="priority-breakdown-percent" id="priorityBreakdownLowPct">0%</span>
+                            </div>
+                            <svg class="priority-sparkline" viewBox="0 0 100 24" aria-hidden="true">
+                                <polyline class="priority-sparkline-line low" id="prioritySparklineLow" points="0,12 100,12"></polyline>
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+                <div class="metric-card activity-widget" data-widget-id="overview-recent-activity" data-widget-label="Recent Activity">
+                    <div class="activity-widget-header">
+                        <div>
+                            <div class="activity-widget-title">Recent Activity</div>
+                            <div class="activity-widget-subtitle">Latest task updates</div>
+                        </div>
+                        <button class="activity-widget-action" type="button" data-task-nav="tasks" aria-label="View all tasks">
+                            View tasks
+                        </button>
+                    </div>
+                    <div id="recentActivityList" class="activity-widget-list" aria-live="polite" aria-busy="true">
+                        <div class="loading">Loading recent activity...</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -3817,19 +4612,19 @@ export class DashboardServer {
         <!-- Queue Status Tab -->
         <div id="queue-tab" class="tab-content">
             <div class="metrics" data-widget-container="queue-metrics">
-                <div class="metric-card" data-widget-id="queue-total">
+                <div class="metric-card clickable" data-widget-id="queue-total" data-task-nav="tasks" data-task-status="todo" tabindex="0" role="button" aria-label="View queued tasks">
                     <div class="metric-value" id="queueTotal">-</div>
                     <div class="metric-label">Total Tasks in Queue</div>
                 </div>
-                <div class="metric-card" data-widget-id="queue-high-priority">
+                <div class="metric-card clickable" data-widget-id="queue-high-priority" data-task-nav="tasks" data-task-status="todo" data-task-priority="high" tabindex="0" role="button" aria-label="View high priority queued tasks">
                     <div class="metric-value" id="queueHighPriority">-</div>
                     <div class="metric-label">High Priority</div>
                 </div>
-                <div class="metric-card" data-widget-id="queue-avg-processing">
+                <div class="metric-card clickable" data-widget-id="queue-avg-processing" data-task-nav="tasks" data-task-status="todo" tabindex="0" role="button" aria-label="View queued tasks">
                     <div class="metric-value" id="queueAvgProcessingTime">-</div>
                     <div class="metric-label">Avg Processing Time</div>
                 </div>
-                <div class="metric-card" data-widget-id="queue-failed">
+                <div class="metric-card clickable" data-widget-id="queue-failed" data-task-nav="tasks" data-task-status="failed" tabindex="0" role="button" aria-label="View failed tasks">
                     <div class="metric-value" id="queueFailed">-</div>
                     <div class="metric-label">Failed Tasks</div>
                 </div>
@@ -4217,6 +5012,33 @@ export class DashboardServer {
         let wsConnection;
         let currentTasks = [];
         let previousMetrics = null;
+        let metricsInitialized = false;
+        const METRICS_LOADING_CLASS = "metrics-loading";
+        const PRIORITY_LEVELS = ["high", "medium", "low"];
+        const PRIORITY_FILTER_CLASSES = {
+            high: "priority-highlight-high",
+            medium: "priority-highlight-medium",
+            low: "priority-highlight-low",
+        };
+        const PRIORITY_SPARKLINE_POINTS = 18;
+        const PRIORITY_SPARKLINE_WIDTH = 100;
+        const PRIORITY_SPARKLINE_HEIGHT = 24;
+        const RECENT_ACTIVITY_LIMIT = 8;
+        const RECENT_ACTIVITY_REFRESH_MS = 30000;
+        const RECENT_ACTIVITY_STATUS_VALUES = ["todo", "in-progress", "done", "failed", "cancelled"];
+        const RECENT_ACTIVITY_PRIORITY_VALUES = ["high", "medium", "low"];
+        const prefersReducedMotion = typeof window !== "undefined" && typeof window.matchMedia === "function"
+            ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            : false;
+        let priorityBreakdownState = {
+            high: { value: 0, history: [] },
+            medium: { value: 0, history: [] },
+            low: { value: 0, history: [] },
+        };
+        let priorityBreakdownAnimationIds = {};
+        let recentActivityInitialized = false;
+        let recentActivityLastFetchedAt = 0;
+        let recentActivityRequest = null;
 
         // Tab Management
         function initTabs() {
@@ -4238,6 +5060,7 @@ export class DashboardServer {
                             content.classList.add('active');
                             
                             // Load tab-specific content
+                            if (tabName === "overview") loadRecentActivityWidget();
                             if (tabName === "queue") loadQueueStatus();
                             if (tabName === "tasks") loadTasks();
                             if (tabName === "health") loadHealthDetails();
@@ -4250,59 +5073,385 @@ export class DashboardServer {
             });
         }
 
+        function setTextIfPresent(id, value) {
+            const element = document.getElementById(id);
+            if (!(element instanceof HTMLElement)) {
+                return;
+            }
+            element.textContent = value;
+        }
+
+        function toSafeNumber(value) {
+            const numberValue = Number(value);
+            return Number.isFinite(numberValue) ? numberValue : 0;
+        }
+
+        function setMetricsLoadingState(isLoading) {
+            const containers = document.querySelectorAll(".metrics, .health-grid");
+            containers.forEach(container => {
+                if (!(container instanceof HTMLElement)) {
+                    return;
+                }
+                if (isLoading) {
+                    container.classList.add(METRICS_LOADING_CLASS);
+                    container.setAttribute("aria-busy", "true");
+                    return;
+                }
+                container.classList.remove(METRICS_LOADING_CLASS);
+                container.setAttribute("aria-busy", "false");
+            });
+        }
+
+        function setPriorityFilterHighlight(priority) {
+            const filter = document.getElementById("priorityFilter");
+            if (!(filter instanceof HTMLSelectElement)) {
+                return;
+            }
+            const classes = Object.values(PRIORITY_FILTER_CLASSES);
+            filter.classList.remove(...classes);
+            if (priority === "high" || priority === "medium" || priority === "low") {
+                filter.classList.add(PRIORITY_FILTER_CLASSES[priority]);
+            }
+        }
+
+        function navigateToTasksWithFilters(filters) {
+            const statusValue = typeof filters?.status === "string" && filters.status.length > 0
+                ? filters.status
+                : "all";
+            const priorityValue = typeof filters?.priority === "string" && filters.priority.length > 0
+                ? filters.priority
+                : "all";
+            const statusFilter = document.getElementById("statusFilter");
+            if (statusFilter instanceof HTMLSelectElement) {
+                statusFilter.value = statusValue;
+            }
+            const priorityFilter = document.getElementById("priorityFilter");
+            if (priorityFilter instanceof HTMLSelectElement) {
+                priorityFilter.value = priorityValue;
+            }
+            setPriorityFilterHighlight(priorityValue);
+            const tasksTab = document.querySelector("[data-tab=\"tasks\"]");
+            if (tasksTab instanceof HTMLElement) {
+                tasksTab.click();
+                return;
+            }
+            loadTasks();
+        }
+
+        function extractTaskFilters(element) {
+            const status = element.dataset.taskStatus;
+            const priority = element.dataset.taskPriority;
+            return {
+                status: typeof status === "string" && status.length > 0 ? status : "all",
+                priority: typeof priority === "string" && priority.length > 0 ? priority : "all",
+            };
+        }
+
+        function initMetricNavigation() {
+            document.addEventListener("click", (event) => {
+                const target = event.target;
+                if (!(target instanceof HTMLElement)) {
+                    return;
+                }
+                if (widgetDragState && widgetDragState.dragging) {
+                    return;
+                }
+                const trigger = target.closest("[data-task-nav=\"tasks\"]");
+                if (!(trigger instanceof HTMLElement)) {
+                    return;
+                }
+                event.preventDefault();
+                navigateToTasksWithFilters(extractTaskFilters(trigger));
+            });
+
+            document.addEventListener("keydown", (event) => {
+                if (event.key !== "Enter" && event.key !== " ") {
+                    return;
+                }
+                const target = event.target;
+                if (!(target instanceof HTMLElement)) {
+                    return;
+                }
+                if (widgetDragState && widgetDragState.dragging) {
+                    return;
+                }
+                const trigger = target.closest("[data-task-nav=\"tasks\"]");
+                if (!(trigger instanceof HTMLElement)) {
+                    return;
+                }
+                event.preventDefault();
+                navigateToTasksWithFilters(extractTaskFilters(trigger));
+            });
+        }
+
+        function applyMetricsUpdate(payload) {
+            if (!payload || typeof payload !== "object") {
+                return;
+            }
+            const data = payload;
+            const tasks = data.tasks && typeof data.tasks === "object" ? data.tasks : {};
+            const health = data.health && typeof data.health === "object" ? data.health : {};
+            const daemon = data.daemon && typeof data.daemon === "object" ? data.daemon : {};
+            const system = data.system && typeof data.system === "object" ? data.system : {};
+            const recentTasks = Array.isArray(tasks.recent) ? tasks.recent : [];
+            const taskTotals = {
+                total: toSafeNumber(tasks.total),
+                pending: toSafeNumber(tasks.pending),
+                inProgress: toSafeNumber(tasks.inProgress),
+                completed: toSafeNumber(tasks.completed),
+            };
+            const byPriority = tasks.byPriority && typeof tasks.byPriority === "object" ? tasks.byPriority : {};
+            const highPriority = toSafeNumber(byPriority.high);
+            const wsConnections = toSafeNumber(health.wsConnections);
+            const memoryUsagePercent = toSafeNumber(health.memoryUsage);
+            const healthStatusValue = typeof health.status === "string" && health.status
+                ? health.status
+                : "degraded";
+            const healthStatusLabel = healthStatusValue.charAt(0).toUpperCase() + healthStatusValue.slice(1);
+            const daemonMemory = daemon.memory && typeof daemon.memory === "object" ? daemon.memory : {};
+
+            setTextIfPresent("daemonPid", daemon.pid !== undefined ? String(daemon.pid) : "-");
+            setTextIfPresent("daemonUptime", formatUptime(toSafeNumber(daemon.uptime)));
+            setTextIfPresent("memoryUsage", memoryUsagePercent + "%");
+            setTextIfPresent("nodeVersion", typeof system.nodeVersion === "string" ? system.nodeVersion : "-");
+
+            const healthIndicator = document.getElementById("healthIndicator");
+            if (healthIndicator instanceof HTMLElement) {
+                healthIndicator.className = "health-indicator " + healthStatusValue;
+            }
+            const healthStatus = document.getElementById("healthStatus");
+            if (healthStatus instanceof HTMLElement) {
+                healthStatus.textContent = healthStatusLabel;
+            }
+
+            if (previousMetrics) {
+                updateMetricChanges(previousMetrics.tasks, tasks);
+            }
+            previousMetrics = data;
+
+            setTextIfPresent("totalTasks", String(taskTotals.total));
+            setTextIfPresent("pendingTasks", String(taskTotals.pending));
+            setTextIfPresent("inProgressTasks", String(taskTotals.inProgress));
+            setTextIfPresent("completedTasks", String(taskTotals.completed));
+            setTextIfPresent("wsConnections", String(wsConnections));
+            setTextIfPresent("highPriorityTasks", String(highPriority));
+
+            const todayKey = new Date().toDateString();
+            const createdToday = recentTasks.filter(task => new Date(task.createdAt).toDateString() === todayKey).length;
+            const completedToday = recentTasks.filter(task => task.status === "done" &&
+                new Date(task.updatedAt).toDateString() === todayKey).length;
+            const completionRate = taskTotals.total > 0
+                ? Math.round((taskTotals.completed / taskTotals.total) * 100)
+                : 0;
+
+            setTextIfPresent("totalTasksChange", "+ " + createdToday + " today");
+            setTextIfPresent("pendingTasksChange", completionRate + "% completion");
+            setTextIfPresent("inProgressTasksChange", taskTotals.inProgress > 0 ? "Active now" : "Idle");
+            setTextIfPresent("completedTasksChange", "+ " + completedToday + " today");
+            setTextIfPresent("connectionStatus", wsConnections > 0 ? "Connected" : "No connections");
+            setTextIfPresent("highPriorityUrgent",
+                highPriority > 5 ? "Urgent" : highPriority > 0 ? "Needs attention" : "None urgent");
+
+            updatePriorityBreakdownWidget(byPriority);
+            updateStatusBreakdownWidget(tasks);
+
+            setTextIfPresent("healthStatusDetailed", healthStatusValue.toUpperCase());
+            setTextIfPresent("tcpConnection", health.tcpConnected ? "Connected" : "Disconnected");
+            setTextIfPresent("systemPlatform", typeof system.platform === "string" ? system.platform : "-");
+            setTextIfPresent("systemArch", typeof system.arch === "string" ? system.arch : "-");
+            setTextIfPresent("totalMemory", formatBytes(toSafeNumber(system.totalmem)));
+            setTextIfPresent("freeMemory", formatBytes(toSafeNumber(system.freemem)));
+            setTextIfPresent("healthUptime", formatUptime(toSafeNumber(daemon.uptime)));
+            setTextIfPresent("healthPid", daemon.pid !== undefined ? String(daemon.pid) : "-");
+            setTextIfPresent("healthNodeVersion", typeof system.nodeVersion === "string" ? system.nodeVersion : "-");
+            setTextIfPresent("memoryUsed", formatBytes(toSafeNumber(daemonMemory.heapUsed)));
+            setTextIfPresent("memoryTotal", formatBytes(toSafeNumber(daemonMemory.heapTotal)));
+            setTextIfPresent("memoryPercent", memoryUsagePercent + "%");
+            setTextIfPresent("memoryExternal", formatBytes(toSafeNumber(daemonMemory.external)));
+            setTextIfPresent("wsConnectionsHealth", String(wsConnections));
+            setTextIfPresent("healthTotalTasks", String(taskTotals.total));
+            setTextIfPresent("healthCompletionRate", completionRate + "%");
+
+            metricsInitialized = true;
+            setMetricsLoadingState(false);
+        }
+
         // Enhanced Metrics Loading
         async function loadMetrics() {
-            try {
-                const response = await fetch('/api/metrics');
-                const data = await response.json();
-                
-                // Update daemon info
-                document.getElementById('daemonPid').textContent = data.daemon.pid;
-                document.getElementById('daemonUptime').textContent = formatUptime(data.daemon.uptime);
-                document.getElementById('memoryUsage').textContent = data.health.memoryUsage + '%';
-                document.getElementById('nodeVersion').textContent = data.system.nodeVersion;
-                
-                // Update health status
-                const healthIndicator = document.getElementById('healthIndicator');
-                const healthStatus = document.getElementById('healthStatus');
-                healthIndicator.className = \`health-indicator \${data.health.status}\`;
-                healthStatus.textContent = data.health.status.charAt(0).toUpperCase() + data.health.status.slice(1);
-                
-                // Calculate changes if we have previous data
-                if (previousMetrics) {
-                    updateMetricChanges(previousMetrics.tasks, data.tasks);
-                }
-                previousMetrics = data;
-                
-                // Update main metrics
-                document.getElementById('totalTasks').textContent = data.tasks.total;
-                document.getElementById('pendingTasks').textContent = data.tasks.pending;
-                document.getElementById('inProgressTasks').textContent = data.tasks.inProgress;
-                document.getElementById('completedTasks').textContent = data.tasks.completed;
-                document.getElementById('wsConnections').textContent = data.health.wsConnections;
-                document.getElementById('highPriorityTasks').textContent = data.tasks.byPriority.high;
-                
-                // Update overview tab additional metrics
-                document.getElementById('totalTasksChange').textContent = \`+ \${data.tasks.recent.filter(t => new Date(t.createdAt).toDateString() === new Date().toDateString()).length} today\`;
-                const completionRate = data.tasks.total > 0 ? Math.round((data.tasks.completed / data.tasks.total) * 100) : 0;
-                document.getElementById('pendingTasksChange').textContent = \`\${completionRate}% completion\`;
-                document.getElementById('inProgressTasksChange').textContent = data.tasks.inProgress > 0 ? 'Active now' : 'Idle';
-                document.getElementById('completedTasksChange').textContent = \`+ \${data.tasks.recent.filter(t => t.status === 'done' && new Date(t.updatedAt).toDateString() === new Date().toDateString()).length} today\`;
-                document.getElementById('connectionStatus').textContent = data.health.wsConnections > 0 ? 'Connected' : 'No connections';
-                document.getElementById('highPriorityUrgent').textContent = data.tasks.byPriority.high > 5 ? 'Urgent' : data.tasks.byPriority.high > 0 ? 'Needs attention' : 'None urgent';
-                
-                // Update health tab
-                document.getElementById('healthStatusDetailed').textContent = data.health.status.toUpperCase();
-                document.getElementById('tcpConnection').textContent = data.health.tcpConnected ? 'Connected' : 'Disconnected';
-                document.getElementById('systemMemory').textContent = data.health.memoryUsage + '%';
-                document.getElementById('freeMemory').textContent = formatBytes(data.system.freemem);
-                document.getElementById('systemPlatform').textContent = data.system.platform;
-                document.getElementById('systemArch').textContent = data.system.arch;
-                
-            } catch (error) {
-                console.error('Error loading metrics:', error);
-                showError('Failed to load metrics');
+            if (!metricsInitialized) {
+                setMetricsLoadingState(true);
             }
+            try {
+                const response = await fetch("/api/metrics");
+                const data = await response.json();
+                applyMetricsUpdate(data);
+            } catch (error) {
+                console.error("Error loading metrics:", error);
+                showError("Failed to load metrics");
+                setMetricsLoadingState(false);
+            }
+        }
+
+        function requestMetricsRefresh() {
+            if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+                wsConnection.send(JSON.stringify({ type: "refresh_metrics" }));
+                return Promise.resolve();
+            }
+            return loadMetrics();
+        }
+
+        function updatePriorityBreakdownWidget(byPriority) {
+            if (!byPriority || typeof byPriority !== "object") {
+                return;
+            }
+            const counts = {
+                high: Number(byPriority.high) || 0,
+                medium: Number(byPriority.medium) || 0,
+                low: Number(byPriority.low) || 0,
+            };
+            const total = counts.high + counts.medium + counts.low;
+            const nextState = PRIORITY_LEVELS.reduce((acc, level) => {
+                const previous = priorityBreakdownState[level];
+                const previousHistory = previous && Array.isArray(previous.history) ? previous.history : [];
+                const nextHistory = previousHistory.concat(counts[level]).slice(-PRIORITY_SPARKLINE_POINTS);
+                return { ...acc, [level]: { value: counts[level], history: nextHistory } };
+            }, {});
+            priorityBreakdownState = nextState;
+
+            animatePriorityValue("priorityBreakdownTotal", total);
+            updatePriorityBreakdownBar(counts, total);
+            updatePriorityBreakdownRow("high", counts.high, total, nextState.high.history);
+            updatePriorityBreakdownRow("medium", counts.medium, total, nextState.medium.history);
+            updatePriorityBreakdownRow("low", counts.low, total, nextState.low.history);
+        }
+
+        function updateStatusBreakdownWidget(tasks) {
+            if (!tasks || typeof tasks !== "object") {
+                return;
+            }
+            const byStatus = tasks.byStatus && typeof tasks.byStatus === "object" ? tasks.byStatus : null;
+            const counts = {
+                pending: Number(byStatus?.todo ?? tasks.pending ?? 0) || 0,
+                inProgress: Number(byStatus?.["in-progress"] ?? tasks.inProgress ?? 0) || 0,
+                completed: Number(byStatus?.done ?? tasks.completed ?? 0) || 0,
+            };
+            const total = counts.pending + counts.inProgress + counts.completed;
+            const overallTotal = Number(tasks.total);
+            const hasOverallTotal = Number.isFinite(overallTotal);
+            animatePriorityValue("statusBreakdownTotal", total);
+            animatePriorityValue("statusBreakdownPending", counts.pending);
+            animatePriorityValue("statusBreakdownInProgress", counts.inProgress);
+            animatePriorityValue("statusBreakdownCompleted", counts.completed);
+            const empty = document.getElementById("statusBreakdownEmpty");
+            const rows = document.getElementById("statusBreakdownRows");
+            const isEmpty = (hasOverallTotal ? overallTotal : total) === 0;
+            if (empty instanceof HTMLElement) {
+                empty.hidden = !isEmpty;
+                empty.setAttribute("aria-hidden", isEmpty ? "false" : "true");
+            }
+            if (rows instanceof HTMLElement) {
+                rows.hidden = isEmpty;
+                rows.setAttribute("aria-hidden", isEmpty ? "true" : "false");
+            }
+        }
+
+        function updatePriorityBreakdownBar(counts, total) {
+            const setWidth = (id, value) => {
+                const element = document.getElementById(id);
+                if (!(element instanceof HTMLElement)) {
+                    return;
+                }
+                element.style.width = value + "%";
+            };
+            const resolvedTotal = total > 0 ? total : 0;
+            const highPercent = resolvedTotal > 0 ? (counts.high / resolvedTotal) * 100 : 0;
+            const mediumPercent = resolvedTotal > 0 ? (counts.medium / resolvedTotal) * 100 : 0;
+            const lowPercent = resolvedTotal > 0 ? (counts.low / resolvedTotal) * 100 : 0;
+            setWidth("priorityBreakdownHighBar", highPercent);
+            setWidth("priorityBreakdownMediumBar", mediumPercent);
+            setWidth("priorityBreakdownLowBar", lowPercent);
+        }
+
+        function updatePriorityBreakdownRow(level, count, total, history) {
+            const label = level.charAt(0).toUpperCase() + level.slice(1);
+            animatePriorityValue("priorityBreakdown" + label, count);
+            const percentElement = document.getElementById("priorityBreakdown" + label + "Pct");
+            if (percentElement instanceof HTMLElement) {
+                const percent = total > 0 ? Math.round((count / total) * 100) : 0;
+                percentElement.textContent = percent + "%";
+            }
+            const sparkline = document.getElementById("prioritySparkline" + label);
+            if (sparkline instanceof SVGPolylineElement) {
+                sparkline.setAttribute("points", buildSparklinePoints(history));
+            }
+        }
+
+        function buildSparklinePoints(values) {
+            const normalizedValues = Array.isArray(values) ? values : [];
+            const width = PRIORITY_SPARKLINE_WIDTH;
+            const height = PRIORITY_SPARKLINE_HEIGHT;
+            const padding = 3;
+            if (normalizedValues.length === 0) {
+                return "0," + (height / 2) + " " + width + "," + (height / 2);
+            }
+            const min = Math.min(...normalizedValues);
+            const max = Math.max(...normalizedValues);
+            const range = Math.max(max - min, 1);
+            if (normalizedValues.length === 1) {
+                const value = normalizedValues[0];
+                const normalized = (value - min) / range;
+                const y = height - padding - normalized * (height - padding * 2);
+                return "0," + y.toFixed(1) + " " + width + "," + y.toFixed(1);
+            }
+            const step = width / (normalizedValues.length - 1);
+            return normalizedValues.map((value, index) => {
+                const normalized = (value - min) / range;
+                const x = index * step;
+                const y = height - padding - normalized * (height - padding * 2);
+                return x.toFixed(1) + "," + y.toFixed(1);
+            }).join(" ");
+        }
+
+        function animatePriorityValue(elementId, nextValue) {
+            const element = document.getElementById(elementId);
+            if (!(element instanceof HTMLElement)) {
+                return;
+            }
+            const normalizedNext = Number.isFinite(nextValue) ? nextValue : 0;
+            const textValue = Number(element.textContent);
+            const dataValue = Number(element.dataset.currentValue);
+            const currentValue = Number.isFinite(textValue)
+                ? textValue
+                : Number.isFinite(dataValue)
+                    ? dataValue
+                    : 0;
+            if (prefersReducedMotion || currentValue === normalizedNext) {
+                element.textContent = String(normalizedNext);
+                element.dataset.currentValue = String(normalizedNext);
+                return;
+            }
+            const startValue = Number.isFinite(currentValue) ? currentValue : 0;
+            const duration = 600;
+            const startTime = performance.now();
+            const existingId = priorityBreakdownAnimationIds[elementId];
+            if (typeof existingId === "number") {
+                cancelAnimationFrame(existingId);
+            }
+            const step = (now) => {
+                const elapsed = now - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const eased = 1 - Math.pow(1 - progress, 3);
+                const value = Math.round(startValue + (normalizedNext - startValue) * eased);
+                element.textContent = String(value);
+                if (progress < 1) {
+                    const nextId = requestAnimationFrame(step);
+                    priorityBreakdownAnimationIds = { ...priorityBreakdownAnimationIds, [elementId]: nextId };
+                    return;
+                }
+                element.dataset.currentValue = String(normalizedNext);
+            };
+            const nextId = requestAnimationFrame(step);
+            priorityBreakdownAnimationIds = { ...priorityBreakdownAnimationIds, [elementId]: nextId };
         }
 
         function updateMetricChanges(oldTasks, newTasks) {
@@ -4351,7 +5500,7 @@ export class DashboardServer {
         }
 
         function sortTasks(tasks, sortBy) {
-            return tasks.sort((a, b) => {
+            return [...tasks].sort((a, b) => {
                 switch (sortBy) {
                     case 'updated':
                         return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
@@ -4423,7 +5572,7 @@ export class DashboardServer {
                 if (result.success) {
                     showSuccess('Task status updated successfully!');
                     await loadTasks();
-                    await loadMetrics();
+                    await requestMetricsRefresh();
                 } else {
                     showError('Failed to update task: ' + (result.error || 'Unknown error'));
                 }
@@ -4446,7 +5595,7 @@ export class DashboardServer {
                     if (result.success) {
                         showSuccess('Task deleted successfully!');
                         await loadTasks();
-                        await loadMetrics();
+                        await requestMetricsRefresh();
                     } else {
                         showError('Failed to delete task: ' + (result.error || 'Unknown error'));
                     }
@@ -4653,7 +5802,7 @@ export class DashboardServer {
                 // Clear selection and refresh
                 clearSelection();
                 await loadTasks();
-                await loadMetrics();
+                await requestMetricsRefresh();
                 
             } catch (error) {
                 showError('Failed to perform bulk action: ' + error.message);
@@ -4661,9 +5810,9 @@ export class DashboardServer {
         }
 
         async function loadHealthDetails() {
-            // Health details are already loaded in loadMetrics()
-            // This function ensures that health tab is updated when switched to
-            await loadMetrics();
+            // Health details are updated as part of metric refresh.
+            // This function ensures that health tab is updated when switched to.
+            await requestMetricsRefresh();
         }
             } catch (error) {
                 console.error('Error loading daemon status:', error);
@@ -4687,7 +5836,7 @@ export class DashboardServer {
                 if (result.success) {
                     showSuccess('Daemon paused successfully!');
                     await loadHealthDetails();
-                    await loadMetrics();
+                    await requestMetricsRefresh();
                 } else {
                     showError('Failed to pause daemon: ' + (result.error || 'Unknown error'));
                 }
@@ -4711,7 +5860,7 @@ export class DashboardServer {
                 if (result.success) {
                     showSuccess('Daemon resumed successfully!');
                     await loadHealthDetails();
-                    await loadMetrics();
+                    await requestMetricsRefresh();
                 } else {
                     showError('Failed to resume daemon: ' + (result.error || 'Unknown error'));
                 }
@@ -4850,7 +5999,7 @@ export class DashboardServer {
                 if (result.success) {
                     showSuccess('Task cancelled successfully!');
                     await loadQueueStatus();
-                    await loadMetrics();
+                    await requestMetricsRefresh();
                 } else {
                     showError('Failed to cancel task: ' + (result.error || 'Unknown error'));
                 }
@@ -4871,7 +6020,7 @@ export class DashboardServer {
                 if (result.success) {
                     showSuccess('Task queued for retry!');
                     await loadQueueStatus();
-                    await loadMetrics();
+                    await requestMetricsRefresh();
                 } else {
                     showError('Failed to retry task: ' + (result.error || 'Unknown error'));
                 }
@@ -4909,13 +6058,167 @@ export class DashboardServer {
                 if (retryCount > 0) {
                     showSuccess(\`\${retryCount} tasks queued for retry!\`);
                     await loadQueueStatus();
-                    await loadMetrics();
+                    await requestMetricsRefresh();
                 } else {
                     showError('No tasks could be retried');
                 }
             } catch (error) {
                 showError('Failed to retry failed tasks: ' + error.message);
             }
+        }
+
+        function normalizeActivityFilterValue(value, allowedValues) {
+            if (typeof value !== "string") {
+                return "all";
+            }
+            return allowedValues.includes(value) ? value : "all";
+        }
+
+        function setRecentActivityLoadingState(list, isLoading) {
+            if (!(list instanceof HTMLElement)) {
+                return;
+            }
+            if (isLoading) {
+                list.classList.add("activity-widget-loading");
+                list.setAttribute("aria-busy", "true");
+                if (!recentActivityInitialized) {
+                    list.innerHTML = "<div class=\"loading\">Loading recent activity...</div>";
+                }
+                return;
+            }
+            list.classList.remove("activity-widget-loading");
+            list.setAttribute("aria-busy", "false");
+        }
+
+        function renderRecentActivityEmpty(list) {
+            if (!(list instanceof HTMLElement)) {
+                return;
+            }
+            list.innerHTML = "<div class=\"activity-widget-empty\">No recent activity yet.</div>";
+        }
+
+        function renderRecentActivityError(list, message) {
+            if (!(list instanceof HTMLElement)) {
+                return;
+            }
+            const safeMessage = escapeHTML(message || "Failed to load recent activity.");
+            list.innerHTML = "<div class=\"activity-widget-error\">" + safeMessage + "</div>";
+        }
+
+        function buildRecentActivityItem(log) {
+            const message = log && typeof log.message === "string" ? log.message : "Task updated";
+            const data = log && typeof log.data === "object" ? log.data : null;
+            const statusValue = normalizeActivityFilterValue(data?.status, RECENT_ACTIVITY_STATUS_VALUES);
+            const priorityValue = normalizeActivityFilterValue(data?.priority, RECENT_ACTIVITY_PRIORITY_VALUES);
+            const statusAttr = statusValue !== "all" ? " data-task-status=\"" + statusValue + "\"" : "";
+            const priorityAttr = priorityValue !== "all" ? " data-task-priority=\"" + priorityValue + "\"" : "";
+            const timestampValue = log?.timestamp;
+            const timestamp = typeof timestampValue === "string" || typeof timestampValue === "number"
+                ? new Date(timestampValue)
+                : null;
+            const isValidDate = timestamp instanceof Date && !Number.isNaN(timestamp.getTime());
+            const relativeTime = isValidDate ? formatRelativeTime(timestamp) : "Unknown time";
+            const absoluteTime = isValidDate ? timestamp.toLocaleString() : "Unknown time";
+            const metaItems = [];
+
+            if (statusValue !== "all") {
+                metaItems.push(
+                    "<span class=\"status " +
+                    statusValue +
+                    "\">" +
+                    escapeHTML(statusValue.replace("-", " ")) +
+                    "</span>",
+                );
+            }
+            if (priorityValue !== "all") {
+                metaItems.push(
+                    "<span class=\"priority " +
+                    priorityValue +
+                    "\">" +
+                    escapeHTML(priorityValue) +
+                    "</span>",
+                );
+            }
+
+            const metaMarkup = metaItems.length > 0
+                ? "<div class=\"activity-widget-meta\">" + metaItems.join("") + "</div>"
+                : "";
+
+            return (
+                "<button class=\"activity-widget-item\" type=\"button\" data-task-nav=\"tasks\"" +
+                statusAttr +
+                priorityAttr +
+                ">" +
+                "<div class=\"activity-widget-item-main\">" +
+                "<div class=\"activity-widget-message\">" +
+                escapeHTML(message) +
+                "</div>" +
+                metaMarkup +
+                "</div>" +
+                "<span class=\"activity-widget-time\" title=\"" +
+                escapeHTML(absoluteTime) +
+                "\">" +
+                escapeHTML(relativeTime) +
+                "</span>" +
+                "</button>"
+            );
+        }
+
+        function renderRecentActivityList(list, logs) {
+            if (!(list instanceof HTMLElement)) {
+                return;
+            }
+            const activity = Array.isArray(logs) ? logs.slice(0, RECENT_ACTIVITY_LIMIT) : [];
+            if (activity.length === 0) {
+                renderRecentActivityEmpty(list);
+                return;
+            }
+            list.innerHTML = activity.map(buildRecentActivityItem).join("");
+        }
+
+        function loadRecentActivityWidget(options) {
+            const list = document.getElementById("recentActivityList");
+            if (!(list instanceof HTMLElement)) {
+                return Promise.resolve();
+            }
+            const forceRefresh = Boolean(options?.force);
+            const now = Date.now();
+            if (!forceRefresh &&
+                recentActivityInitialized &&
+                now - recentActivityLastFetchedAt < RECENT_ACTIVITY_REFRESH_MS) {
+                return Promise.resolve();
+            }
+            if (recentActivityRequest) {
+                return recentActivityRequest;
+            }
+            recentActivityLastFetchedAt = now;
+            if (!recentActivityInitialized) {
+                setRecentActivityLoadingState(list, true);
+            }
+            recentActivityRequest = fetch("/api/logs?limit=" + RECENT_ACTIVITY_LIMIT)
+                .then((response) => {
+                    if (!response.ok) {
+                        throw new Error("Unexpected response " + response.status);
+                    }
+                    return response.json();
+                })
+                .then((logs) => {
+                    if (!Array.isArray(logs)) {
+                        renderRecentActivityError(list, "Failed to load activity data.");
+                        return;
+                    }
+                    renderRecentActivityList(list, logs);
+                })
+                .catch((error) => {
+                    console.error("Error loading recent activity:", error);
+                    renderRecentActivityError(list, "Failed to load recent activity.");
+                })
+                .finally(() => {
+                    recentActivityInitialized = true;
+                    setRecentActivityLoadingState(list, false);
+                    recentActivityRequest = null;
+                });
+            return recentActivityRequest;
         }
 
         async function loadLogs() {
@@ -4973,6 +6276,9 @@ export class DashboardServer {
                         const message = JSON.parse(event.data);
 
                         if (message.type === "initial_state") {
+                            if (message.data && Object.prototype.hasOwnProperty.call(message.data, "metrics")) {
+                                applyMetricsUpdate(message.data.metrics);
+                            }
                             if (message.data && Object.prototype.hasOwnProperty.call(message.data, "widgetSizes")) {
                                 handleWidgetSizeSync(message.data);
                             }
@@ -4982,6 +6288,11 @@ export class DashboardServer {
                             if (message.data && Object.prototype.hasOwnProperty.call(message.data, "hiddenWidgetIds")) {
                                 handleWidgetVisibilitySync(message.data);
                             }
+                            return;
+                        }
+
+                        if (message.type === "metrics_update") {
+                            applyMetricsUpdate(message.data);
                             return;
                         }
 
@@ -5006,7 +6317,8 @@ export class DashboardServer {
                             message.type === "task_deleted") {
                             console.log("Task update received:", message.type);
                             await loadTasks();
-                            await loadMetrics();
+                            await requestMetricsRefresh();
+                            await loadRecentActivityWidget({ force: true });
                             
                             let notificationType = 'info';
                             let notificationMessage = 'Task ' + message.type.replace('_', ' ');
@@ -5095,6 +6407,15 @@ export class DashboardServer {
             return 'Just now';
         }
 
+        function escapeHTML(value) {
+            return String(value)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
         function showMessage(message, type) {
             const messageDiv = document.createElement('div');
             messageDiv.className = type;
@@ -5171,7 +6492,8 @@ export class DashboardServer {
         // Auto-refresh Management
         function startAutoRefresh() {
             refreshInterval = setInterval(async () => {
-                await loadMetrics();
+                await requestMetricsRefresh();
+                await loadRecentActivityWidget();
                 // Only refresh tab-specific content if that tab is active
                 if (document.getElementById('queue-tab').classList.contains('active')) {
                     await loadQueueStatus();
@@ -5198,6 +6520,8 @@ export class DashboardServer {
         const WIDGET_VISIBILITY_STORAGE_KEY = "dashboardWidgetVisibility.v1";
         const WIDGET_LIBRARY_SELECTION_KEY = "dashboardWidgetLibrarySelection.v1";
         const WIDGET_LIBRARY_PENDING_ADD_KEY = "dashboardWidgetLibraryPendingAdd.v1";
+        const WIDGET_LIBRARY_ADD_LOADING_MS = 350;
+        const WIDGET_LIBRARY_ADD_SUCCESS_MS = 1400;
         const WIDGET_LAYOUT_PENDING_SYNC_KEY = "dashboardWidgetLayout.pending.v1";
         const WIDGET_VISIBILITY_PENDING_SYNC_KEY = "dashboardWidgetVisibility.pending.v1";
         const WIDGET_LAYOUT_SYNC_TIMEOUT_MS = 2500;
@@ -5216,6 +6540,7 @@ export class DashboardServer {
         };
         let widgetCatalog = [];
         let selectedWidgetIds = new Set();
+        let widgetLibraryAddState = {};
         let widgetLayoutSyncState = {
             hasSynced: false,
             hasLayout: false,
@@ -5359,6 +6684,42 @@ export class DashboardServer {
                 clearPendingAddSelectedWidgets();
             }
             updateAddSelectedWidgetsState();
+        }
+
+        function createWidgetLibraryAddToken() {
+            return String(Date.now()) + "_" + Math.random().toString(16).slice(2);
+        }
+
+        function getWidgetLibraryAddState(widgetId) {
+            if (!widgetId) {
+                return { status: "idle", token: "" };
+            }
+            const entry = widgetLibraryAddState[widgetId];
+            if (!entry || typeof entry !== "object") {
+                return { status: "idle", token: "" };
+            }
+            return entry;
+        }
+
+        function setWidgetLibraryAddState(widgetId, nextState) {
+            if (!widgetId) {
+                return;
+            }
+            widgetLibraryAddState = { ...widgetLibraryAddState, [widgetId]: nextState };
+            renderWidgetLibrary();
+        }
+
+        function clearWidgetLibraryAddState(widgetId, token) {
+            if (!widgetId) {
+                return;
+            }
+            const current = widgetLibraryAddState[widgetId];
+            if (!current || (token && current.token !== token)) {
+                return;
+            }
+            const { [widgetId]: _, ...rest } = widgetLibraryAddState;
+            widgetLibraryAddState = rest;
+            renderWidgetLibrary();
         }
 
         function pruneSelectedWidgetIds(hiddenWidgetIds, catalogIdsOverride) {
@@ -6168,6 +7529,40 @@ export class DashboardServer {
             }, []);
         }
 
+        function updateEmptyDashboardState() {
+            const emptyState = document.getElementById("dashboardEmptyState");
+            if (!(emptyState instanceof HTMLElement)) {
+                return;
+            }
+            const visibleWidgetCount = getAllWidgets().length;
+            const isEmpty = visibleWidgetCount === 0;
+            emptyState.hidden = !isEmpty;
+            emptyState.setAttribute("aria-hidden", isEmpty ? "false" : "true");
+        }
+
+        function openWidgetLibraryFromEmptyState() {
+            const widgetsTabButton = document.querySelector("[data-tab=\"widgets\"]");
+            if (widgetsTabButton instanceof HTMLElement) {
+                widgetsTabButton.click();
+            }
+            if (typeof history !== "undefined" && typeof history.replaceState === "function") {
+                history.replaceState(null, "", "#widgetLibraryList");
+            } else if (typeof window !== "undefined") {
+                window.location.hash = "widgetLibraryList";
+            }
+            const list = document.getElementById("widgetLibraryList");
+            if (!(list instanceof HTMLElement)) {
+                return;
+            }
+            list.scrollIntoView({ behavior: "smooth", block: "start" });
+            if (!list.hasAttribute("tabindex")) {
+                list.setAttribute("tabindex", "-1");
+            }
+            if (typeof list.focus === "function") {
+                list.focus({ preventScroll: true });
+            }
+        }
+
         function getWidgetDisplayName(widget) {
             if (!(widget instanceof HTMLElement)) {
                 return "Widget";
@@ -6357,6 +7752,7 @@ export class DashboardServer {
                 getWidgetContainers().forEach(container => saveWidgetLayoutForContainer(container));
             }
             pruneSelectedWidgetIds(resolvedHiddenWidgetIds);
+            updateEmptyDashboardState();
             renderWidgetLibrary();
         }
 
@@ -6393,6 +7789,7 @@ export class DashboardServer {
             const containersToUpdate = uniqueContainers([targetContainer, resolvedCurrentContainer]);
             const nextLayout = persistWidgetLayoutForContainers(containersToUpdate, { broadcast: true });
             containersToUpdate.forEach(container => applyWidgetOrderForContainer(container, nextLayout));
+            updateEmptyDashboardState();
             renderWidgetLibrary();
         }
 
@@ -6593,6 +7990,7 @@ export class DashboardServer {
 
             const remainingSelectedIds = selectedIds.filter(widgetId => !widgetIdsToPersistSet.has(widgetId));
             updateSelectedWidgetIds(remainingSelectedIds);
+            updateEmptyDashboardState();
             renderWidgetLibrary();
 
             if (widgetIdsToPersistSet.size > 0) {
@@ -6607,6 +8005,134 @@ export class DashboardServer {
             if (remainingSelectedIds.length > 0) {
                 showWarning("Some selected widgets could not be added. Try refreshing the dashboard.");
             }
+        }
+
+        function addWidgetFromLibrary(widgetId) {
+            if (!widgetId) {
+                return;
+            }
+            const hiddenSet = new Set(loadHiddenWidgetIds());
+            if (!hiddenSet.has(widgetId)) {
+                showInfo("Widget is already on the dashboard.");
+                return;
+            }
+            const currentState = getWidgetLibraryAddState(widgetId);
+            if (currentState.status === "loading") {
+                return;
+            }
+            const token = createWidgetLibraryAddToken();
+            setWidgetLibraryAddState(widgetId, { status: "loading", token });
+            const startTime = Date.now();
+            const result = addWidgetFromLibraryToDashboard(widgetId);
+            const elapsed = Date.now() - startTime;
+            const remainingDelay = Math.max(0, WIDGET_LIBRARY_ADD_LOADING_MS - elapsed);
+            setTimeout(() => {
+                if (!result.added) {
+                    clearWidgetLibraryAddState(widgetId, token);
+                    return;
+                }
+                setWidgetLibraryAddState(widgetId, { status: "success", token });
+                showSuccess("Added " + result.label + " to the dashboard.");
+                setTimeout(() => {
+                    clearWidgetLibraryAddState(widgetId, token);
+                }, WIDGET_LIBRARY_ADD_SUCCESS_MS);
+            }, remainingDelay);
+        }
+
+        function addWidgetFromLibraryToDashboard(widgetId) {
+            if (!widgetId) {
+                return { added: false, label: "Widget" };
+            }
+            const widget = getWidgetById(widgetId);
+            if (!(widget instanceof HTMLElement)) {
+                return { added: false, label: "Widget" };
+            }
+            const label = getWidgetDisplayName(widget);
+            if (!isWidgetLayoutReady()) {
+                if (!hasWidgetLayoutSyncConnection()) {
+                    const seededLayout = seedWidgetLayoutIfEmpty();
+                    updateWidgetLayoutSyncState({
+                        hasSynced: true,
+                        hasLayout: Object.keys(seededLayout).length > 0,
+                        hasServerSync: false,
+                    });
+                } else {
+                    requestWidgetLayoutSync();
+                    scheduleWidgetLayoutSyncFallback();
+                    showInfo("Syncing layout. Try again in a moment.");
+                    return { added: false, label };
+                }
+            }
+            const hiddenWidgetIds = loadHiddenWidgetIds();
+            const hiddenSet = new Set(hiddenWidgetIds);
+            if (!hiddenSet.has(widgetId)) {
+                return { added: false, label };
+            }
+            const seededLayout = seedWidgetLayoutIfEmpty();
+            const layout = resolveWidgetLayoutForAdd(seededLayout);
+            const layoutContainer = getWidgetContainerFromLayout(widgetId, layout);
+            const currentContainer = widget.closest("[data-widget-container]");
+            const resolvedCurrentContainer = currentContainer instanceof HTMLElement ? currentContainer : null;
+            const container = resolveWidgetPlacementContainer(widgetId, widget, layout) ||
+                resolvedCurrentContainer ||
+                getWidgetHomeContainer(widget);
+            if (!(container instanceof HTMLElement)) {
+                return { added: false, label };
+            }
+            const containerId = container.dataset.widgetContainer;
+            if (!containerId) {
+                return { added: false, label };
+            }
+            const sourceContainer = resolvedCurrentContainer;
+            const sourceContainerId = sourceContainer?.dataset.widgetContainer || null;
+            const shouldAppendAtEnd = !(layoutContainer instanceof HTMLElement);
+            const widgetTargets = [
+                {
+                    widgetId,
+                    widget,
+                    container,
+                    containerId,
+                    sourceContainer,
+                    sourceContainerId,
+                    shouldShow: true,
+                    shouldAppendAtEnd,
+                },
+            ];
+
+            widgetTargets.forEach(target => {
+                if (target.shouldAppendAtEnd || target.widget.parentElement !== target.container) {
+                    target.container.appendChild(target.widget);
+                }
+                syncWidgetHomeContainer(target.widget, target.containerId);
+                initializeWidget(target.widget);
+                initWidgetSizingForWidget(target.widget);
+                if (target.shouldShow) {
+                    setWidgetVisibility(target.widget, true);
+                }
+            });
+
+            const widgetIdsToPersistSet = new Set(widgetTargets.map(target => target.widgetId));
+            const nextHiddenWidgetIds = hiddenWidgetIds.filter(widgetId => !widgetIdsToPersistSet.has(widgetId));
+            const layoutResult = persistWidgetLayoutUpdatesForAddedWidgets(widgetTargets, layout);
+            const nextLayoutHasEntries = Object.keys(layoutResult.nextLayout).length > 0;
+            persistWidgetVisibility(nextHiddenWidgetIds, { broadcast: true });
+            if (layoutResult.containersToUpdate.length > 0) {
+                applyWidgetPlacement(layoutResult.nextLayout);
+                applyWidgetOrderForContainers(layoutResult.containersToUpdate, layoutResult.nextLayout);
+            }
+            if (!widgetLayoutSyncState.hasLayout && nextLayoutHasEntries) {
+                updateWidgetLayoutSyncState({ hasLayout: true });
+            }
+            if (!widgetLayoutSyncState.hasSynced && nextLayoutHasEntries) {
+                updateWidgetLayoutSyncState({ hasSynced: true });
+            }
+
+            const remainingSelectedIds = Array.from(selectedWidgetIds).filter(id => id !== widgetId);
+            updateSelectedWidgetIds(remainingSelectedIds);
+            updateEmptyDashboardState();
+            renderWidgetLibrary();
+
+            return { added: true, label };
         }
 
         function renderWidgetLibrary() {
@@ -6679,6 +8205,32 @@ export class DashboardServer {
                     const actionWrap = document.createElement("div");
                     actionWrap.className = "widget-library-item-actions";
 
+                    const addState = getWidgetLibraryAddState(widgetInfo.id);
+                    const isAdding = addState.status === "loading";
+                    const isAdded = addState.status === "success";
+                    const addButton = document.createElement("button");
+                    addButton.type = "button";
+                    addButton.className = "widget-library-add";
+                    if (isAdding) {
+                        addButton.classList.add("is-loading");
+                    }
+                    if (isAdded) {
+                        addButton.classList.add("is-success");
+                    }
+                    addButton.disabled = !isHidden || isAdding || isAdded;
+                    addButton.setAttribute("aria-busy", isAdding ? "true" : "false");
+                    const addLabel = isAdding
+                        ? "Adding..."
+                        : isAdded
+                            ? "Added"
+                            : !isHidden
+                                ? "On dashboard"
+                                : "Add";
+                    addButton.textContent = addLabel;
+                    addButton.addEventListener("click", () => {
+                        addWidgetFromLibrary(widgetInfo.id);
+                    });
+
                     const selectWrap = document.createElement("label");
                     selectWrap.className = "widget-library-select";
 
@@ -6735,6 +8287,7 @@ export class DashboardServer {
                     toggleWrap.appendChild(checkbox);
                     toggleWrap.appendChild(toggleLabel);
 
+                    actionWrap.appendChild(addButton);
                     actionWrap.appendChild(selectWrap);
                     actionWrap.appendChild(toggleWrap);
 
@@ -6758,6 +8311,7 @@ export class DashboardServer {
             persistWidgetVisibility([], { broadcast: true });
             getWidgetContainers().forEach(container => saveWidgetLayoutForContainer(container, { broadcast: true }));
             updateSelectedWidgetIds([]);
+            updateEmptyDashboardState();
             renderWidgetLibrary();
         }
 
@@ -6770,6 +8324,7 @@ export class DashboardServer {
             persistWidgetVisibility(hiddenWidgetIds, { broadcast: true });
             getWidgetContainers().forEach(container => saveWidgetLayoutForContainer(container, { broadcast: true }));
             updateSelectedWidgetIds([]);
+            updateEmptyDashboardState();
             renderWidgetLibrary();
         }
 
@@ -6936,6 +8491,26 @@ export class DashboardServer {
             }
         }
 
+        function handleWidgetStorageUpdate(event) {
+            if (!event || event.storageArea !== localStorage) {
+                return;
+            }
+            if (event.key === WIDGET_VISIBILITY_STORAGE_KEY) {
+                applyWidgetVisibilityState();
+                return;
+            }
+            if (event.key === WIDGET_LAYOUT_STORAGE_KEY) {
+                const layout = loadWidgetLayout();
+                updateWidgetLayoutSyncState({
+                    hasSynced: true,
+                    hasLayout: Object.keys(layout).length > 0,
+                });
+                applyWidgetOrder();
+                renderWidgetLibrary();
+                updateEmptyDashboardState();
+            }
+        }
+
         function applyWidgetSize(widget, size) {
             const normalized = normalizeWidgetSize(size);
             widget.dataset.widgetSize = normalized;
@@ -6977,6 +8552,42 @@ export class DashboardServer {
             });
 
             return controls;
+        }
+
+        function initWidgetRemoveControls(widget) {
+            if (!(widget instanceof HTMLElement)) {
+                return;
+            }
+            if (widget.dataset.widgetRemoveReady === "true") {
+                return;
+            }
+            const widgetId = widget.dataset.widgetId;
+            if (!widgetId) {
+                return;
+            }
+            widget.dataset.widgetRemoveReady = "true";
+
+            const controls = document.createElement("div");
+            controls.className = "widget-remove-controls";
+            controls.setAttribute("role", "group");
+            controls.setAttribute("aria-label", "Widget actions");
+
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "widget-remove-btn";
+            const label = getWidgetDisplayName(widget);
+            const actionLabel = "Remove " + label;
+            button.setAttribute("aria-label", actionLabel);
+            button.setAttribute("title", actionLabel);
+            button.textContent = "Remove";
+            button.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleWidgetVisibility(widgetId, false);
+            });
+
+            controls.appendChild(button);
+            widget.insertBefore(controls, widget.firstChild);
         }
 
         function applyWidgetOrderForContainer(container, layout) {
@@ -7079,6 +8690,7 @@ export class DashboardServer {
             widget.setAttribute("draggable", "true");
             widget.setAttribute("tabindex", "0");
             widget.setAttribute("aria-grabbed", "false");
+            initWidgetRemoveControls(widget);
             widget.addEventListener("dragstart", handleWidgetDragStart);
             widget.addEventListener("dragend", handleWidgetDragEnd);
         }
@@ -7096,7 +8708,9 @@ export class DashboardServer {
             const existingControls = widget.querySelector(".widget-size-controls");
             if (!(existingControls instanceof HTMLElement)) {
                 const controls = createWidgetSizeControls(storedSize);
-                widget.insertBefore(controls, widget.firstChild);
+                const removeControls = widget.querySelector(".widget-remove-controls");
+                const insertBeforeNode = removeControls ? removeControls.nextSibling : widget.firstChild;
+                widget.insertBefore(controls, insertBeforeNode);
                 controls.addEventListener("click", event => {
                     const target = event.target;
                     if (!(target instanceof HTMLButtonElement)) {
@@ -7190,9 +8804,10 @@ export class DashboardServer {
                 event.dataTransfer.dropEffect = "move";
             }
 
-            const placeholder = ensureWidgetPlaceholder(widgetDragState.dragging);
             const reference = getWidgetDropReference(container, event.clientX, event.clientY);
+            const placeholder = ensureWidgetPlaceholder(widgetDragState.dragging, reference?.element);
 
+            container.classList.add("drag-hover");
             clearWidgetDragOver(container);
             if (reference?.element) {
                 reference.element.classList.add("drag-over");
@@ -7241,6 +8856,7 @@ export class DashboardServer {
                 return;
             }
 
+            container.classList.remove("drag-hover");
             clearWidgetDragOver(container);
         }
 
@@ -7266,27 +8882,62 @@ export class DashboardServer {
                 widgetDragState.dragging.classList.remove("dragging");
                 widgetDragState.dragging.setAttribute("aria-grabbed", "false");
             }
-            container.classList.remove("drag-active");
+            container.classList.remove("drag-active", "drag-hover");
             updateWidgetDragState({ dragging: null, placeholder: null, container: null });
         }
 
         function createWidgetGhost(widget) {
             const ghost = widget.cloneNode(true);
             ghost.classList.add("widget-ghost");
-            ghost.style.width = \`\${widget.offsetWidth}px\`;
-            ghost.style.height = \`\${widget.offsetHeight}px\`;
+            const rect = widget.getBoundingClientRect();
+            ghost.style.width = \`\${rect.width || widget.offsetWidth}px\`;
+            ghost.style.height = \`\${rect.height || widget.offsetHeight}px\`;
             document.body.appendChild(ghost);
             return ghost;
         }
 
-        function ensureWidgetPlaceholder(widget) {
+        function getWidgetSizeClass(widget) {
+            if (!(widget instanceof HTMLElement)) {
+                return null;
+            }
+            return WIDGET_SIZE_CLASSES.find(sizeClass => widget.classList.contains(sizeClass)) || null;
+        }
+
+        function buildWidgetDropIndicator(widget) {
+            const placeholder = document.createElement("div");
+            placeholder.className = "widget-drop-indicator widget-card";
+            placeholder.setAttribute("aria-hidden", "true");
+            const sizeClass = getWidgetSizeClass(widget);
+            if (sizeClass) {
+                placeholder.classList.add(sizeClass);
+            }
+            const ghost = document.createElement("div");
+            ghost.className = "widget-drop-ghost";
+            const label = document.createElement("div");
+            label.className = "widget-drop-label";
+            label.textContent = "Drop " + getWidgetDisplayName(widget);
+            ghost.appendChild(label);
+            placeholder.appendChild(ghost);
+            return placeholder;
+        }
+
+        function syncWidgetPlaceholderSize(placeholder, widget, referenceElement) {
+            if (!(placeholder instanceof HTMLElement)) {
+                return;
+            }
+            const base = referenceElement instanceof HTMLElement ? referenceElement : widget;
+            const rect = base.getBoundingClientRect();
+            const height = Math.max(80, Math.round(rect.height || widget.offsetHeight || 0));
+            placeholder.style.minHeight = height ? \`\${height}px\` : "";
+        }
+
+        function ensureWidgetPlaceholder(widget, referenceElement) {
             if (widgetDragState.placeholder) {
+                syncWidgetPlaceholderSize(widgetDragState.placeholder, widget, referenceElement);
                 return widgetDragState.placeholder;
             }
-            const placeholder = document.createElement("div");
-            placeholder.className = "widget-drop-indicator";
-            placeholder.style.width = \`\${widget.offsetWidth}px\`;
-            placeholder.style.height = \`\${widget.offsetHeight}px\`;
+            const placeholder = buildWidgetDropIndicator(widget);
+            syncWidgetPlaceholderSize(placeholder, widget, referenceElement);
             updateWidgetDragState({ placeholder });
             return placeholder;
         }
@@ -7369,6 +9020,7 @@ export class DashboardServer {
         document.addEventListener("DOMContentLoaded", () => {
             hydrateWidgetStateFromServer();
             initTabs();
+            initMetricNavigation();
             collectWidgetCatalog();
             applyWidgetVisibilityState();
             updateSelectedWidgetIds(loadSelectedWidgetIds());
@@ -7390,6 +9042,13 @@ export class DashboardServer {
             initWidgetDragAndDrop();
             initWidgetSizing();
             renderWidgetLibrary();
+            updateEmptyDashboardState();
+            if (typeof window !== "undefined" && window.location.hash === "#widgetLibraryList") {
+                openWidgetLibraryFromEmptyState();
+            }
+            if (typeof window !== "undefined") {
+                window.addEventListener("storage", handleWidgetStorageUpdate);
+            }
 
             const addSelectedWidgetsBtn = document.getElementById("addSelectedWidgetsBtn");
             if (addSelectedWidgetsBtn instanceof HTMLButtonElement) {
@@ -7402,6 +9061,22 @@ export class DashboardServer {
             const hideAllWidgetsBtn = document.getElementById("hideAllWidgetsBtn");
             if (hideAllWidgetsBtn instanceof HTMLButtonElement) {
                 hideAllWidgetsBtn.addEventListener("click", hideAllWidgets);
+            }
+            const openWidgetLibraryBtn = document.getElementById("openWidgetLibraryBtn");
+            if (openWidgetLibraryBtn instanceof HTMLButtonElement) {
+                openWidgetLibraryBtn.addEventListener("click", openWidgetLibraryFromEmptyState);
+            }
+            const showAllWidgetsEmptyBtn = document.getElementById("showAllWidgetsEmptyBtn");
+            if (showAllWidgetsEmptyBtn instanceof HTMLButtonElement) {
+                showAllWidgetsEmptyBtn.addEventListener("click", showAllWidgets);
+            }
+
+            const priorityFilter = document.getElementById("priorityFilter");
+            if (priorityFilter instanceof HTMLSelectElement) {
+                setPriorityFilterHighlight(priorityFilter.value);
+                priorityFilter.addEventListener("change", () => {
+                    setPriorityFilterHighlight(priorityFilter.value);
+                });
             }
             
             // Form submission
@@ -7429,7 +9104,9 @@ export class DashboardServer {
             document.getElementById('logLimit').addEventListener('change', loadLogs);
             
             // Initial load
-            loadMetrics();
+            setMetricsLoadingState(true);
+            requestMetricsRefresh();
+            loadRecentActivityWidget({ force: true });
             startAutoRefresh();
             
             // Close modal when clicking outside
@@ -7640,7 +9317,7 @@ export class DashboardServer {
                 // Clear selection and refresh
                 clearSelection();
                 await loadTasks();
-                await loadMetrics();
+                await requestMetricsRefresh();
                 
             } catch (error) {
                 showError('Failed to perform bulk action: ' + error.message);
@@ -7687,7 +9364,7 @@ export class DashboardServer {
                 if (result.success) {
                     showSuccess('Daemon paused successfully!');
                     await loadDaemonStatus();
-                    await loadMetrics();
+                    await requestMetricsRefresh();
                 } else {
                     showError('Failed to pause daemon: ' + (result.error || 'Unknown error'));
                 }
@@ -7711,7 +9388,7 @@ export class DashboardServer {
                 if (result.success) {
                     showSuccess('Daemon resumed successfully!');
                     await loadDaemonStatus();
-                    await loadMetrics();
+                    await requestMetricsRefresh();
                 } else {
                     showError('Failed to resume daemon: ' + (result.error || 'Unknown error'));
                 }

@@ -226,7 +226,7 @@ class WorkflowTest {
 			} else {
 				console.log("⚠️  Dashboard HTTP API: NOT ACCESSIBLE");
 				console.log("💡 To enable the web dashboard, restart the daemon with:");
-				console.log("     yarn run daemon");
+				console.log("     yarn run worker");
 			}
 
 			console.log("\n🎉 Core functionality is working!");

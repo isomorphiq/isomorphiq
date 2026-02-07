@@ -22,9 +22,19 @@ interface RealTimeActivityFeedProps {
 	maxItems?: number;
 }
 
+interface ApiActivityLog {
+    id?: string;
+    timestamp: string;
+    level?: string;
+    message: string;
+    data?: Record<string, unknown>;
+}
+
 export function RealTimeActivityFeed({ maxItems = 20 }: RealTimeActivityFeedProps) {
 	const [activities, setActivities] = useState<ActivityItem[]>([]);
 	const [isConnected, setIsConnected] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
 	const [lastEvent] = useAtom(lastEventAtom);
 	type ActivityEvent =
 		| TaskCreatedEvent
@@ -93,28 +103,69 @@ export function RealTimeActivityFeed({ maxItems = 20 }: RealTimeActivityFeedProp
 		[isActivityEvent, mapEventToActivity, maxItems],
 	);
 
-	useEffect(() => {
-		setIsConnected(true);
+    const toDate = (value: string): Date => {
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+    };
 
-		const initialActivities: ActivityItem[] = [
-			{
-				id: "1",
-				type: "system",
-				message: "Dashboard initialized",
-				timestamp: new Date(),
-			},
-			{
-				id: "2",
-				type: "info",
-				message: "Connected to real-time updates",
-				timestamp: new Date(),
-			},
-		];
-		setActivities(initialActivities);
-	}, []);
+    const fetchActivityLogs = useCallback(async () => {
+        try {
+            const response = await fetch(`/api/logs?limit=${maxItems}`, {
+                headers: {
+                    "Accept": "application/json",
+                },
+            });
+
+            if (!response.ok) {
+                throw new Error("Failed to load activity logs");
+            }
+
+            const logs = (await response.json()) as unknown;
+            if (!Array.isArray(logs)) {
+                throw new Error("Unexpected activity response shape");
+            }
+
+            const mappedLogs = logs
+                .filter((entry): entry is ApiActivityLog => {
+                    return Boolean(entry) && typeof entry === "object" && "message" in entry && "timestamp" in entry;
+                })
+                .slice(0, maxItems)
+                .map((entry, index) => ({
+                    id: typeof entry.id === "string" && entry.id.length > 0
+                        ? entry.id
+                        : `activity-${index}-${entry.timestamp}`,
+                    type: typeof entry.level === "string" ? entry.level : "info",
+                    message: entry.message,
+                    timestamp: toDate(entry.timestamp),
+                    details: toRecord(entry.data),
+                }));
+
+            setActivities(mappedLogs);
+            setIsConnected(true);
+            setErrorMessage(null);
+        } catch (error) {
+            console.error("Failed to fetch activity logs:", error);
+            setIsConnected(false);
+            setErrorMessage("Failed to load activity.");
+        } finally {
+            setIsLoading(false);
+        }
+    }, [maxItems]);
+
+    useEffect(() => {
+        void fetchActivityLogs();
+        const intervalId = window.setInterval(() => {
+            void fetchActivityLogs();
+        }, 15000);
+
+        return () => {
+            window.clearInterval(intervalId);
+        };
+    }, [fetchActivityLogs]);
 
 	useEffect(() => {
 		if (lastEvent) {
+            setIsConnected(true);
 			addActivityFromEvent(lastEvent);
 		}
 	}, [lastEvent, addActivityFromEvent]);
@@ -212,7 +263,29 @@ export function RealTimeActivityFeed({ maxItems = 20 }: RealTimeActivityFeedProp
 					gap: "8px",
 				}}
 			>
-				{activities.length === 0 ? (
+                {isLoading ? (
+                    <div
+                        style={{
+                            textAlign: "center",
+                            color: "#9ca3af",
+                            padding: "40px",
+                            fontStyle: "italic",
+                        }}
+                    >
+                        Loading activity...
+                    </div>
+                ) : errorMessage ? (
+                    <div
+                        style={{
+                            textAlign: "center",
+                            color: "#fca5a5",
+                            padding: "40px",
+                            fontStyle: "italic",
+                        }}
+                    >
+                        {errorMessage}
+                    </div>
+                ) : activities.length === 0 ? (
 					<div
 						style={{
 							textAlign: "center",

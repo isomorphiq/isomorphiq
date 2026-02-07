@@ -32,6 +32,33 @@ const parseInteractiveFlag = (args: string[]): boolean => {
     return true;
 };
 
+const parseWorkersFlag = (args: string[]): number | null => {
+    const directPrefix = "--workers=";
+    const aliasPrefix = "--worker-count=";
+    for (let index = 0; index < args.length; index += 1) {
+        const arg = args[index];
+        if (arg.startsWith(directPrefix)) {
+            const raw = arg.slice(directPrefix.length).trim();
+            const parsed = Number.parseInt(raw, 10);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        }
+        if (arg.startsWith(aliasPrefix)) {
+            const raw = arg.slice(aliasPrefix.length).trim();
+            const parsed = Number.parseInt(raw, 10);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        }
+        if (arg === "--workers" || arg === "--worker-count") {
+            const nextArg = args[index + 1];
+            if (!nextArg || nextArg.startsWith("--")) {
+                return null;
+            }
+            const parsed = Number.parseInt(nextArg.trim(), 10);
+            return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        }
+    }
+    return null;
+};
+
 const resolveRoot = (): string => {
     const moduleDir = path.dirname(fileURLToPath(import.meta.url));
     return path.resolve(moduleDir, "..");
@@ -77,6 +104,7 @@ const spawnService = (spec: ChildSpec, mode: StartMode): ChildProcess => {
 const buildChildren = (
     root: string,
     mode: StartMode,
+    workerCount: number | null,
     logDir?: string,
     streamPath?: string,
 ): ChildSpec[] => {
@@ -95,28 +123,25 @@ const buildChildren = (
             : {},
     );
     const withLogs = (name: string): string => path.join(logsDir, `${name}.log`);
+    const supervisorArgs = ["workspace", "@isomorphiq/supervisor", "start"];
+    if (workerCount !== null) {
+        supervisorArgs.push(`--workers=${String(workerCount)}`);
+    }
+    const supervisorEnv: Record<string, string | undefined> =
+        workerCount !== null
+            ? {
+                    ...envBase,
+                    ISOMORPHIQ_WORKER_COUNT: String(workerCount),
+                }
+            : envBase;
 
     return [
         {
-            name: "mcp",
-            command: "yarn",
-            args: ["workspace", "@isomorphiq/mcp", "start"],
-            env: envBase,
-            logFile: mode === "interactive" ? withLogs("mcp") : undefined,
-        },
-        {
             name: "supervisor",
             command: "yarn",
-            args: ["workspace", "@isomorphiq/supervisor", "start"],
-            env: envBase,
+            args: supervisorArgs,
+            env: supervisorEnv,
             logFile: mode === "interactive" ? withLogs("supervisor") : undefined,
-        },
-        {
-            name: "gateway",
-            command: "yarn",
-            args: ["workspace", "@isomorphiq/gateway", "start"],
-            env: envBase,
-            logFile: mode === "interactive" ? withLogs("gateway") : undefined,
         },
         {
             name: "web",
@@ -137,9 +162,7 @@ const startInkUi = (root: string, streamPath: string, logsDir: string): ChildPro
         streamPath,
         "--log-paths",
         [
-            path.join(logsDir, "mcp.log"),
             path.join(logsDir, "supervisor.log"),
-            path.join(logsDir, "gateway.log"),
             path.join(logsDir, "web.log"),
         ].join(","),
     ];
@@ -157,7 +180,9 @@ const startInkUi = (root: string, streamPath: string, logsDir: string): ChildPro
 
 const main = (): void => {
     const root = resolveRoot();
-    const interactive = parseInteractiveFlag(process.argv.slice(2));
+    const args = process.argv.slice(2);
+    const interactive = parseInteractiveFlag(args);
+    const workerCount = parseWorkersFlag(args);
     const mode: StartMode = interactive ? "interactive" : "non-interactive";
 
     const streamPath = path.join(root, ".tmp", "acp-session.jsonl");
@@ -169,7 +194,7 @@ const main = (): void => {
         writeEmptyFile(streamPath);
     }
 
-    const children = buildChildren(root, mode, logDir, streamPath).map((spec) =>
+    const children = buildChildren(root, mode, workerCount, logDir, streamPath).map((spec) =>
         spawnService(spec, mode),
     );
     const ui = mode === "interactive" ? startInkUi(root, streamPath, logDir) : null;

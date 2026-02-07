@@ -1,5 +1,5 @@
-import { ProductManager } from "@isomorphiq/user-profile";
-import { ProfileManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
+import { ProfileManager } from "@isomorphiq/profiles";
 import { createWorkflowAgentRunner } from "@isomorphiq/workflow/agent-runner";
 import { ProfileWorkflowRunner } from "@isomorphiq/workflow";
 
@@ -8,6 +8,7 @@ import { ProfileWorkflowRunner } from "@isomorphiq/workflow";
  */
 export async function startWorkflowsService(): Promise<void> {
     const profileManager = new ProfileManager();
+    await profileManager.waitForProfileOverrides();
     const workflowRunner = createWorkflowAgentRunner({ profileManager });
     const pm = new ProductManager();
     await pm.initialize();

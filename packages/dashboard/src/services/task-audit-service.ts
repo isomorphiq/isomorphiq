@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-a74454ee-9658-4be1-b6f9-c26b02bda4b1"
+
 import path from "node:path";
 import { Level } from "level";
 import type { Task } from "@isomorphiq/tasks";
@@ -65,8 +67,8 @@ export interface AuditStatistics {
  * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class TaskAuditService {
-	private db: Level<string, string>;
-	private isAvailable: boolean = false;
+    private db: Level<string, TaskAuditEvent>;
+    private isAvailable: boolean = false;
 
 	constructor(databasePath?: string) {
 		const envPath = process.env.TASK_AUDIT_DB_PATH;

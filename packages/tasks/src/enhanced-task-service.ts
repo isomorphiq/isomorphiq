@@ -23,12 +23,47 @@ import type { TaskRepository } from "./task-repository.ts";
  */
 export class EnhancedTaskService {
 	private readonly taskRepository: TaskRepository;
+    private taskClaimQueue: Promise<void> = Promise.resolve();
 
 	constructor(taskRepository: TaskRepository) {
 		this.taskRepository = taskRepository;
 		// Subscribe to event bus for internal event handling
 		this.setupEventHandlers();
 	}
+
+    private async withTaskClaimLock<T>(action: () => Promise<Result<T>>): Promise<Result<T>> {
+        const pending = this.taskClaimQueue;
+        let releaseLock: (() => void) | null = null;
+        this.taskClaimQueue = new Promise<void>((resolve) => {
+            releaseLock = resolve;
+        });
+
+        await pending;
+
+        try {
+            return await action();
+        } finally {
+            if (releaseLock) {
+                releaseLock();
+            }
+        }
+    }
+
+    private areDependenciesSatisfied(
+        task: TaskEntity,
+        taskMap: Map<string, TaskEntity>,
+    ): boolean {
+        if (task.dependencies.length === 0) {
+            return true;
+        }
+        return task.dependencies.every((dependencyId) => {
+            const dependencyTask = taskMap.get(dependencyId);
+            if (!dependencyTask) {
+                return true;
+            }
+            return dependencyTask.status === "done" || dependencyTask.status === "invalid";
+        });
+    }
 
 	getRepository(): TaskRepository {
 		return this.taskRepository;
@@ -356,6 +391,57 @@ export class EnhancedTaskService {
 		return updateResult;
 	}
 
+    async claimTaskForWorker(
+        taskId: string,
+        workerId: string,
+    ): Promise<Result<TaskEntity | null>> {
+        return await this.withTaskClaimLock(async () => {
+            const currentResult = await this.getTask(taskId);
+            if (!currentResult.success) {
+                if (currentResult.error instanceof NotFoundError) {
+                    return { success: true, data: null };
+                }
+                return { success: false, error: currentResult.error };
+            }
+
+            const currentTask = currentResult.data;
+            if (!currentTask) {
+                return { success: true, data: null };
+            }
+
+            if (currentTask.status === "in-progress") {
+                return { success: true, data: null };
+            }
+            if (currentTask.status !== "todo") {
+                return { success: true, data: null };
+            }
+
+            const allTasksResult = await this.getAllTasks();
+            if (!allTasksResult.success) {
+                return { success: false, error: allTasksResult.error };
+            }
+            const taskMap = new Map(allTasksResult.data.map((task) => [task.id, task]));
+            const latestTask = taskMap.get(taskId) ?? currentTask;
+            if (!this.areDependenciesSatisfied(latestTask, taskMap)) {
+                return { success: true, data: null };
+            }
+
+            const claimResult = await this.updateTask(
+                taskId,
+                {
+                    id: taskId,
+                    status: "in-progress",
+                    assignedTo: latestTask.assignedTo ?? workerId,
+                },
+                workerId,
+            );
+            if (!claimResult.success) {
+                return { success: false, error: claimResult.error };
+            }
+            return { success: true, data: claimResult.data };
+        });
+    }
+
 	async updateTaskPriority(
 		taskId: string,
 		priority: TaskPriority,
@@ -674,4 +760,3 @@ export class EnhancedTaskService {
 		return false;
 	}
 }
-

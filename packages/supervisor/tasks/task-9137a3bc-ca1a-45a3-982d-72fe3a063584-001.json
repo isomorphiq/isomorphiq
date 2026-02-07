@@ -1,0 +1,8 @@
+{
+  "id": "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-001",
+  "title": "Consolidate Dashboard Models and Implement Complete Widget Library",
+  "description": "Unify fragmented dashboard models across multiple files into a single source of truth and implement the complete widget library with all required widget types (My Tasks, Recent Activity, Priority Breakdown, Search, System Health). This task consolidates the existing models from dashboard.ts, dashboard-model.ts, and dashboard-widget-store.ts, resolves schema conflicts, and creates a comprehensive widget library using @tsimpl patterns. Acceptance criteria: All existing models consolidated into unified schema, 5 required widget types defined with proper metadata and size constraints, widget library exports as singleton, TypeScript types are complete and validated, existing functionality remains working with new unified models.",
+  "priority": "high",
+  "type": "implementation",
+  "createdBy": "refinement"
+}

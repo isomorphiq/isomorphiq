@@ -39,5 +39,5 @@ export async function saveAdminSettings(partial: Partial<AdminSettings>): Promis
 }
 
 export function isAdminUser(username?: string | null): boolean {
-    return username === "nyan";
+    return username === "nyan" || username === "admin";
 }

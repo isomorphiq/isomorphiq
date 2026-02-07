@@ -24,6 +24,25 @@ export type PortfolioCreationPayload = {
     environment?: string;
 };
 
+const matchesEnvironmentForTask = (
+    task: WorkflowTask,
+    environment?: string,
+): boolean => {
+    if (!environment) return true;
+    const envValue = (task as Record<string, unknown>).environment;
+    return typeof envValue !== "string" || envValue === environment;
+};
+
+const countThemeTasksForEnvironment = (
+    tasks: WorkflowTask[],
+    environment?: string,
+): number =>
+    tasks.filter(
+        (task) =>
+            normalizeTaskType(task.type) === "theme"
+            && matchesEnvironmentForTask(task, environment),
+    ).length;
+
 const resolveServices = (payload: unknown): PortfolioCreationServices => {
     if (!payload || typeof payload !== "object") {
         return {};
@@ -140,6 +159,13 @@ export const handleThemeResearchTransition = async (
     const payloadRecord: PortfolioCreationPayload =
         payload && typeof payload === "object" ? (payload as PortfolioCreationPayload) : {};
     const tasks = payloadRecord.tasks ?? [];
+    const themeCount = countThemeTasksForEnvironment(tasks, payloadRecord.environment);
+    if (themeCount > 3) {
+        console.log(
+            `[WORKFLOW] retry-theme-research: skipping because ${themeCount} themes already exist (env=${payloadRecord.environment ?? "n/a"})`,
+        );
+        return;
+    }
     const services = resolveServices(payloadRecord);
     if (!services.taskExecutor) {
         return;

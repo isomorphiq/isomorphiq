@@ -6,7 +6,7 @@ import "../../../tests/test-utils/env-fetch.ts";
  * Tests the web dashboard components, state management, and real-time updates
  */
 
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 import { startHttpServer } from "@isomorphiq/http-server";
 
 interface TestResult {

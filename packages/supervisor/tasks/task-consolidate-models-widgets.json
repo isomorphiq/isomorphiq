@@ -1,0 +1,9 @@
+{
+  "id": "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-001",
+  "title": "Consolidate Dashboard Models and Define Complete Widget Library",
+  "description": "Unify fragmented dashboard model definitions and create comprehensive widget library with all required widget types (My Tasks, Recent Activity, Priority Breakdown, Search, System Health). Consolidate duplicate schemas from dashboard.ts, dashboard-model.ts, and dashboard-widget-store.ts into a single source of truth. Implement proper TypeScript types using @tsimpl patterns with functional programming style.\n\nAcceptance Criteria:\n- Single dashboard-model.ts exports all types and schemas (eliminate duplicates)\n- WidgetLibrary defines all 5 required widget types with appropriate metadata\n- Each widget has defined defaultSize, minSize, and maxSize constraints\n- Widget library exports as singleton instance for app-wide use\n- All TypeScript types use @tsimpl StructSelf patterns\n- Models follow functional programming with immutable updates\n- 4-space indentation and double quotes throughout",
+  "priority": "high", 
+  "type": "implementation",
+  "createdBy": "refinement",
+  "dependencies": []
+}

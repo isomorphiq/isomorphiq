@@ -37,6 +37,24 @@ const isThemeTask = (task: WorkflowTask): boolean =>
 const isInitiativeTask = (task: WorkflowTask): boolean =>
     normalizeTaskType(task.type) === "initiative" && isActiveStatus(task.status);
 
+const countThemeTasks = (tasks: WorkflowTask[], environment?: string): number => {
+    const themeTasks = tasks.filter((task) => normalizeTaskType(task.type) === "theme");
+    console.log(
+        `[WORKFLOW] countThemeTasks env=${environment ?? "n/a"} totalTasks=${tasks.length} themeCandidates=${themeTasks.length}`,
+    );
+    console.log(
+        `[WORKFLOW] countThemeTasks details=${themeTasks
+            .map(
+                (task) =>
+                    `${task.id ?? "unknown"}/${normalizeTaskStatus(task.status) || "unset"}/${normalizeTaskType(
+                        task.type,
+                    )}`,
+            )
+            .join(", ")}`,
+    );
+    return themeTasks.length;
+};
+
 const isFeatureLikeTask = (task: WorkflowTask): boolean => {
 	const type = normalizeTaskType(task.type);
 	const status = normalizeTaskStatus(task.status);
@@ -52,11 +70,6 @@ const isFeatureLikeTask = (task: WorkflowTask): boolean => {
 		return text.includes("feature");
 	}
 	return false;
-};
-
-const isTestingTask = (task: WorkflowTask): boolean => {
-    const type = normalizeTaskType(task.type);
-    return type === "testing" || type === "integration";
 };
 
 const dependenciesSatisfied = (task: WorkflowTask, tasks: WorkflowTask[]): boolean => {
@@ -97,7 +110,7 @@ const parseTestStatusValue = (value: unknown): "passed" | "failed" | null => {
     return null;
 };
 
-const resolveTestStatusFromContext = (
+const resolveQaStatusFromContext = (
     record: Record<string, unknown>,
 ): "passed" | "failed" | null => {
     const direct = parseTestStatusValue(record.testStatus);
@@ -108,10 +121,49 @@ const resolveTestStatusFromContext = (
         record.testReport && typeof record.testReport === "object"
             ? (record.testReport as Record<string, unknown>)
             : null;
-    if (!report) {
-        return null;
+    const reportStatus = parseTestStatusValue(report?.testStatus);
+    if (reportStatus) {
+        return reportStatus;
     }
-    return parseTestStatusValue(report.testStatus);
+    const lastTestResult =
+        record.lastTestResult && typeof record.lastTestResult === "object"
+            ? (record.lastTestResult as Record<string, unknown>)
+            : undefined;
+    const statusFromOutput =
+        parseTestStatus(lastTestResult?.output)
+        ?? parseTestStatus(lastTestResult?.summary)
+        ?? parseTestStatus(lastTestResult?.error);
+    if (statusFromOutput) {
+        return statusFromOutput;
+    }
+    const success =
+        lastTestResult && typeof lastTestResult.success === "boolean"
+            ? lastTestResult.success
+            : undefined;
+    if (success === true) {
+        return "passed";
+    }
+    if (success === false) {
+        return "failed";
+    }
+    return null;
+};
+
+const decideQaTransition = (
+    context: unknown,
+    passTransition: string,
+    failTransition: string,
+): string => {
+    const record =
+        context && typeof context === "object" ? (context as Record<string, unknown>) : {};
+    const qaStatus = resolveQaStatusFromContext(record);
+    if (qaStatus === "passed") {
+        return passTransition;
+    }
+    if (qaStatus === "failed") {
+        return failTransition;
+    }
+    return failTransition;
 };
 
 export type WorkflowStateName =
@@ -125,9 +177,13 @@ export type WorkflowStateName =
 	| "stories-prioritized"
 	| "tasks-prepared"
 	| "task-in-progress"
+	| "lint-completed"
+	| "typecheck-completed"
+	| "unit-tests-completed"
+	| "e2e-tests-completed"
+	| "coverage-completed"
 	| "integration-ready"
-	| "task-completed"
-	| "tests-completed";
+	| "task-completed";
 
 const transitionEffects: Partial<
 	Record<WorkflowStateName, Partial<Record<string, TransitionEffect>>>
@@ -234,13 +290,32 @@ const baseStateDefs: Array<StateDefinition> = [
 		description: "Themes are ordered for roadmap planning.",
 		profile: "portfolio-manager",
 		targetType: "theme",
-		promptHint: "Return ordered theme IDs (highest priority first).",
+		promptHint:
+			"Prioritize up to 3 active themes using deterministic ranking (existing priority, dependency count, stable id tie-break). Apply high/medium/low and return Summary, Top themes, Changes applied.",
 		transitions: buildTransitionsFor("themes-prioritized"),
-		decider: (tasks: WorkflowTask[]) => {
-			const themes = tasks.filter(isThemeTask);
-			if (themes.length === 0) return "request-theme";
-			const initiatives = tasks.filter(isInitiativeTask);
-			return initiatives.length > 0 ? "prioritize-initiatives" : "define-initiatives";
+		decider: (tasks: WorkflowTask[], context?: unknown) => {
+			const environment =
+				context && typeof context === "object"
+					? (context as Record<string, unknown>).environment
+					: undefined;
+			const themeTasks = tasks.filter((task) => normalizeTaskType(task.type) === "theme");
+			const themeCount = themeTasks.length;
+			console.log(
+				`[WORKFLOW] themes-prioritized: found ${themeCount} theme(s) (env=${environment ?? "n/a"})`,
+			);
+			console.log(
+				`[WORKFLOW] themes-prioritized: theme statuses = ${themeTasks
+					.map((task) => normalizeTaskStatus(task.status))
+					.join(", ")}`,
+			);
+			const comparison = themeCount > 3;
+			console.log(`[WORKFLOW] themes-prioritized: comparison >3 => ${comparison}`);
+			if (comparison) {
+				console.log("[WORKFLOW] themes-prioritized: branching to define-initiatives");
+				return "define-initiatives";
+			}
+			console.log("[WORKFLOW] themes-prioritized: branching to request-theme");
+			return "request-theme";
 		},
 	},
 	{
@@ -265,14 +340,12 @@ const baseStateDefs: Array<StateDefinition> = [
 		description: "Initiatives ordered for feature discovery.",
 		profile: "portfolio-manager",
 		targetType: "initiative",
-		promptHint: "Return ordered initiative IDs (highest priority first).",
+		promptHint:
+			"Prioritize up to 3 active initiatives using deterministic ranking (existing priority, dependency count, stable id tie-break). Apply high/medium/low and return Summary, Top initiatives, Changes applied.",
 		transitions: buildTransitionsFor("initiatives-prioritized"),
 		decider: (tasks: WorkflowTask[]) => {
-			const themes = tasks.filter(isThemeTask);
 			const initiatives = tasks.filter(isInitiativeTask);
-			if (initiatives.length === 0) {
-				return themes.length > 0 ? "define-initiatives" : "request-theme";
-			}
+            if (initiatives.length < 5) return "define-initiatives";
 			const featureCount = tasks.filter(isFeatureLikeTask).length;
 			return featureCount > 0 ? "prioritize-features" : "research-new-features";
 		},
@@ -304,7 +377,8 @@ const baseStateDefs: Array<StateDefinition> = [
 		description: "Feature ideas exist and are prioritized.",
 		profile: "ux-researcher",
 		targetType: "feature",
-		promptHint: "Return reordered/prioritized feature list (IDs + priority).",
+		promptHint:
+			"Prioritize up to 3 active features using deterministic ranking (existing priority, dependency count, stable id tie-break). Apply high/medium/low and return Summary, Top features, Changes applied.",
 		transitions: buildTransitionsFor("features-prioritized"),
 		decider: (tasks: WorkflowTask[]) => {
 			const activeFeatures = tasks.filter(isFeatureLikeTask);
@@ -356,7 +430,8 @@ const baseStateDefs: Array<StateDefinition> = [
 		description: "Stories ordered for execution.",
 		profile: "project-manager",
 		targetType: "story",
-		promptHint: "Return ordered story IDs (highest priority first).",
+		promptHint:
+			"Prioritize up to 3 active stories using deterministic ranking (existing priority, dependency count, stable id tie-break). Apply high/medium/low and return Summary, Top stories, Changes applied.",
 		transitions: buildTransitionsFor("stories-prioritized"),
 		decider: () => "refine-into-tasks",
 	},
@@ -365,12 +440,8 @@ const baseStateDefs: Array<StateDefinition> = [
 		description: "Tasks exist and are ready for implementation.",
 		profile: "principal-architect",
 		targetType: "implementation",
-		promptHint: "Break down the story into 3-7 implementation tasks. For each task, provide:\n" +
-			"- Clear title and description\n" +
-			"- Acceptance criteria that are specific and testable\n" +
-			"- Priority based on dependencies and story importance\n" +
-			"- Any technical considerations or dependencies\n\n" +
-			"Write your response for an audience of senior technical staff. Be comprehensive and clear—use as much detail as necessary to fully capture the scope, rationale, and implementation approach. Do not limit your response length; thoroughness is more important than brevity.",
+		promptHint:
+			"SOP: create only missing implementation tasks for the selected story. Preserve existing dependencies, add new task ids only when criteria are uncovered, and return Summary/Story used/Tasks created/Notes.",
 		transitions: buildTransitionsFor("tasks-prepared"),
 		decider: async (tasks: WorkflowTask[], context?: unknown) =>
 			decideTasksPreparedTransition(tasks, context, WORKFLOW["tasks-prepared"]),
@@ -383,67 +454,62 @@ const baseStateDefs: Array<StateDefinition> = [
 		promptHint:
 			"Write tests first; then code to make them pass. Report failing output if not green.",
 		transitions: buildTransitionsFor("task-in-progress"),
-		decider: () => "run-tests",
+		decider: () => "run-lint",
 	},
 	{
-		name: "tests-completed",
-		description: "Run unit + integration/regression tests for the completed task.",
+		name: "lint-completed",
+		description: "Lint checks completed for the current implementation task.",
 		profile: "qa-specialist",
 		targetType: "testing",
 		promptHint:
-			"Run unit + integration suite; suggest fixes. Up to 3 attempts; if failures shrink, continue.",
-		transitions: buildTransitionsFor("tests-completed"),
-		decider: (tasks: WorkflowTask[], context?: unknown) => {
-			const record =
-				context && typeof context === "object" ? (context as Record<string, unknown>) : {};
-			const statusFromContext = resolveTestStatusFromContext(record);
-			if (statusFromContext === "passed") {
-				return "tests-passing";
-			}
-			if (statusFromContext === "failed") {
-				return "tests-failed";
-			}
-			const currentTaskId =
-				typeof record.currentTaskId === "string" ? record.currentTaskId : undefined;
-			if (currentTaskId) {
-				const currentTask = tasks.find((task) => task.id === currentTaskId);
-				if (currentTask?.status === "done") {
-					return "tests-passing";
-				}
-				if (currentTask?.status === "in-progress") {
-					return "tests-failed";
-				}
-			}
-			const lastTestResult =
-				record.lastTestResult && typeof record.lastTestResult === "object"
-					? (record.lastTestResult as Record<string, unknown>)
-					: undefined;
-			const statusFromOutput =
-				parseTestStatus(lastTestResult?.output)
-					?? parseTestStatus(lastTestResult?.summary)
-					?? parseTestStatus(lastTestResult?.error);
-			if (statusFromOutput === "passed") {
-				return "tests-passing";
-			}
-			if (statusFromOutput === "failed") {
-				return "tests-failed";
-			}
-			const success =
-				lastTestResult && typeof lastTestResult.success === "boolean"
-					? lastTestResult.success
-					: undefined;
-			if (success === false) {
-				return "tests-failed";
-			}
-			const testingTasks = tasks.filter((task) => isTestingTask(task));
-			if (testingTasks.length === 0) {
-				return "tests-passing";
-			}
-			const hasOpenTesting = testingTasks.some(
-				(task) => task.status !== "done" && task.status !== "invalid",
-			);
-			return hasOpenTesting ? "tests-failed" : "tests-passing";
-		},
+			"Run lint only. If lint fails, return precise failure details and repro command.",
+		transitions: buildTransitionsFor("lint-completed"),
+		decider: (_tasks: WorkflowTask[], context?: unknown) =>
+			decideQaTransition(context, "run-typecheck", "lint-failed"),
+	},
+	{
+		name: "typecheck-completed",
+		description: "Typecheck completed for the current implementation task.",
+		profile: "qa-specialist",
+		targetType: "testing",
+		promptHint:
+			"Run typecheck only. If typecheck fails, return exact diagnostics and repro command.",
+		transitions: buildTransitionsFor("typecheck-completed"),
+		decider: (_tasks: WorkflowTask[], context?: unknown) =>
+			decideQaTransition(context, "run-unit-tests", "typecheck-failed"),
+	},
+	{
+		name: "unit-tests-completed",
+		description: "Unit tests completed for the current implementation task.",
+		profile: "qa-specialist",
+		targetType: "testing",
+		promptHint:
+			"Run unit tests only. Keep repro steps deterministic and minimal.",
+		transitions: buildTransitionsFor("unit-tests-completed"),
+		decider: (_tasks: WorkflowTask[], context?: unknown) =>
+			decideQaTransition(context, "run-e2e-tests", "unit-tests-failed"),
+	},
+	{
+		name: "e2e-tests-completed",
+		description: "End-to-end tests completed for the current implementation task.",
+		profile: "qa-specialist",
+		targetType: "testing",
+		promptHint:
+			"Run e2e tests for impacted paths. If no e2e suite exists, report explicit skip evidence.",
+		transitions: buildTransitionsFor("e2e-tests-completed"),
+		decider: (_tasks: WorkflowTask[], context?: unknown) =>
+			decideQaTransition(context, "ensure-coverage", "e2e-tests-failed"),
+	},
+	{
+		name: "coverage-completed",
+		description: "Coverage verification completed for the current implementation task.",
+		profile: "qa-specialist",
+		targetType: "testing",
+		promptHint:
+			"Verify coverage output and thresholds for impacted scope; include concrete percentages.",
+		transitions: buildTransitionsFor("coverage-completed"),
+		decider: (_tasks: WorkflowTask[], context?: unknown) =>
+			decideQaTransition(context, "tests-passing", "coverage-failed"),
 	},
 	{
 		name: "task-completed",

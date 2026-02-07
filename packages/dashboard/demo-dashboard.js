@@ -231,7 +231,7 @@ async function checkDashboardStatus() {
     } catch (error) {
         console.log("❌ Dashboard is not accessible");
         console.log("Please make sure the daemon is running with dashboard enabled:");
-        console.log("   yarn run daemon");
+        console.log("   yarn run worker");
         console.log("Then access the dashboard at: http://localhost:3005\n");
         return false;
     }

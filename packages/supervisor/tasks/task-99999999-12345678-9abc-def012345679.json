@@ -1,0 +1,1 @@
+{\"id\": \"task-99999999-12345678-9abc-def012345679\", \"title\": \"Implement Persistent Layout Storage\", \"description\": \"Persist widget positions across sessions to satisfy acceptance criterion 5: Widget positions persist across sessions.\", \"priority\": \"medium\", \"type\": \"implementation\", \"createdBy\": \"principal-architect\"}

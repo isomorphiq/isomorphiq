@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-5035f3d0-1532-4d7b-ab4d-8a24b945d63f"
+
 import { createWSClient, httpBatchLink, splitLink, wsLink } from "@trpc/client";
 import { createTRPCJotai } from "jotai-trpc";
 import { getEnvironment, getEnvironmentHeaderName } from "./environment.ts";
@@ -14,6 +16,7 @@ type AppRouter = {
 };
 
 const API_PORT_FALLBACK = 3003;
+const ENABLE_TRPC_WS = false;
 
 const getBaseUrl = () => {
 	if (typeof window === "undefined") return `http://localhost:${API_PORT_FALLBACK}`;
@@ -35,7 +38,7 @@ const resolveEnvironmentHeaders = (): Record<string, string> => {
 };
 
 const wsClient =
-	typeof window !== "undefined"
+	typeof window !== "undefined" && ENABLE_TRPC_WS
 		? createWSClient({
 				url: getWsUrl(),
 				connectionParams: () => ({

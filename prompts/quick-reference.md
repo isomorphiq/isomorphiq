@@ -48,6 +48,14 @@ When working with complex tasks, use the MCP tools:
 "Set the database optimization task to high priority"
 ```
 
+## 🧰 MCP Call Format (Important)
+- Tool call args must be a JSON object.
+- Use the exact tool name exposed by ACP runtime.
+- In Codex ACP sessions, names are typically `functions.mcp__task-manager__<tool>`.
+- Do not use bare names like `list_tasks` unless that exact bare name appears in the ACP tool list.
+- Follow this order: read (`list_*`/`get_*`) -> write (`create_*`/`update_*`) -> verify.
+- For important files, call `get_file_context` to create/update file context and ensure `FILE_CONTEXT` header linkage.
+
 ## 🔍 Monitoring Agent Work
 
 Watch for these log patterns:

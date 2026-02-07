@@ -1,0 +1,7 @@
+{
+  "title": "Implement Widget Library UI Component with Available Widget Types",
+  "description": "Create a React component that displays the available widget library (My Tasks, Recent Activity, Priority Breakdown, Search, System Health) with appropriate icons, descriptions, and add buttons. The component should handle empty states gracefully and provide clear visual feedback for available actions. Acceptance criteria: Widget library displays all 5 required widget types with appropriate visual representation, each widget has descriptive text and an 'Add to Dashboard' button, empty state provides guidance for new users, component follows existing design patterns and uses proper TypeScript types, component is fully responsive and works on mobile/desktop.",
+  "priority": "high",
+  "type": "implementation",
+  "createdBy": "refinement"
+}

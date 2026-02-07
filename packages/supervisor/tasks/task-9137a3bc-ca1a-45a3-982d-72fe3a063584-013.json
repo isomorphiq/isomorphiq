@@ -1,0 +1,8 @@
+{
+  "id": "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-013",
+  "title": "Implement Widget Controls and Empty States",
+  "type": "implementation",
+  "priority": "high",
+  "createdBy": "refinement", 
+  "description": "Create widget hover/focus controls (remove, edit, resize) and dashboard empty states to guide users.\n\nAcceptance Criteria:\n1. Remove button appears on widget hover/focus with clear visual feedback\n2. Edit button for widget configuration (if applicable)\n3. Resize handles for widget size adjustment (small, medium, large)\n4. Empty state message when dashboard has no widgets\n5. Call-to-action button in empty state to open widget library\n6. Accessible controls with keyboard support\n7. Smooth transitions for control visibility"
+}

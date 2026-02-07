@@ -5,7 +5,7 @@
  * Tests WebSocket and real-time functionality without HTTP endpoints
  */
 
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 
 interface TestResult {
 	name: string;

@@ -1,7 +1,9 @@
+// FILE_CONTEXT: "context-73e7186c-325b-4869-b585-aede3e8807be"
+
 // TODO: This file is too complex (669 lines) and should be refactored into several modules.
 // Current concerns mixed: ACP connection establishment, runtime resolution, configuration loading,
 // process spawning, session management, capability handling.
-// 
+//
 // Proposed structure:
 // - acp/connection/index.ts - Main connection manager
 // - acp/connection/runtime-resolver.ts - ACP runtime detection and resolution
@@ -14,12 +16,14 @@
 import * as acp from "@agentclientprotocol/sdk";
 import { ClientSideConnection } from "./client-connection.ts";
 import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { TaskClient } from "./acp-client.ts";
 import {
     ConfigManager,
     resolveEnvironmentValue,
     type AcpRuntime,
+    type CodexConfigOverride,
     type ProcessResult,
     ProcessSpawner,
 } from "@isomorphiq/core";
@@ -49,6 +53,8 @@ type McpServerEntry = {
     headers?: Record<string, string> | Array<{ name: string; value: string }>;
     tools?: string[];
 };
+
+type McpPreference = "command" | "url";
 
 const resolveAcpRuntime = (override?: string): AcpRuntime => {
     const normalizedOverride = (override ?? "").trim().toLowerCase();
@@ -206,12 +212,83 @@ const withTimeout = async <T>(
 const isRecord = (value: unknown): value is Record<string, unknown> =>
     value !== null && typeof value === "object" && !Array.isArray(value);
 
-const resolveWorkspaceRoot = (): string => {
-    const initCwd = process.env.INIT_CWD;
-    if (initCwd && initCwd.trim().length > 0) {
-        return path.resolve(initCwd);
+const toRecordEntries = (entries: McpServerEntry[]): Record<string, unknown>[] =>
+    entries.map((entry) => ({
+        name: entry.name,
+        command: entry.command,
+        args: entry.args,
+        env: entry.env,
+        type: entry.type,
+        url: entry.url,
+        headers: entry.headers,
+        tools: entry.tools,
+    }));
+
+const isCommandMcpServerConfig = (
+    server: McpServerConfig,
+): server is McpServerConfig & { command: string; args: string[]; env?: Array<{ name: string; value: string }> } => {
+    if (!("command" in server)) {
+        return false;
     }
-    return process.cwd();
+    return typeof server.command === "string" && server.command.trim().length > 0;
+};
+
+const isHttpMcpServerConfig = (
+    server: McpServerConfig,
+): server is McpServerConfig & {
+    url: string;
+    headers?: Array<{ name: string; value: string }>;
+    env?: Array<{ name: string; value: string }>;
+} => {
+    if (!("url" in server)) {
+        return false;
+    }
+    return typeof server.url === "string" && server.url.trim().length > 0;
+};
+
+const hasWorkspaceMarkers = (candidateDir: string): boolean => {
+    const hasMcpConfig = existsSync(
+        path.join(candidateDir, "packages", "mcp", "config", "mcp-server-config.json"),
+    );
+    if (hasMcpConfig) {
+        return true;
+    }
+    const hasPrompts = existsSync(path.join(candidateDir, "prompts"));
+    const hasPackageJson = existsSync(path.join(candidateDir, "package.json"));
+    return hasPrompts && hasPackageJson;
+};
+
+const findWorkspaceRoot = (startDir: string): string => {
+    let currentDir = path.resolve(startDir);
+    while (true) {
+        if (hasWorkspaceMarkers(currentDir)) {
+            return currentDir;
+        }
+        const parentDir = path.dirname(currentDir);
+        if (parentDir === currentDir) {
+            return path.resolve(startDir);
+        }
+        currentDir = parentDir;
+    }
+};
+
+const resolveWorkspaceRoot = (): string => {
+    const candidates = [
+        process.env.INIT_CWD,
+        process.cwd(),
+    ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+    const resolvedCandidates = candidates.map((value) => path.resolve(value.trim()));
+    const uniqueCandidates = resolvedCandidates.reduce<string[]>(
+        (acc, candidate) => (acc.includes(candidate) ? acc : [...acc, candidate]),
+        [],
+    );
+    for (const candidate of uniqueCandidates) {
+        const resolved = findWorkspaceRoot(candidate);
+        if (hasWorkspaceMarkers(resolved)) {
+            return resolved;
+        }
+    }
+    return uniqueCandidates[0] ?? process.cwd();
 };
 
 const readJsonFile = async (filePath: string): Promise<Record<string, unknown> | null> => {
@@ -345,16 +422,41 @@ const appendEnvEntry = (
     return [...envEntries, { name, value }];
 };
 
+const resolveMcpCommandArgs = (
+    args: string[],
+    workspaceRoot: string,
+): string[] =>
+    args.map((arg) => {
+        if (arg.length === 0 || arg.startsWith("-") || path.isAbsolute(arg)) {
+            return arg;
+        }
+        let currentDir = workspaceRoot;
+        while (true) {
+            const candidate = path.resolve(currentDir, arg);
+            if (existsSync(candidate)) {
+                return candidate;
+            }
+            const parent = path.dirname(currentDir);
+            if (parent === currentDir) {
+                break;
+            }
+            currentDir = parent;
+        }
+        return arg;
+    });
+
 const parseCommandMcpServerConfig = (
     value: Record<string, unknown>,
     environment?: string,
+    workspaceRoot?: string,
 ): { server: McpServerConfig; tools: string[] } | null => {
     const name = typeof value.name === "string" ? value.name : null;
     const command = typeof value.command === "string" ? value.command : null;
     if (!name || !command) {
         return null;
     }
-    const args = coerceStringArray(value.args) ?? [];
+    const argsRaw = coerceStringArray(value.args) ?? [];
+    const args = workspaceRoot ? resolveMcpCommandArgs(argsRaw, workspaceRoot) : argsRaw;
     const baseEnv = coerceEnvArray(value.env);
     const env = environment
         ? appendEnvEntry(baseEnv, "ISOMORPHIQ_ENVIRONMENT", environment)
@@ -379,7 +481,8 @@ const parseHttpMcpServerConfig = (
     if (!name) {
         return null;
     }
-    const type = "sse";
+    const typeRaw = typeof value.type === "string" ? value.type.trim().toLowerCase() : "";
+    const type = typeRaw === "http" ? "http" : "sse";
     const url =
         typeof value.url === "string" && value.url.trim().length > 0
             ? value.url.trim()
@@ -403,30 +506,60 @@ const parseHttpMcpServerConfig = (
     };
 };
 
+const resolveMcpPreference = (runtime: AcpRuntime): McpPreference => {
+    const runtimeSpecificPreference =
+        runtime === "codex"
+            ? process.env.CODEX_ACP_MCP_PREFERENCE
+            : process.env.OPENCODE_ACP_MCP_PREFERENCE;
+    const rawPreference =
+        runtimeSpecificPreference
+        ?? process.env.ACP_MCP_PREFERENCE
+        ?? process.env.ISOMORPHIQ_ACP_MCP_PREFERENCE
+        ?? "";
+    const normalized = rawPreference.trim().toLowerCase();
+    if (runtime === "codex") {
+        if (normalized === "url" || normalized === "http" || normalized === "sse") {
+            console.warn(
+                "[ACP] ⚠️ Ignoring URL MCP preference for codex; enforcing stdio MCP (command)",
+            );
+        }
+        return "command";
+    }
+    if (normalized === "url" || normalized === "http" || normalized === "sse") {
+        return "url";
+    }
+    if (normalized === "command" || normalized === "stdio") {
+        return "command";
+    }
+    // OpenCode sessions are more reliable against the shared MCP HTTP endpoint when both
+    // command and URL transports are defined.
+    return runtime === "opencode" ? "url" : "command";
+};
+
 const selectMcpEntries = (
     entries: Record<string, unknown>[],
     runtime: AcpRuntime,
     environmentContext: { headerName: string; value: string },
+    workspaceRoot: string,
 ): { servers: McpServerConfig[]; tools: string[] } => {
     const hasCommand = (entry: Record<string, unknown>): boolean =>
         typeof entry.command === "string" && entry.command.trim().length > 0;
     const hasUrl = (entry: Record<string, unknown>): boolean =>
         typeof entry.url === "string" && entry.url.trim().length > 0;
+    const mcpPreference = resolveMcpPreference(runtime);
+    console.log(`[ACP] 🧭 MCP preference for ${runtime}: ${mcpPreference}`);
     const parsed = entries
         .map((entry) => {
-            if (runtime === "opencode") {
-                if (hasCommand(entry)) {
-                    return parseCommandMcpServerConfig(entry, environmentContext.value);
-                }
-                return parseHttpMcpServerConfig(entry, environmentContext);
+            const commandConfig = hasCommand(entry)
+                ? parseCommandMcpServerConfig(entry, environmentContext.value, workspaceRoot)
+                : null;
+            const urlConfig = hasUrl(entry)
+                ? parseHttpMcpServerConfig(entry, environmentContext)
+                : null;
+            if (commandConfig && urlConfig) {
+                return mcpPreference === "url" ? urlConfig : commandConfig;
             }
-            if (hasCommand(entry)) {
-                return parseCommandMcpServerConfig(entry, environmentContext.value);
-            }
-            if (hasUrl(entry)) {
-                return parseHttpMcpServerConfig(entry, environmentContext);
-            }
-            return null;
+            return commandConfig ?? urlConfig ?? null;
         })
         .filter((entry): entry is { server: McpServerConfig; tools: string[] } => !!entry);
     return {
@@ -441,10 +574,11 @@ const resolveMcpServers = async (
     overrides?: McpServerEntry[],
 ): Promise<{ servers: McpServerConfig[]; tools: string[] }> => {
     const environmentContext = resolveEnvironmentContext(environment);
+    const workspaceRoot = resolveWorkspaceRoot();
     if (overrides && overrides.length > 0) {
-        const entries = overrides.filter((entry): entry is Record<string, unknown> => isRecord(entry));
+        const entries = toRecordEntries(overrides);
         if (entries.length > 0) {
-            return selectMcpEntries(entries, runtime, environmentContext);
+            return selectMcpEntries(entries, runtime, environmentContext, workspaceRoot);
         }
     }
     const fromEnv = process.env.ACP_MCP_SERVERS ?? process.env.OPENCODE_MCP_SERVERS ?? "";
@@ -452,17 +586,16 @@ const resolveMcpServers = async (
         try {
             const parsed = JSON.parse(fromEnv);
             if (Array.isArray(parsed)) {
-                return selectMcpEntries(parsed.filter(isRecord), runtime, environmentContext);
+                return selectMcpEntries(parsed.filter(isRecord), runtime, environmentContext, workspaceRoot);
             }
             if (isRecord(parsed)) {
-                return selectMcpEntries([parsed], runtime, environmentContext);
+                return selectMcpEntries([parsed], runtime, environmentContext, workspaceRoot);
             }
         } catch (error) {
             void error;
         }
     }
 
-    const workspaceRoot = resolveWorkspaceRoot();
     const defaultPath = path.join(workspaceRoot, "packages", "mcp", "config", "mcp-server-config.json");
     const config = await readJsonFile(defaultPath);
     if (!config) {
@@ -475,10 +608,11 @@ const resolveMcpServers = async (
                     ],
                     runtime,
                     environmentContext,
+                    workspaceRoot,
                 )
             : { servers: [], tools: [] };
     }
-    const selected = selectMcpEntries([config], runtime, environmentContext);
+    const selected = selectMcpEntries([config], runtime, environmentContext, workspaceRoot);
     if (selected.servers.length > 0) {
         return selected;
     }
@@ -492,14 +626,169 @@ const resolveMcpServers = async (
             ],
             runtime,
             environmentContext,
+            workspaceRoot,
         );
     }
     return { servers: [], tools: [] };
 };
 
+const normalizeCodexSandboxMode = (value: string): string => {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+        return "";
+    }
+    const normalized = trimmed.toLowerCase();
+    if (normalized === "workspace") {
+        return "workspace-write";
+    }
+    return trimmed;
+};
+
+const escapeTomlStringLiteral = (value: string): string =>
+    value
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, "\\\"");
+
+const toTomlStringLiteral = (value: string): string =>
+    `"${escapeTomlStringLiteral(value)}"`;
+
+const toTomlStringArrayLiteral = (values: string[]): string =>
+    `[${values.map((value) => toTomlStringLiteral(value)).join(", ")}]`;
+
+const encodeTomlKeySegment = (value: string): string => {
+    const trimmed = value.trim();
+    if (/^[A-Za-z0-9_-]+$/.test(trimmed)) {
+        return trimmed;
+    }
+    return `"${escapeTomlStringLiteral(trimmed)}"`;
+};
+
+const joinTomlDottedPath = (...segments: string[]): string =>
+    segments.map((segment) => encodeTomlKeySegment(segment)).join(".");
+
+const upsertConfigOverride = (
+    entries: CodexConfigOverride[],
+    next: CodexConfigOverride,
+): CodexConfigOverride[] => [
+    ...entries.filter((entry) => entry.key !== next.key),
+    next,
+];
+
+const buildCodexCliConfigOverrides = (input: {
+    runtime: AcpRuntime;
+    modelName: string;
+    sandboxMode: string;
+    approvalPolicy: string;
+    mcpServers: McpServerConfig[];
+}): CodexConfigOverride[] => {
+    if (input.runtime !== "codex") {
+        return [];
+    }
+    const baseOverrides = [
+        ...(input.modelName.length > 0
+            ? [{ key: "model", value: toTomlStringLiteral(input.modelName) }]
+            : []),
+        ...(input.sandboxMode.length > 0
+            ? [{ key: "sandbox_mode", value: toTomlStringLiteral(input.sandboxMode) }]
+            : []),
+        ...(input.approvalPolicy.length > 0
+            ? [{ key: "approval_policy", value: toTomlStringLiteral(input.approvalPolicy) }]
+            : []),
+    ];
+    const mcpOverrides = input.mcpServers.flatMap((server) => {
+        const serverName = server.name.trim();
+        if (serverName.length === 0) {
+            return [];
+        }
+        const serverPathSegments = ["mcp_servers", serverName];
+        if (isCommandMcpServerConfig(server)) {
+            const args = Array.isArray(server.args)
+                ? server.args.filter((entry) => entry.length > 0)
+                : [];
+            const envOverrides = (server.env ?? [])
+                .map((entry) => ({ name: entry.name.trim(), value: entry.value }))
+                .filter((entry) => entry.name.length > 0)
+                .map((entry) => ({
+                    key: joinTomlDottedPath(...serverPathSegments, "env", entry.name),
+                    value: toTomlStringLiteral(entry.value),
+                }));
+            return [
+                {
+                    key: joinTomlDottedPath(...serverPathSegments, "command"),
+                    value: toTomlStringLiteral(server.command),
+                },
+                ...(args.length > 0
+                    ? [{
+                            key: joinTomlDottedPath(...serverPathSegments, "args"),
+                            value: toTomlStringArrayLiteral(args),
+                        }]
+                    : []),
+                ...envOverrides,
+            ];
+        }
+        if (!isHttpMcpServerConfig(server)) {
+            return [];
+        }
+        const headerOverrides = (server.headers ?? [])
+            .map((entry) => ({ name: entry.name.trim(), value: entry.value }))
+            .filter((entry) => entry.name.length > 0)
+            .map((entry) => ({
+                key: joinTomlDottedPath(...serverPathSegments, "http_headers", entry.name),
+                value: toTomlStringLiteral(entry.value),
+            }));
+        const envOverrides = (server.env ?? [])
+            .map((entry) => ({ name: entry.name.trim(), value: entry.value }))
+            .filter((entry) => entry.name.length > 0)
+            .map((entry) => ({
+                key: joinTomlDottedPath(...serverPathSegments, "env", entry.name),
+                value: toTomlStringLiteral(entry.value),
+            }));
+        return [
+            {
+                key: joinTomlDottedPath(...serverPathSegments, "url"),
+                value: toTomlStringLiteral(server.url),
+            },
+            ...headerOverrides,
+            ...envOverrides,
+        ];
+    });
+    return [...baseOverrides, ...mcpOverrides].reduce<CodexConfigOverride[]>(
+        (entries, next) => upsertConfigOverride(entries, next),
+        [],
+    );
+};
+
 const appendOutput = (current: string, chunk: Buffer, limit: number): string => {
     const next = `${current}${chunk.toString()}`;
     return next.length > limit ? next.slice(next.length - limit) : next;
+};
+
+const deriveMcpToolAliases = (
+    servers: McpServerConfig[],
+    baseTools: string[],
+): string[] => {
+    const serverNames = servers
+        .map((server) => {
+            const name = (server as { name?: unknown }).name;
+            return typeof name === "string" && name.trim().length > 0 ? name.trim() : null;
+        })
+        .filter((name): name is string => name !== null);
+    const normalizedBase = baseTools
+        .filter((tool) => typeof tool === "string" && tool.trim().length > 0)
+        .map((tool) => tool.trim());
+    const aliases = serverNames.flatMap((serverName) =>
+        normalizedBase.flatMap((tool) => [
+            `functions.mcp__${serverName}__${tool}`,
+            `functions.mcp__${serverName.replace(/-/g, "_")}__${tool}`,
+            `mcp__${serverName}__${tool}`,
+            `${serverName}_${tool}`,
+            `${serverName.replace(/-/g, "_")}_${tool}`,
+        ]),
+    );
+    return [...normalizedBase, ...aliases].reduce<string[]>(
+        (acc, name) => (acc.includes(name) ? acc : [...acc, name]),
+        [],
+    );
 };
 
 const safeStringify = (value: unknown): string | null => {
@@ -610,6 +899,23 @@ export async function createConnection(
             modeOverride.length > 0
                 ? modeOverride
                 : (process.env.CODEX_ACP_MODE ?? process.env.CODEX_MODE ?? "");
+        const mcpConfig = await resolveMcpServers(runtime, options?.environment, options?.mcpServers);
+        const resolvedSandboxMode = normalizeCodexSandboxMode(
+            sandboxOverride.length > 0
+                ? sandboxOverride
+                : (process.env.CODEX_ACP_SANDBOX ?? "workspace-write"),
+        );
+        const resolvedApprovalPolicy =
+            approvalPolicyOverride.length > 0
+                ? approvalPolicyOverride
+                : (process.env.CODEX_ACP_APPROVAL_POLICY ?? "never").trim();
+        const codexConfigOverrides = buildCodexCliConfigOverrides({
+            runtime,
+            modelName: resolvedModelOverride,
+            sandboxMode: resolvedSandboxMode,
+            approvalPolicy: resolvedApprovalPolicy,
+            mcpServers: mcpConfig.servers,
+        });
         const envOverrides = {
             ...(resolvedModelOverride.length > 0
                 ? {
@@ -640,8 +946,18 @@ export async function createConnection(
                 : {}),
         };
         const envOverridesValue = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
+        if (runtime === "codex") {
+            const keys = codexConfigOverrides.map((entry) => entry.key).join(", ");
+            console.log(
+                `[ACP] ⚙️ Codex config overrides (${codexConfigOverrides.length}): ${keys || "none"}`,
+            );
+        }
 		console.log(`[ACP] 🚀 Spawning ${runtime} process...`);
-		const processResult = ProcessSpawner.spawnAcpServer(runtime, envOverridesValue);
+		const processResult = ProcessSpawner.spawnAcpServer(
+            runtime,
+            envOverridesValue,
+            codexConfigOverrides.length > 0 ? codexConfigOverrides : undefined,
+        );
 
         processResult.process.on("exit", (code, signal) => {
             exitCode = code ?? null;
@@ -770,8 +1086,22 @@ export async function createConnection(
 		// Create session
 		console.log("[ACP] 🆔 Creating new session...");
 		console.log("[ACP] 📁 Working directory:", workspaceRoot);
-        const mcpConfig = await resolveMcpServers(runtime, options?.environment, options?.mcpServers);
-        taskClient.mcpTools = mcpConfig.tools.length > 0 ? mcpConfig.tools : null;
+        const mcpServersSummary = mcpConfig.servers
+            .map((server) => {
+                if ("command" in server) {
+                    return `${server.name}:command`;
+                }
+                const serverType = "type" in server ? server.type : "sse";
+                return `${server.name}:${serverType}`;
+            })
+            .join(", ");
+        console.log(
+            `[ACP] 🧰 MCP servers configured (${mcpConfig.servers.length}): ${
+                mcpServersSummary || "none"
+            }`,
+        );
+        const mcpToolHints = deriveMcpToolAliases(mcpConfig.servers, mcpConfig.tools);
+        taskClient.mcpTools = mcpToolHints.length > 0 ? mcpToolHints : null;
         const sessionResult = await connection.newSession({
 			cwd: workspaceRoot,
 			mcpServers: mcpConfig.servers,

@@ -54,3 +54,19 @@ Use [PROTOCOL/STANDARD] for communication and ensure backward compatibility.
 
 ## Module Resolution Note
 - The runtime is Node ESM with no transpilation. Always include the `.ts` extension on local TypeScript imports, e.g., `import { foo } from "./foo.ts"`. Missing extensions will break the app.
+
+## MCP Tool Usage (Implementation)
+- Tool-name resolution SOP:
+  - Read the ACP tool list first.
+  - Use exact visible names; in Codex ACP this is usually `functions.mcp__task-manager__<tool>`.
+  - Do not call bare names like `list_tasks` unless that exact bare name is visible.
+- Read phase (once):
+  - `functions.mcp__task-manager__list_tasks` and `functions.mcp__task-manager__get_task` to gather ids and state.
+- Write phase:
+  - `functions.mcp__task-manager__update_task_status`, `functions.mcp__task-manager__update_task`, `functions.mcp__task-manager__update_context`, `functions.mcp__task-manager__create_task` as needed.
+- File-context phase:
+  - Call `functions.mcp__task-manager__get_file_context` when a file is materially relevant.
+  - Include `operation`, `taskId`, `reason`, `relatedFiles`, and `todos` when available.
+  - Expect `headerUpdated: true|false` and `// FILE_CONTEXT: "context-..."` linkage.
+- Verify phase:
+  - Re-check with `get_task`/`list_tasks` after major writes when confirmation is required.

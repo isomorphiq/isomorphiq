@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-971b088f-bf79-49f5-b3eb-0c020f7647d1"
+
 import { z } from "zod";
 
 export const DashboardWidgetSizeSchema = z.object({

@@ -15,6 +15,8 @@ import {
     UpdateTaskInputSchema,
 } from "./types.ts";
 
+export { TaskPrioritySchema };
+
 export const TaskEntitySchema = TaskSchema;
 export const TaskEntityStruct = struct.name("TaskEntity")<
     z.output<typeof TaskEntitySchema>,

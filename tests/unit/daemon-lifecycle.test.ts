@@ -7,11 +7,11 @@ describe("Daemon Enhanced Lifecycle Management", () => {
     before(async () => {
         // Import the enhanced daemon class
         try {
-            const module = await import("@isomorphiq/daemon");
+            const module = await import("@isomorphiq/worker");
             EnhancedDaemon = module.EnhancedDaemon;
         } catch (error) {
             // Fallback to direct file import if package import fails
-            const daemonModule = await import("../../packages/daemon/src/daemon-enhanced.ts");
+            const daemonModule = await import("../../packages/worker/src/daemon-enhanced.ts");
             EnhancedDaemon = daemonModule.EnhancedDaemon;
         }
     });

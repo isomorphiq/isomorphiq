@@ -1,0 +1,9 @@
+{
+  "id": "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-003",
+  "title": "Implement Widget Drag-and-Drop Functionality",
+  "description": "Create drag-and-drop functionality for dashboard widgets with visual feedback, ghost previews, and drop zones. Build on existing layout computation and state management to enable widget repositioning through user interactions. Implement proper event handling and visual cues during drag operations.\n\nAcceptance Criteria:\n- Implements HTML5 drag-and-drop API or equivalent library integration\n- Provides visual feedback during drag (ghost widget, highlight drop zones)\n- Updates widget positions using existing layout computation system\n- Maintains collision detection and prevents invalid placements\n- Supports both mouse and touch interactions for mobile/desktop\n- Provides smooth animations and transitions during drag operations\n- Integrates with existing dashboard-service.ts state management\n- Includes comprehensive test coverage for drag scenarios\n- Follows functional programming patterns with immutable state updates",
+  "priority": "high",
+  "type": "implementation",
+  "createdBy": "refinement", 
+  "dependencies": ["task-consolidate-models-widgets.json", "task-responsive-layout-system.json"]
+}

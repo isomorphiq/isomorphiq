@@ -1,6 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import { strict as assert } from "node:assert";
-import { PriorityStatusDeadlockDetector, type PriorityStatusDependency } from "../../packages/daemon/src/services/priority-status-deadlock-detector.ts";
+import { PriorityStatusDeadlockDetector, type PriorityStatusDependency } from "../../packages/worker/src/services/priority-status-deadlock-detector.ts";
 import { priorityStatusDependencyManager } from "../../packages/tasks/src/priority-status-dependency-manager.ts";
 
 describe("Enhanced Priority-Status Dependency Coverage", () => {

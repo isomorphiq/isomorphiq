@@ -1,5 +1,5 @@
-import type { ACPProfile } from "@isomorphiq/user-profile";
-import { ProfileManager } from "@isomorphiq/user-profile";
+import type { ACPProfile } from "@isomorphiq/profiles";
+import { ProfileManager } from "@isomorphiq/profiles";
 import { PluginManager } from "./plugin-manager.ts";
 import { PluginSecurityManager } from "./plugin-sandbox.ts";
 import type { PluginConfig, PluginHealth, ProfilePlugin } from "./plugin-system.ts";

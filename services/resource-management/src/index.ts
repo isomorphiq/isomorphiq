@@ -6,7 +6,7 @@ import type {
     Workload,
 } from "@isomorphiq/scheduling";
 import type { Task } from "@isomorphiq/tasks";
-import type { User } from "@isomorphiq/auth";
+import type { User, UserRole } from "@isomorphiq/auth";
 import { getUserManager } from "@isomorphiq/auth";
 import type { TaskService } from "@isomorphiq/tasks";
 
@@ -224,6 +224,9 @@ export class ResourceManagementService {
 		newUtilization: Record<string, number>;
 	}> {
 		const workloads = await this.getCurrentWorkloads();
+		const userManager = getUserManager();
+		const users = await userManager.getAllUsers();
+		const userById = new Map(users.map((user) => [user.id, user]));
 		const overloadedUsers = workloads.filter(
 			(w) => w.utilizationRate > this.balancingConfig.maxUtilization,
 		);
@@ -252,16 +255,24 @@ export class ResourceManagementService {
 				return priorityOrder[a.priority] - priorityOrder[b.priority];
 			});
 
-			for (const task of reassignableTasks) {
-				if (overloaded.utilizationRate <= this.balancingConfig.maxUtilization) break;
+				for (const task of reassignableTasks) {
+					if (overloaded.utilizationRate <= this.balancingConfig.maxUtilization) break;
 
-				// Find best underutilized user for this task
-				const requirements = await this.inferTaskRequirements(task);
-				const candidates = underutilizedUsers.filter(
-					(u) =>
-						!requirements.requiredSkills.length ||
-						this.hasRequiredSkills(u.userId, requirements.requiredSkills),
-				);
+					// Find best underutilized user for this task
+					const requirements = await this.inferTaskRequirements(task);
+					const candidates = underutilizedUsers
+						.map((workload) => ({
+							workload,
+							user: userById.get(workload.userId),
+						}))
+						.filter(
+							(result) =>
+								result.user
+								&&
+								(!requirements.requiredSkills.length
+									|| this.hasRequiredSkills(result.user, requirements.requiredSkills)),
+						)
+						.map((result) => result.workload);
 
 				if (candidates.length === 0) continue;
 
@@ -501,21 +512,46 @@ export class ResourceManagementService {
 	}
 
 	private async getCandidateUsers(
-		_requirements: TaskRequirements,
+		requirements: TaskRequirements,
 		constraints?: ResourceAllocationRequest["constraints"],
 	): Promise<User[]> {
-		void _requirements;
 		const userManager = getUserManager();
 		const allUsers = await userManager.getAllUsers();
 		const activeUsers = allUsers.filter((user) => user.isActive);
+		const workloads = await this.getCurrentWorkloads();
+		const workloadByUserId = workloads.reduce<Record<string, Workload>>((acc, workload) => {
+			acc[workload.userId] = workload;
+			return acc;
+		}, {});
+
+		const maxUtilization =
+			constraints?.maxUtilization ?? this.balancingConfig.maxUtilization;
+
+		const requirementRoles = requirements.constraints?.requiredRoles ?? [];
 
 		return activeUsers.filter((user) => {
-			// Apply exclusions
 			if (constraints?.excludedUsers?.includes(user.id)) return false;
 
-			// TODO: Check skill matching
-			// TODO: Check availability
-			// TODO: Check workload capacity
+			if (
+				constraints?.preferredUsers &&
+				constraints.preferredUsers.length > 0 &&
+				!constraints.preferredUsers.includes(user.id)
+			) {
+				return false;
+			}
+
+			if (requirementRoles.length > 0 && !requirementRoles.includes(user.role)) {
+				return false;
+			}
+
+			if (!this.hasRequiredSkills(user, requirements.requiredSkills)) {
+				return false;
+			}
+
+			const workload = workloadByUserId[user.id];
+			if (workload && workload.utilizationRate >= maxUtilization) {
+				return false;
+			}
 
 			return true;
 		});
@@ -613,21 +649,102 @@ export class ResourceManagementService {
 	}
 
 	private async calculateAssignmentConfidence(
-		_user: User,
-		_requirements: TaskRequirements,
-		_strategy: string,
+		user: User,
+		requirements: TaskRequirements,
+		strategy: string,
 	): Promise<number> {
-		void _user;
-		void _requirements;
-		void _strategy;
-		const confidence = 50; // Base confidence
+		const workloads = await this.getCurrentWorkloads();
+		const userWorkload = workloads.find((w) => w.userId === user.id);
 
-		// TODO: Implement skill matching score
-		// TODO: Implement availability score
-		// TODO: Implement workload score
-		// TODO: Apply strategy-specific weights
+		// 1. Calculate skill matching score (0-100)
+		const skillMatchScore = this.calculateSkillMatchScore(user, requirements.requiredSkills);
+
+		// 2. Calculate availability score (0-100)
+		const availabilityScore = this.calculateAvailabilityScore(userWorkload);
+
+		// 3. Calculate workload score (0-100)
+		const workloadScore = this.calculateWorkloadScore(userWorkload, requirements.estimatedHours);
+
+		// 4. Apply strategy-specific weights
+		const weights = this.getStrategyWeights(strategy);
+
+		// Calculate weighted confidence
+		const confidence =
+			skillMatchScore * weights.skill +
+			availabilityScore * weights.availability +
+			workloadScore * weights.workload;
 
 		return Math.min(100, Math.max(0, confidence));
+	}
+
+	private calculateSkillMatchScore(user: User, requiredSkills: Skill[]): number {
+		if (!requiredSkills.length) {
+			return 100; // No skills required = perfect match
+		}
+
+		const matchingSkills = requiredSkills.filter((skill) =>
+			this.roleSupportsSkill(user.role, skill),
+		);
+
+		// Calculate match percentage based on role category support
+		return (matchingSkills.length / requiredSkills.length) * 100;
+	}
+
+	private calculateAvailabilityScore(workload?: Workload): number {
+		if (!workload) {
+			return 100; // No workload data = assume fully available
+		}
+
+		// Score decreases as utilization increases
+		if (workload.utilizationRate < this.balancingConfig.minUtilization) {
+			return 90 + (10 * (1 - workload.utilizationRate / this.balancingConfig.minUtilization));
+		}
+
+		if (workload.utilizationRate <= this.balancingConfig.maxUtilization) {
+			return 70 + (20 * (1 - (workload.utilizationRate - this.balancingConfig.minUtilization) /
+				(this.balancingConfig.maxUtilization - this.balancingConfig.minUtilization)));
+		}
+
+		return Math.max(0, 70 - (workload.utilizationRate - this.balancingConfig.maxUtilization));
+	}
+
+	private calculateWorkloadScore(workload: Workload | undefined, taskHours: number): number {
+		if (!workload) {
+			return 80; // Neutral score when no workload data
+		}
+
+		const projectedUtilization =
+			((workload.estimatedHours + taskHours) / workload.availableHours) * 100;
+
+		// Score based on how well this task balances the workload
+		if (projectedUtilization < this.balancingConfig.minUtilization) {
+			return 60 + (40 * (projectedUtilization / this.balancingConfig.minUtilization));
+		}
+
+		if (projectedUtilization <= this.balancingConfig.maxUtilization) {
+			return 100;
+		}
+
+		return Math.max(0, 100 - (projectedUtilization - this.balancingConfig.maxUtilization) * 2);
+	}
+
+	private getStrategyWeights(strategy: string): {
+		skill: number;
+		availability: number;
+		workload: number;
+	} {
+		switch (strategy) {
+			case "optimal":
+				return { skill: 0.5, availability: 0.25, workload: 0.25 };
+			case "balanced":
+				return { skill: 0.3, availability: 0.2, workload: 0.5 };
+			case "fastest":
+				return { skill: 0.3, availability: 0.6, workload: 0.1 };
+			case "cost_effective":
+				return { skill: 0.4, availability: 0.4, workload: 0.2 };
+			default:
+				return { skill: 0.4, availability: 0.3, workload: 0.3 };
+		}
 	}
 
 	private async generateAssignmentReasons(
@@ -792,11 +909,21 @@ export class ResourceManagementService {
         };
 	}
 
-	private hasRequiredSkills(_userId: string, _requiredSkills: Skill[]): boolean {
-		void _userId;
-		void _requiredSkills;
-		// TODO: Implement skill checking
-		return true;
+	private hasRequiredSkills(user: User, requiredSkills: Skill[]): boolean {
+		if (!requiredSkills.length) {
+			return true;
+		}
+		return requiredSkills.every((skill) => this.roleSupportsSkill(user.role, skill));
+	}
+
+	private roleSupportsSkill(role: UserRole, skill: Skill): boolean {
+		const categoryRoles: Record<Skill["category"], UserRole[]> = {
+			technical: ["admin", "manager", "developer"],
+			domain: ["admin", "manager"],
+			soft: ["admin", "manager", "viewer"],
+			tool: ["admin", "developer"],
+		};
+		return categoryRoles[skill.category]?.includes(role) ?? false;
 	}
 
 	private async findBestCandidate(

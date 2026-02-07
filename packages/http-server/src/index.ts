@@ -18,9 +18,9 @@ import { setupWorkflowRoutes } from "@isomorphiq/workflow";
 import { createSecurityRoutes } from "@isomorphiq/auth";
 import { requestLogger, errorHandler } from "@isomorphiq/api-prelude";
 import { InMemoryTaskRepository } from "@isomorphiq/tasks";
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 import type { WebSocketManager } from "@isomorphiq/realtime";
-import { ProfileManager } from "@isomorphiq/user-profile";
+import { ProfileManager } from "@isomorphiq/profiles";
 
 export type { AppRouter } from "@isomorphiq/http-api";
 

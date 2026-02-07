@@ -21,5 +21,8 @@
         "@isomorphiq/core": "workspace:*",
         "@isomorphiq/tasks": "workspace:*",
         "@isomorphiq/time-tracking": "workspace:*"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
     }
 }

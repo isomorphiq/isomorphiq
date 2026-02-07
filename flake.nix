@@ -113,7 +113,7 @@
                     - name: daemon
                       image: ghcr.io/isomorphiq/runtime:latest
                       imagePullPolicy: IfNotPresent
-                      command: [ "node", "packages/daemon/dist/index.js" ]
+                      command: [ "node", "packages/worker/dist/index.js" ]
                       envFrom:
                         - configMapRef:
                             name: isomorphiq-env

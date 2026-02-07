@@ -124,7 +124,7 @@ The **Web Dashboard for Task Management** has been **successfully implemented** 
 ### Starting the Dashboard
 ```bash
 # Start daemon (includes dashboard)
-yarn run daemon
+yarn run worker
 
 # Dashboard available at:
 # http://localhost:3005

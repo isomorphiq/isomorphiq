@@ -14,7 +14,7 @@ This project now has a complete TypeScript build and testing infrastructure that
 - `yarn run test:dev` - Alternative test runner for development
 
 ### Production Scripts
-- `yarn run daemon:prod` - Runs the compiled daemon from `dist/daemon.js`
+- `yarn run worker:prod` - Runs the compiled daemon from `dist/daemon.js`
 - `yarn run mcp-server:prod` - Runs the compiled MCP server from `dist/mcp-server.js`
 
 ### Utility Scripts
@@ -79,10 +79,10 @@ The build system ensures:
 
 ## Development Workflow
 
-1. **Development**: Use `yarn run daemon` for hot reloading
+1. **Development**: Use `yarn run worker` for hot reloading
 2. **Testing**: Use `yarn run test` for immediate feedback
 3. **Building**: Use `yarn run build` for production compilation
-4. **Production**: Use `yarn run daemon:prod` for deployment
+4. **Production**: Use `yarn run worker:prod` for deployment
 
 ## Troubleshooting
 

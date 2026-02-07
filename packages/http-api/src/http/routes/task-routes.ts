@@ -1,7 +1,7 @@
 import type express from "express";
 import { CriticalPathService } from "@isomorphiq/tasks/critical-path";
 import type { Task, TaskStatus } from "@isomorphiq/tasks";
-import type { ProductManager } from "@isomorphiq/user-profile";
+import type { ProductManager } from "@isomorphiq/profiles";
 import { getUserManager } from "@isomorphiq/auth";
 import {
     authenticateToken,

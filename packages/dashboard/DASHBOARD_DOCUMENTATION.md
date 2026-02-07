@@ -293,7 +293,7 @@ ws.onopen = function() {
 The dashboard is automatically started when running the daemon:
 
 ```bash
-yarn run daemon
+yarn run worker
 ```
 
 Dashboard will be available at: `http://localhost:3005`
@@ -367,7 +367,7 @@ The dashboard automatically establishes a WebSocket connection for live updates.
 ### Common Issues
 
 1. **Dashboard Not Loading**
-   - Check if daemon is running: `yarn run daemon`
+   - Check if daemon is running: `yarn run worker`
    - Verify port 3005 is available
    - Check browser console for errors
 
@@ -386,7 +386,7 @@ The dashboard automatically establishes a WebSocket connection for live updates.
 Enable debug logging by setting environment variable:
 
 ```bash
-DEBUG=dashboard yarn run daemon
+DEBUG=dashboard yarn run worker
 ```
 
 ## Architecture
@@ -479,7 +479,7 @@ The web dashboard for task management has been successfully implemented with the
 
 ```bash
 # Start the daemon (includes dashboard)
-yarn run daemon
+yarn run worker
 
 # Access the dashboard
 http://localhost:3005

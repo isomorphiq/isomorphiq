@@ -1,0 +1,18 @@
+{
+    // Private beta credentials.
+    // Update these values before sharing outside trusted test environments.
+    "testers": [
+        {
+            "username": "nyan",
+            "password": "nyan123456",
+            "role": "admin",
+            "email": "nyan@beta.local"
+        },
+        {
+            "username": "admin",
+            "password": "admin123456",
+            "role": "admin",
+            "email": "admin@beta.local"
+        }
+    ]
+}

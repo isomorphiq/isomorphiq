@@ -246,7 +246,7 @@ function main() {
 			console.log("Examples:");
 			console.log("  node test-websocket-client.js connect");
 			console.log("");
-			console.log("Note: Make sure the daemon is running (yarn run daemon)");
+			console.log("Note: Make sure the daemon is running (yarn run worker)");
 			break;
 	}
 }

@@ -9,6 +9,7 @@ import { SectionCard } from "./SectionCard";
 type NodeDatum = {
 	id: string;
 	group: string;
+	palette: NodePalette;
 	x?: number;
 	y?: number;
 };
@@ -32,12 +33,94 @@ type D3LinkDatum = {
 	offset?: number;
 };
 
-const groupPalette = ["#38bdf8", "#a855f7", "#f59e0b", "#22c55e", "#3b82f6", "#ec4899", "#9ca3af"];
+type NodePalette = {
+	fill: string;
+	highlight: string;
+	shadow: string;
+	stroke: string;
+	text: string;
+};
+
+const nodeColorSeeds: Record<string, string> = {
+	"themes-proposed": "#bae6fd",
+	"themes-prioritized": "#0ea5e9",
+	"initiatives-proposed": "#6ee7b7",
+	"initiatives-prioritized": "#34d399",
+	"new-feature-proposed": "#c084fc",
+	"features-prioritized": "#8b5cf6",
+	"stories-created": "#fb7185",
+	"stories-prioritized": "#f472b6",
+	"tasks-prepared": "#f59e0b",
+	"task-in-progress": "#3b82f6",
+	"lint-completed": "#facc15",
+	"typecheck-completed": "#fbbf24",
+	"unit-tests-completed": "#f59e0b",
+	"e2e-tests-completed": "#f97316",
+	"coverage-completed": "#fb7185",
+	"task-completed": "#22c55e",
+};
+
+const fallbackNodeSeed = "#94a3b8";
+
+const clampChannel = (value: number) =>
+	Math.min(255, Math.max(0, Math.round(value)));
+
+const toHex = (value: number) => value.toString(16).padStart(2, "0");
+
+const hexToRgb = (hex: string) => {
+	const normalized = hex.startsWith("#") ? hex.slice(1) : hex;
+	const expanded =
+		normalized.length === 3
+			? normalized
+					.split("")
+					.map((ch) => ch + ch)
+					.join("")
+			: normalized;
+	const r = parseInt(expanded.slice(0, 2), 16);
+	const g = parseInt(expanded.slice(2, 4), 16);
+	const b = parseInt(expanded.slice(4, 6), 16);
+	return { r, g, b };
+};
+
+const shadeHex = (hex: string, delta: number) => {
+	const { r, g, b } = hexToRgb(hex);
+	const nr = clampChannel(r + delta);
+	const ng = clampChannel(g + delta);
+	const nb = clampChannel(b + delta);
+	return `#${toHex(nr)}${toHex(ng)}${toHex(nb)}`;
+};
+
+const relativeLuminance = (hex: string) => {
+	const { r, g, b } = hexToRgb(hex);
+	const sr = r / 255;
+	const sg = g / 255;
+	const sb = b / 255;
+	return 0.2126 * sr + 0.7152 * sg + 0.0722 * sb;
+};
+
+const pickTextColor = (hex: string) =>
+	relativeLuminance(hex) > 0.62 ? "#0b1220" : "#f8fafc";
+
+const buildNodePalette = (hex: string): NodePalette => ({
+	fill: hex,
+	highlight: shadeHex(hex, 26),
+	shadow: shadeHex(hex, -22),
+	stroke: shadeHex(hex, -36),
+	text: pickTextColor(hex),
+});
 
 export function WorkflowPage() {
 	const svgRef = useRef<SVGSVGElement | null>(null);
-	const svgSelectionRef = useRef<d3.Selection<SVGSVGElement, unknown, null, undefined> | null>(null);
-	const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+	const svgSelectionRef = useRef<d3.Selection<
+		SVGSVGElement,
+		unknown,
+		null,
+		undefined
+	> | null>(null);
+	const zoomBehaviorRef = useRef<d3.ZoomBehavior<
+		SVGSVGElement,
+		unknown
+	> | null>(null);
 	const bodyOverflowRef = useRef<string>("");
 	const [isFullscreen, setIsFullscreen] = useState(false);
 	// Expose zoom helpers to buttons rendered outside the SVG.
@@ -52,17 +135,16 @@ export function WorkflowPage() {
 		if (!svgRef.current) return;
 		const width = 960;
 		const height = 540;
-		const nodeData = workflowGraph.nodes.map((node) => ({ ...node }));
+		const nodeData = workflowGraph.nodes.map((node) => {
+			const seed = nodeColorSeeds[node.id] ?? fallbackNodeSeed;
+			return { ...node, palette: buildNodePalette(seed) };
+		});
 		const linkData = workflowGraph.links.map((link) => ({ ...link }));
-		const groups = Array.from(new Set(nodeData.map((node) => node.group)));
-		const groupColor = d3
-			.scaleOrdinal<string>()
-			.domain(groups)
-			.range(groups.map((_, index) => groupPalette[index % groupPalette.length]));
 
 		// Offset only genuine bidirectional pairs so their curves don’t overlap (our “Pauli exclusion”).
 		const grouped = new Map<string, LinkDatum[]>();
-		const toNodeId = (value: string | NodeDatum) => (typeof value === "string" ? value : value.id);
+		const toNodeId = (value: string | NodeDatum) =>
+			typeof value === "string" ? value : value.id;
 		const normKey = (a: string | NodeDatum, b: string | NodeDatum) => {
 			return [toNodeId(a), toNodeId(b)].sort().join("__");
 		};
@@ -100,6 +182,28 @@ export function WorkflowPage() {
 
 		const defs = svg.append("defs");
 
+		const gradients = defs.append("g").attr("id", "node-gradients");
+		nodeData.forEach((node) => {
+			const gradient = gradients
+				.append("radialGradient")
+				.attr("id", `node-grad-${node.id}`)
+				.attr("cx", "30%")
+				.attr("cy", "30%")
+				.attr("r", "75%");
+			gradient
+				.append("stop")
+				.attr("offset", "0%")
+				.attr("stop-color", node.palette.highlight);
+			gradient
+				.append("stop")
+				.attr("offset", "70%")
+				.attr("stop-color", node.palette.fill);
+			gradient
+				.append("stop")
+				.attr("offset", "100%")
+				.attr("stop-color", node.palette.shadow);
+		});
+
 		// Soft grid to keep layout readable while zooming.
 		defs
 			.append("pattern")
@@ -129,7 +233,10 @@ export function WorkflowPage() {
 			.attr("fill", "#cbd5e1");
 
 		// Subtle depth on nodes.
-		const nodeShadow = defs.append("filter").attr("id", "node-shadow").attr("height", "140%");
+		const nodeShadow = defs
+			.append("filter")
+			.attr("id", "node-shadow")
+			.attr("height", "140%");
 		nodeShadow
 			.append("feDropShadow")
 			.attr("dx", 0)
@@ -138,7 +245,11 @@ export function WorkflowPage() {
 			.attr("flood-color", "#0f172a")
 			.attr("flood-opacity", 0.16);
 
-		svg.append("rect").attr("width", width).attr("height", height).attr("fill", "url(#grid)");
+		svg
+			.append("rect")
+			.attr("width", width)
+			.attr("height", height)
+			.attr("fill", "url(#grid)");
 
 		const zoomGroup = svg.append("g").attr("class", "zoom-layer");
 
@@ -180,7 +291,12 @@ export function WorkflowPage() {
 			.attr("marker-end", "url(#arrow)");
 
 		// Each link gets a label group (background rect + text) so text stays legible.
-		const labelGroup = zoomGroup.append("g").selectAll("g").data(linkData).enter().append("g");
+		const labelGroup = zoomGroup
+			.append("g")
+			.selectAll("g")
+			.data(linkData)
+			.enter()
+			.append("g");
 
 		labelGroup
 			.append("rect")
@@ -229,14 +345,14 @@ export function WorkflowPage() {
 		node
 			.append("circle")
 			.attr("r", 46)
-			.attr("fill", (d) => groupColor(d.group) ?? "#64748b")
-			.attr("stroke", "#0b1220")
+			.attr("fill", (d) => `url(#node-grad-${d.id})`)
+			.attr("stroke", (d) => d.palette.stroke)
 			.attr("stroke-width", 2.2)
 			.attr("filter", "url(#node-shadow)");
 
 		node
 			.append("text")
-			.attr("fill", "#0f172a")
+			.attr("fill", (d) => d.palette.text)
 			.attr("font-weight", 700)
 			.attr("text-anchor", "middle")
 			.attr("dy", 0)
@@ -265,7 +381,10 @@ export function WorkflowPage() {
 			svg
 				.transition()
 				.duration(600)
-				.call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+				.call(
+					zoomBehavior.transform,
+					d3.zoomIdentity.translate(tx, ty).scale(scale),
+				);
 		};
 
 		const zoomIn = () => {
@@ -275,7 +394,10 @@ export function WorkflowPage() {
 			svg.transition().duration(220).call(zoomBehavior.scaleBy, 0.83);
 		};
 		const reset = () => {
-			svg.transition().duration(280).call(zoomBehavior.transform, d3.zoomIdentity);
+			svg
+				.transition()
+				.duration(280)
+				.call(zoomBehavior.transform, d3.zoomIdentity);
 		};
 
 		controlsRef.current = { zoomIn, zoomOut, reset, fit: fitToView };
@@ -303,7 +425,12 @@ export function WorkflowPage() {
 			const nodeRadius = 46;
 
 			// Trim link so it stops short of node edge, leaving room for arrowhead + gap.
-			const shrinkToCircle = (sx: number, sy: number, tx: number, ty: number) => {
+			const shrinkToCircle = (
+				sx: number,
+				sy: number,
+				tx: number,
+				ty: number,
+			) => {
 				const dx = tx - sx;
 				const dy = ty - sy;
 				const len = Math.sqrt(dx * dx + dy * dy) || 1;
@@ -339,7 +466,12 @@ export function WorkflowPage() {
 					return `M${start.x},${start.y} C${cx1},${cy1} ${cx2},${cy2} ${end.x},${end.y}`;
 				}
 
-				const { sx, sy, tx, ty, len, dx, dy } = shrinkToCircle(rawSx, rawSy, rawTx, rawTy);
+				const { sx, sy, tx, ty, len, dx, dy } = shrinkToCircle(
+					rawSx,
+					rawSy,
+					rawTx,
+					rawTy,
+				);
 				const mx = (sx + tx) / 2;
 				const my = (sy + ty) / 2;
 				const sign = d.source.id < d.target.id ? 1 : -1;
@@ -361,7 +493,12 @@ export function WorkflowPage() {
 				let y = rawSy - 70;
 
 				if (!isSelf) {
-					const { sx, sy, tx, ty, len, dx, dy } = shrinkToCircle(rawSx, rawSy, rawTx, rawTy);
+					const { sx, sy, tx, ty, len, dx, dy } = shrinkToCircle(
+						rawSx,
+						rawSy,
+						rawTx,
+						rawTy,
+					);
 					const mx = (sx + tx) / 2;
 					const my = (sy + ty) / 2;
 					const sign = d.source.id < d.target.id ? 1 : -1;
@@ -416,15 +553,15 @@ export function WorkflowPage() {
 
 	const shellStyle: CSSProperties = isFullscreen
 		? {
-			position: "fixed",
-			inset: "0",
-			zIndex: 1600,
-			background: "#0b1220",
-			padding: "0",
-			boxSizing: "border-box",
-			display: "flex",
-			flexDirection: "column",
-		}
+				position: "fixed",
+				inset: "0",
+				zIndex: 1600,
+				background: "#0b1220",
+				padding: "0",
+				boxSizing: "border-box",
+				display: "flex",
+				flexDirection: "column",
+			}
 		: { position: "relative" };
 
 	const frameStyle: CSSProperties = isFullscreen
@@ -476,7 +613,10 @@ export function WorkflowPage() {
 					← Back to Dashboard
 				</Link>
 			</nav>
-			<SectionCard title="Coloured Petri Token Flow" countLabel="D3 visualization">
+			<SectionCard
+				title="Coloured Petri Token Flow"
+				countLabel="D3 visualization"
+			>
 				<div style={shellStyle}>
 					{isFullscreen && (
 						<div
@@ -565,7 +705,9 @@ export function WorkflowPage() {
 								type="button"
 								onClick={() => setIsFullscreen((prev) => !prev)}
 								style={zoomBtnStyle}
-								aria-label={isFullscreen ? "Exit full screen" : "Enter full screen"}
+								aria-label={
+									isFullscreen ? "Exit full screen" : "Enter full screen"
+								}
 							>
 								{isFullscreen ? "🗕" : "🗖"}
 							</button>

@@ -2,7 +2,7 @@
 
 ## Task Manager Daemon
 
-The task-manager daemon (`yarn run daemon`) is a long-running background process that:
+The task-manager daemon (`yarn run worker`) is a long-running background process that:
 
 - Manages task storage in LevelDB
 - Processes tasks continuously by spawning opencode instances
@@ -12,7 +12,7 @@ The task-manager daemon (`yarn run daemon`) is a long-running background process
 
 ### Starting the Daemon
 
-To start the daemon, run `yarn run daemon` in the project directory. This will start the background process that manages tasks.
+To start the daemon, run `yarn run worker` in the project directory. This will start the background process that manages tasks.
 
 If the daemon is already running, do not kill it. Instead, use the `restart_daemon` MCP tool to gracefully restart it. You must wait until the daemon confirms it has restarted before proceeding. Do not send signals (like SIGKILL) directly to the daemon process.
 

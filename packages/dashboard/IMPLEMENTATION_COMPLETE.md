@@ -143,14 +143,14 @@ Overall Result: 🎉 ALL TESTS PASSED
 ### Start the Dashboard
 ```bash
 cd /home/localadmin/isomorphiq/packages/dashboard
-yarn run daemon
+yarn run worker
 # Dashboard automatically starts on http://localhost:3005
 ```
 
 ### Test Functionality
 ```bash
 # Run integration tests
-yarn workspace @isomorphiq/daemon test
+yarn workspace @isomorphiq/worker test
 
 # Run interactive demo
 node demo-dashboard.js

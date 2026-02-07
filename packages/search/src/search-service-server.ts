@@ -87,12 +87,24 @@ export async function startSearchServiceServer(): Promise<http.Server> {
 
     const server = http.createServer(async (req, res) => {
         const url = req.url ?? "/";
-        if (!url.startsWith("/trpc")) {
+        const parsed = new URL(url, `http://${req.headers.host ?? "localhost"}`);
+
+        if (req.method === "GET" && parsed.pathname === "/health") {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+                JSON.stringify({
+                    status: "ok",
+                    service: "search-service",
+                }),
+            );
+            return;
+        }
+
+        if (!parsed.pathname.startsWith("/trpc")) {
             res.writeHead(404, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: "Not found" }));
             return;
         }
-        const parsed = new URL(url, `http://${req.headers.host ?? "localhost"}`);
         const basePath = "/trpc";
         const path =
             parsed.pathname === basePath

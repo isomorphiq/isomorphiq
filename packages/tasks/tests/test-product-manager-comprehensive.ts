@@ -1,4 +1,4 @@
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 
 /**
  * Comprehensive test for ProductManager functionality

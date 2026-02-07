@@ -1,8 +1,8 @@
 import { describe, it, before, beforeEach, after } from "node:test";
 import { strict as assert } from "node:assert";
 import { DaemonTcpClient, type Task } from "../e2e/dashboard/tcp-client.ts";
-import { EnhancedCASManager } from "../../packages/daemon/src/services/enhanced-cas-manager.ts";
-import { DeadlockDetector } from "../../packages/daemon/src/services/cas-deadlock-detector.ts";
+import { EnhancedCASManager } from "../../packages/worker/src/services/enhanced-cas-manager.ts";
+import { DeadlockDetector } from "../../packages/worker/src/services/cas-deadlock-detector.ts";
 
 describe("Enhanced CAS Deadlock Detection Test - Task b7c2d592", () => {
     const TASK_ID_PREFIX = "task-b7c2d592-enhanced-cas-deadlock";

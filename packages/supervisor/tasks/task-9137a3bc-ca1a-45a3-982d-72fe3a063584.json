@@ -1,0 +1,17 @@
+{
+  "id": "task-9137a3bc-ca1a-45a3-982d-72fe3a063584",
+  "title": "Dashboard Widget Customization",
+  "type": "story",
+  "priority": "high",
+  "createdBy": "principal-architect",
+  "description": "Story: As a user, I want to customize my dashboard by adding, removing, and rearranging widgets, so that I can focus on the metrics and information most relevant to my workflow.\n\nAcceptance Criteria:\n1. User can view a list of available widgets (My Tasks, Recent Activity, Priority Breakdown, Search, System Health)\n2. User can add widgets to their dashboard from the widget library\n3. User can remove widgets from their dashboard\n4. User can drag-and-drop widgets to rearrange their layout\n5. Widget positions persist across sessions\n6. Dashboard supports responsive layout (mobile/desktop)\n\nUX Notes:\n- Drag-and-drop should provide visual feedback (ghost preview, drop zones)\n- Empty states should guide users to add their first widget\n- Consider widget size options (small, medium, large) for different information density needs\n- Widgets should have clear remove/edit controls that appear on hover/focus",
+"dependencies": [
+     "task-15b22927-acf9-43f3-824c-7034e359fef6",
+     "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-010",
+     "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-011",
+     "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-012",
+     "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-013",
+     "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-015",
+     "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-016"
+   ]
+}

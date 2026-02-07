@@ -19,5 +19,8 @@
     "dependencies": {
         "@isomorphiq/persistence-adapter": "workspace:*",
         "level": "^10.0.0"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
     }
 }

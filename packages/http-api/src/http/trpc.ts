@@ -7,7 +7,7 @@ import type {
     UpdateSavedSearchInput,
 } from "@isomorphiq/tasks";
 import type { WebSocketEvent } from "@isomorphiq/realtime";
-import type { ProductManager } from "@isomorphiq/user-profile";
+import type { ProductManager } from "@isomorphiq/profiles";
 import type { WebSocketManager } from "@isomorphiq/realtime";
 import type { ProductManagerResolver } from "./routes/route-helpers.ts";
 

@@ -261,7 +261,7 @@ This test demonstrates:
 
 ### Daemon Integration
 
-The daemon (`packages/daemon/src/daemon.ts`) integrates the event system:
+The daemon (`packages/worker/src/daemon.ts`) integrates the event system:
 
 ```typescript
 // Setup event bus with persistence

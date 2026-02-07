@@ -1,6 +1,8 @@
+import { useSetAtom } from "jotai";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { User } from "@isomorphiq/auth/types";
+import { authAtom } from "../authAtoms.ts";
 
 interface LoginFormData {
 	username: string;
@@ -13,6 +15,7 @@ interface LoginFormProps {
 }
 
 export function LoginForm({ onSuccess, onError }: LoginFormProps) {
+	const setAuth = useSetAtom(authAtom);
 	const [formData, setFormData] = useState<LoginFormData>({
 		username: "",
 		password: "",
@@ -69,6 +72,12 @@ export function LoginForm({ onSuccess, onError }: LoginFormProps) {
 				// Store token in localStorage
 				localStorage.setItem("authToken", data.token);
 				localStorage.setItem("user", JSON.stringify(data.user));
+				setAuth({
+					user: data.user,
+					token: data.token,
+					isAuthenticated: true,
+					isLoading: false,
+				});
 
 				onSuccess?.(data.user, data.token);
 				navigate("/");

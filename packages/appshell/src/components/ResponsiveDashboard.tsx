@@ -1,4 +1,6 @@
-import { useState } from "react";
+// FILE_CONTEXT: "context-5fb2ac35-d086-4cc8-80d2-a680e6fa5d6c"
+
+import { useEffect, useState } from "react";
 
 interface ResponsiveDashboardProps {
     totalTasks: number;
@@ -8,6 +10,7 @@ interface ResponsiveDashboardProps {
     nextUp?: { title?: string } | null;
     isOnline: boolean;
     syncInProgress: boolean;
+    isLoading: boolean;
 }
 
 export function ResponsiveDashboard({
@@ -18,15 +21,40 @@ export function ResponsiveDashboard({
     nextUp,
     isOnline,
     syncInProgress,
+    isLoading,
 }: ResponsiveDashboardProps) {
     const [showQuickActions, setShowQuickActions] = useState(false);
+    const [isUpdating, setIsUpdating] = useState(false);
+
+    const updateSignature = [
+        totalTasks,
+        todoCount,
+        inProgressCount,
+        doneCount,
+        nextUp?.title ?? "",
+    ].join("|");
+
+    useEffect(() => {
+        if (isLoading) {
+            setIsUpdating(false);
+            return;
+        }
+        setIsUpdating(true);
+        const timeout = setTimeout(() => setIsUpdating(false), 220);
+        return () => clearTimeout(timeout);
+    }, [isLoading, updateSignature]);
 
     const summaryCards = [
-        { label: "Next Up", value: nextUp ? nextUp.title : "—", accent: "#38bdf8", icon: "🎯" },
-        { label: "In Progress", value: inProgressCount, accent: "#f59e0b", icon: "⚡" },
-        { label: "Todo", value: todoCount, accent: "#3b82f6", icon: "📋" },
-        { label: "Done", value: doneCount, accent: "#22c55e", icon: "✅" },
-        { label: "Total", value: totalTasks, accent: "#c084fc", icon: "📊" },
+        {
+            label: "Next Up",
+            value: isLoading ? "..." : nextUp ? nextUp.title : "—",
+            accent: "#38bdf8",
+            icon: "🎯",
+        },
+        { label: "In Progress", value: isLoading ? "..." : inProgressCount, accent: "#f59e0b", icon: "⚡" },
+        { label: "Todo", value: isLoading ? "..." : todoCount, accent: "#3b82f6", icon: "📋" },
+        { label: "Done", value: isLoading ? "..." : doneCount, accent: "#22c55e", icon: "✅" },
+        { label: "Total", value: isLoading ? "..." : totalTasks, accent: "#c084fc", icon: "📊" },
     ];
 
     return (
@@ -61,7 +89,7 @@ export function ResponsiveDashboard({
                     {syncInProgress && (
                         <span style={{ fontSize: "12px", color: "#f59e0b", fontWeight: 700 }}>syncing...</span>
                     )}
-                    {nextUp?.title && (
+                    {!isLoading && nextUp?.title && (
                         <span style={{ fontSize: "12px", color: "#94a3b8" }}>Next: {nextUp.title}</span>
                     )}
                 </div>
@@ -154,15 +182,19 @@ export function ResponsiveDashboard({
                             style={{
                                 fontWeight: 800,
                                 fontSize: "18px",
-                                color: card.accent,
-                                lineHeight: 1.2,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                            }}
-                        >
-                            {card.value}
-                        </div>
+                            color: card.accent,
+                            lineHeight: 1.2,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            transition: "transform 220ms ease, opacity 220ms ease, color 220ms ease",
+                            transform: isUpdating ? "translateY(-2px)" : "translateY(0)",
+                            opacity: isUpdating ? 0.75 : 1,
+                            willChange: "transform, opacity",
+                        }}
+                    >
+                        {card.value}
+                    </div>
                     </div>
                 ))}
             </div>

@@ -43,6 +43,9 @@ export class TaskClient implements AcpClientInterface {
     public workflowSourceState: string | null = null;
     public workflowTargetState: string | null = null;
     public workflowTransition: string | null = null;
+    public turnMcpToolCallCount = 0;
+    public turnNonMcpToolCallCount = 0;
+    public turnToolCallTitles: string[] = [];
     public canReadFiles = true;
     public canWriteFiles = true;
     public workspaceRoot = process.cwd();
@@ -109,6 +112,24 @@ export class TaskClient implements AcpClientInterface {
 
 		switch (updateType) {
 			case "tool_call":
+                {
+                    const title =
+                        typeof update.title === "string" ? update.title : "unknown-tool";
+                    const rawInput = (update as Record<string, unknown>).rawInput;
+                    const isMcpToolCall =
+                        rawInput !== null
+                        && typeof rawInput === "object"
+                        && typeof (rawInput as Record<string, unknown>).server === "string"
+                        && typeof (rawInput as Record<string, unknown>).tool === "string";
+                    if (isMcpToolCall) {
+                        this.turnMcpToolCallCount += 1;
+                    } else {
+                        this.turnNonMcpToolCallCount += 1;
+                    }
+                    if (!this.turnToolCallTitles.includes(title)) {
+                        this.turnToolCallTitles = [...this.turnToolCallTitles, title];
+                    }
+                }
 				if (!quietLogs) {
 					console.log(`${logPrefix} 🔧 Tool call START: ${update.title}`);
 					console.log(`${logPrefix} 📋 Tool call details:`, JSON.stringify(update, null, 2));
@@ -290,4 +311,16 @@ export class TaskClient implements AcpClientInterface {
             this.turnCompletionCount += 1;
         }
 	}
+
+    beginNewTurn(): void {
+        this.responseText = "";
+        this.taskError = "";
+        this.thoughtText = "";
+        this.turnComplete = false;
+        this.taskComplete = false;
+        this.stopReason = null;
+        this.turnMcpToolCallCount = 0;
+        this.turnNonMcpToolCallCount = 0;
+        this.turnToolCallTitles = [];
+    }
 }

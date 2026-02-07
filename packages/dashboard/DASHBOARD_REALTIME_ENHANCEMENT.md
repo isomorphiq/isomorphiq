@@ -140,7 +140,7 @@ describe("Task Event Updates", () => {
 ### Starting the Enhanced Dashboard
 ```bash
 # The dashboard is automatically started with the daemon
-yarn run daemon
+yarn run worker
 
 # Dashboard will be available on port 3005
 # WebSocket endpoint: ws://localhost:3005/dashboard-ws
@@ -210,7 +210,7 @@ yarn run daemon
 ### Debug Mode
 Enable debug logging by setting environment variable:
 ```bash
-DEBUG=dashboard yarn run daemon
+DEBUG=dashboard yarn run worker
 ```
 
 ## Future Enhancements

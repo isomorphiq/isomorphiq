@@ -7,7 +7,7 @@ A comprehensive web dashboard for monitoring and managing tasks in the Isomorphi
 The dashboard is automatically started when you run the daemon:
 
 ```bash
-yarn run daemon
+yarn run worker
 ```
 
 Then access the dashboard at:
@@ -191,7 +191,7 @@ interface Task {
 ### Integration Tests
 Run the dashboard test suite:
 ```bash
-yarn workspace @isomorphiq/daemon test
+yarn workspace @isomorphiq/worker test
 ```
 
 ### Demo Script
@@ -212,7 +212,7 @@ node demo-dashboard.js
 ### Common Issues
 
 **Dashboard not accessible**
-- Ensure daemon is running: `yarn run daemon`
+- Ensure daemon is running: `yarn run worker`
 - Check port 3005 is not in use
 - Verify daemon logs for dashboard startup messages
 

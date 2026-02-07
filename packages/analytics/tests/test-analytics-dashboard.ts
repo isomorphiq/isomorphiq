@@ -6,7 +6,7 @@ import "../../../tests/test-utils/env-fetch.ts";
  * Tests the /api/analytics endpoint for data accuracy and consistency
  */
 
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 import type { Task } from "@isomorphiq/tasks";
 
 interface TestResult {

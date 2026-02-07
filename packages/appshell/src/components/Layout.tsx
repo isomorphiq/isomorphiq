@@ -26,7 +26,7 @@ import {
 	setEnvironment,
 	setEnvironmentHeaderName,
 } from "../environment.ts";
-import { ThemeToggle } from "./ThemeToggle";
+import { ThemeToggle } from "./ThemeToggle.tsx";
 
 type LayoutProps = {
 	children: ReactNode;
@@ -37,6 +37,18 @@ type LayoutProps = {
 type AdminSettings = {
 	registrationEnabled: boolean;
 	allowNonAdminWrites: boolean;
+};
+
+const parseJsonResponse = async (response: Response): Promise<Record<string, unknown> | null> => {
+	const raw = await response.text();
+	if (!raw) {
+		return null;
+	}
+	try {
+		return JSON.parse(raw) as Record<string, unknown>;
+	} catch {
+		return null;
+	}
 };
 
 const getIsMobile = () => (typeof window !== "undefined" ? window.innerWidth <= 900 : false);
@@ -59,6 +71,8 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 		{ to: "/", label: "Dashboard", icon: "📊" },
 		{ to: "/analytics", label: "Analytics", icon: "📈" },
 		{ to: "/activity", label: "Activity", icon: "🔔" },
+		{ to: "/portfolio", label: "Portfolio", icon: "🗂️", requireAuth: true },
+		{ to: "/context", label: "Context", icon: "🧠", requireAuth: true },
 		{ to: "/profiles", label: "Profiles", icon: "👥" },
 		{ to: "/workflow", label: "Workflow", icon: "🕸️" },
 		{ to: "/dependencies", label: "Dependencies", icon: "🔗" },
@@ -102,7 +116,7 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 		};
 	}, []);
 
-	const isAdminUser = auth.user?.username === "nyan";
+	const isAdminUser = auth.user?.username === "nyan" || auth.user?.username === "admin";
 
 	useEffect(() => {
 		const fetchAdminSettings = async () => {
@@ -113,12 +127,15 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 						Authorization: `Bearer ${auth.token}`,
 					},
 				});
-				const data = await response.json();
+				const data = await parseJsonResponse(response);
 				if (response.ok && data?.settings) {
 					setAdminSettings(data.settings as AdminSettings);
 					setAdminSettingsError(null);
 				} else {
-					setAdminSettingsError(data.error || "Failed to load admin settings");
+					const errorMessage = typeof data?.error === "string"
+						? data.error
+						: "Failed to load admin settings";
+					setAdminSettingsError(errorMessage);
 				}
 			} catch (error) {
 				console.error("Failed to load admin settings", error);
@@ -139,12 +156,15 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 				},
 				body: JSON.stringify(patch),
 			});
-			const data = await response.json();
+			const data = await parseJsonResponse(response);
 			if (response.ok && data?.settings) {
 				setAdminSettings(data.settings as AdminSettings);
 				setAdminSettingsError(null);
 			} else {
-				setAdminSettingsError(data.error || "Failed to update admin settings");
+				const errorMessage = typeof data?.error === "string"
+					? data.error
+					: "Failed to update admin settings";
+				setAdminSettingsError(errorMessage);
 			}
 		} catch (error) {
 			console.error("Failed to update admin settings", error);

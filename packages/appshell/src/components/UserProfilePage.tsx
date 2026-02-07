@@ -37,7 +37,7 @@ export function UserProfilePage() {
 		const load = async () => {
 			if (!auth.token) return;
 			try {
-				const resp = await fetch("/api/auth/me", {
+				const resp = await fetch("/api/users/me", {
 					headers: { Authorization: `Bearer ${auth.token}` },
 				});
 				if (!resp.ok) throw new Error("Failed to load profile");
@@ -74,7 +74,7 @@ export function UserProfilePage() {
 		setError(null);
 		setSuccess(null);
 		try {
-			const resp = await fetch("/api/auth/profile", {
+			const resp = await fetch("/api/users/me/profile", {
 				method: "PUT",
 				headers: {
 					"Content-Type": "application/json",

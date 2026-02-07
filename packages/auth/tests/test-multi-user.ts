@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import "../../../tests/test-utils/env-fetch.ts";
 
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 import { UserManager } from "@isomorphiq/auth";
 
 async function testMultiUserFunctionality() {

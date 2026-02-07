@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-347c1597-c918-4c03-a48e-a95654758e2d"
+
 import "../../../../tests/test-utils/env-fetch.ts";
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -276,6 +278,7 @@ describe("Dashboard Server Tests", { skip: !canListen }, () => {
             expect(html).toContain("addSelectedWidgetsBtn");
             expect(html).toContain("addSelectedWidgetsLabel");
             expect(html).toContain("widget-library-select");
+            expect(html).toContain("widget-library-add");
         });
 
         it("should include widget placement persistence for add-selected widgets", async () => {

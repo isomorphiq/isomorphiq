@@ -1,0 +1,1 @@
+"{\"id\":\"task-9137a3bc-ca1a-45a3-982d-72fe3a063584-007\",\"title\":\"Implement Layout Configuration UI\",\"type\":\"implementation\",\"priority\":\"medium\",\"createdBy\":\"principal-architect\",\"description\":\"Provide UI controls for users to manually adjust layout settings; store changes persistently; acceptance: UI allows configuration and persists.\"}"

@@ -6,7 +6,7 @@ import "../../../tests/test-utils/env-fetch.ts";
  * Tests various report formats, data aggregation, and export functionality
  */
 
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 import fs from "node:fs";
 import type { Task } from "@isomorphiq/tasks";
 

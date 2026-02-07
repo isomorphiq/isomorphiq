@@ -1,19 +1,96 @@
+// FILE_CONTEXT: "context-986a9174-588d-4846-b3e4-df4552330d12"
+
 import type { WebSocketEvent } from "@isomorphiq/realtime/types";
 import type { Task, TaskFilters, TaskSort } from "@isomorphiq/tasks/types";
 import { atom, type Atom } from "jotai";
-import { trpc } from "./trpc";
-export * from "./atoms/themeAtoms";
+import { loadable } from "jotai/utils";
+export * from "./atoms/themeAtoms.ts";
 
-// Base atoms powered by tRPC (auto fetch)
-const baseTasksAtom = (trpc.tasks as {
-	atomWithQuery: (getInput: () => undefined) => Atom<Promise<Task[] | undefined>>;
-}).atomWithQuery(() => undefined);
-const baseQueueAtom = (trpc.queue as {
-	atomWithQuery: (getInput: () => undefined) => Atom<Promise<Task[] | undefined>>;
-}).atomWithQuery(() => undefined);
+const readAccessToken = (): string | null => {
+    if (typeof window === "undefined") {
+        return null;
+    }
+    const localStorageToken =
+        window.localStorage.getItem("authToken")
+        ?? window.localStorage.getItem("token");
+    const sessionStorageToken =
+        window.sessionStorage.getItem("authToken")
+        ?? window.sessionStorage.getItem("token");
+    return localStorageToken ?? sessionStorageToken;
+};
+
+const buildApiHeaders = (): Record<string, string> => {
+    const token = readAccessToken();
+    if (!token) {
+        return {
+            "Content-Type": "application/json",
+        };
+    }
+    return {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+    };
+};
+
+const normalizeTaskListResponse = (payload: unknown): Task[] => {
+    if (Array.isArray(payload)) {
+        return payload as Task[];
+    }
+    if (payload && typeof payload === "object") {
+        const record = payload as Record<string, unknown>;
+        if (Array.isArray(record.tasks)) {
+            return record.tasks as Task[];
+        }
+        if (Array.isArray(record.queue)) {
+            return record.queue as Task[];
+        }
+    }
+    return [];
+};
+
+const fetchTasks = async (): Promise<Task[]> => {
+    try {
+        const response = await fetch("/api/tasks", {
+            headers: buildApiHeaders(),
+            cache: "no-store",
+        });
+        if (!response.ok) {
+            console.error(`[appshell] Failed to fetch tasks (status=${response.status})`);
+            return [];
+        }
+        const payload = (await response.json()) as unknown;
+        return normalizeTaskListResponse(payload);
+    } catch (error) {
+        console.error("[appshell] Tasks request failed:", error);
+        return [];
+    }
+};
+
+const fetchQueue = async (): Promise<Task[]> => {
+    try {
+        const response = await fetch("/api/queue", {
+            headers: buildApiHeaders(),
+            cache: "no-store",
+        });
+        if (!response.ok) {
+            console.error(`[appshell] Failed to fetch queue (status=${response.status})`);
+            return [];
+        }
+        const payload = (await response.json()) as unknown;
+        return normalizeTaskListResponse(payload);
+    } catch (error) {
+        console.error("[appshell] Queue request failed:", error);
+        return [];
+    }
+};
+
+const baseTasksAtom: Atom<Promise<Task[]>> = atom(async () => fetchTasks());
+const baseQueueAtom: Atom<Promise<Task[]>> = atom(async () => fetchQueue());
 
 // Refresh counter to trigger refetch on events
 export const refreshAtom = atom(0);
+const baseTasksLoadableAtom = loadable(baseTasksAtom);
+const baseQueueLoadableAtom = loadable(baseQueueAtom);
 
 // Search and filter state
 export const searchQueryAtom = atom<string>("");
@@ -110,6 +187,16 @@ export const tasksAtom = atom((get) => {
 export const queueAtom = atom((get) => {
 	get(refreshAtom);
 	return get(baseQueueAtom) ?? [];
+});
+
+export const tasksLoadableAtom = atom((get) => {
+	get(refreshAtom);
+	return get(baseTasksLoadableAtom);
+});
+
+export const queueLoadableAtom = atom((get) => {
+	get(refreshAtom);
+	return get(baseQueueLoadableAtom);
 });
 
 export const lastEventAtom = atom<WebSocketEvent | null>(null);

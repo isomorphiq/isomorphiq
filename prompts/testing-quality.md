@@ -48,3 +48,14 @@ Implement performance tests and optimizations for [FEATURE/SYSTEM]:
 
 Provide performance metrics and optimization recommendations.
 ```
+
+## MCP Tool Usage (Testing)
+- Before running tests:
+  - Use `get_task` / `get_context` to understand current test expectations.
+- After running tests:
+  - Use `update_context` to write `testStatus` and structured `testReport`.
+  - Use `update_task_status`:
+    - `done` when tests pass
+    - `in-progress` when tests fail
+- For file-level failure tracking:
+  - Use `get_file_context` on files implicated by failures and record `todos`/`relatedFiles`.

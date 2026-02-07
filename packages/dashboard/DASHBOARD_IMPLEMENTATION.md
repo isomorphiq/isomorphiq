@@ -107,7 +107,7 @@ The dashboard is fully implemented but requires a daemon restart to activate:
 
 1. **Restart the daemon** (only when safe to do so):
    ```bash
-   yarn run daemon
+   yarn run worker
    ```
 
 2. **Access the dashboard**:

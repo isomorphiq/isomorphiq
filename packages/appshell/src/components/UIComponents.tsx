@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-64a33c13-0a72-4aaa-a349-374f23e59d3a"
+
 import { Component, type CSSProperties, type ErrorInfo, type ReactNode } from "react";
 
 type CardProps = {

@@ -1,5 +1,5 @@
 /* eslint-disable no-unused-vars */
-import type { ACPProfile } from "@isomorphiq/user-profile";
+import type { ACPProfile } from "@isomorphiq/profiles";
 
 /**
  * Plugin metadata and information

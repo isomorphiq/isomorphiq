@@ -77,7 +77,9 @@ export const enforceAdminWriteAccess = async (
     const user = req.user || req.authUser;
     const allowed = await canUserWrite(user);
     if (!allowed) {
-        return res.status(403).json({ error: "Write access is restricted to the admin user nyan" });
+        return res
+            .status(403)
+            .json({ error: "Write access is restricted to admin users (nyan/admin)" });
     }
     next();
 };
@@ -95,7 +97,7 @@ export const requirePermission = (resource: string, action: string) => {
 
             if (!isAdminUser(user.username) && !adminSettings.allowNonAdminWrites && action !== "read") {
                 return res.status(403).json({
-                    error: "Write access is restricted to the admin user nyan",
+                    error: "Write access is restricted to admin users (nyan/admin)",
                 });
             }
 

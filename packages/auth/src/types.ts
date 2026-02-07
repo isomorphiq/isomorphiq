@@ -45,6 +45,8 @@ export const UserPreferencesSchema = z.object({
 export const UserPreferencesStruct = struct.name("UserPreferences")<z.output<typeof UserPreferencesSchema>, z.input<typeof UserPreferencesSchema>>(UserPreferencesSchema);
 export type UserPreferences = StructSelf<typeof UserPreferencesStruct>;
 
+const DateLikeSchema = z.coerce.date();
+
 export const UserSchema = z.object({
     id: z.string(),
     username: z.string(),
@@ -55,12 +57,12 @@ export const UserSchema = z.object({
     isEmailVerified: z.boolean(),
     profile: UserProfileSchema,
     preferences: UserPreferencesSchema,
-    createdAt: z.date(),
-    updatedAt: z.date(),
-    lastLoginAt: z.date().optional(),
-    passwordChangedAt: z.date().optional(),
+    createdAt: DateLikeSchema,
+    updatedAt: DateLikeSchema,
+    lastLoginAt: DateLikeSchema.optional(),
+    passwordChangedAt: DateLikeSchema.optional(),
     failedLoginAttempts: z.number(),
-    lockedUntil: z.date().optional(),
+    lockedUntil: DateLikeSchema.optional(),
 });
 
 export const UserStruct = struct.name("User")<z.output<typeof UserSchema>, z.input<typeof UserSchema>>(UserSchema);
@@ -140,8 +142,8 @@ export const PasswordResetTokenSchema = z.object({
     userId: z.string(),
     token: z.string(),
     email: z.string(),
-    expiresAt: z.date(),
-    createdAt: z.date(),
+    expiresAt: DateLikeSchema,
+    createdAt: DateLikeSchema,
     isUsed: z.boolean(),
 });
 
@@ -153,8 +155,8 @@ export const EmailVerificationTokenSchema = z.object({
     userId: z.string(),
     token: z.string(),
     email: z.string(),
-    expiresAt: z.date(),
-    createdAt: z.date(),
+    expiresAt: DateLikeSchema,
+    createdAt: DateLikeSchema,
     isUsed: z.boolean(),
 });
 
@@ -210,11 +212,11 @@ export const SessionSchema = z.object({
     deviceInfo: DeviceInfoSchema.optional(),
     ipAddress: z.string().optional(),
     userAgent: z.string().optional(),
-    createdAt: z.date(),
-    expiresAt: z.date(),
-    refreshExpiresAt: z.date(),
+    createdAt: DateLikeSchema,
+    expiresAt: DateLikeSchema,
+    refreshExpiresAt: DateLikeSchema,
     isActive: z.boolean(),
-    lastAccessAt: z.date(),
+    lastAccessAt: DateLikeSchema,
 });
 
 export const SessionStruct = struct.name("Session")<z.output<typeof SessionSchema>, z.input<typeof SessionSchema>>(SessionSchema);

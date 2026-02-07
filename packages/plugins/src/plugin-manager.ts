@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ACPProfile } from "@isomorphiq/user-profile";
+import type { ACPProfile } from "@isomorphiq/profiles";
 import { FileSystemPluginLoader } from "./plugin-loader.ts";
 import type {
     PluginManagerContract,

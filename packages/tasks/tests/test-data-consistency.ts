@@ -5,7 +5,7 @@
  * Tests data integrity without HTTP endpoints to avoid authentication issues
  */
 
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 
 interface TestResult {
 	name: string;

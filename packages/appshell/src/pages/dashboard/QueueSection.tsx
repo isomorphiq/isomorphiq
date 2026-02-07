@@ -1,7 +1,10 @@
+// FILE_CONTEXT: "context-20f5bd89-44b0-4217-bf82-e305036e1707"
+
 import { useEffect, useMemo, useState } from "react";
 import type { Task } from "@isomorphiq/tasks/types";
 import { SectionCard } from "../../components/SectionCard.tsx";
 import { QueueList } from "../../components/TaskCard.tsx";
+import { LoadingSpinner } from "../../components/UIComponents.tsx";
 import type { OfflineTask } from "../../hooks/useOfflineSync.ts";
 
 type QueueSectionProps = {
@@ -10,6 +13,7 @@ type QueueSectionProps = {
     onStatusChange: (taskId: string, newStatus: Task["status"]) => void;
     onPriorityChange: (taskId: string, newPriority: Task["priority"]) => void;
     onDelete: (taskId: string) => void;
+    isLoading: boolean;
 };
 
 export function QueueSection({
@@ -18,9 +22,11 @@ export function QueueSection({
     onStatusChange,
     onPriorityChange,
     onDelete,
+    isLoading,
 }: QueueSectionProps) {
     const PAGE_SIZE = 8;
     const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+    const showLoadingState = isLoading && tasks.length === 0;
 
     useEffect(() => {
         setVisibleCount((current) => Math.min(current, Math.max(PAGE_SIZE, tasks.length)));
@@ -37,16 +43,25 @@ export function QueueSection({
 
     return (
         <section style={{ marginBottom: "16px" }}>
-            <SectionCard title="Next Up" countLabel={`${tasks.length} queued`}>
-                <QueueList
-                    tasks={visibleTasks}
-                    onStatusChange={onStatusChange}
-                    onPriorityChange={onPriorityChange}
-                    onDelete={onDelete}
-                    remainingCount={tasks.length - visibleTasks.length}
-                    onLoadMore={handleLoadMore}
-                    stacked={isMobile}
-                />
+            <SectionCard
+                title="Next Up"
+                countLabel={showLoadingState ? "Loading queue..." : `${tasks.length} queued`}
+            >
+                {showLoadingState ? (
+                    <div style={{ padding: "24px 0", display: "flex", justifyContent: "center" }}>
+                        <LoadingSpinner message="Loading queue..." />
+                    </div>
+                ) : (
+                    <QueueList
+                        tasks={visibleTasks}
+                        onStatusChange={onStatusChange}
+                        onPriorityChange={onPriorityChange}
+                        onDelete={onDelete}
+                        remainingCount={tasks.length - visibleTasks.length}
+                        onLoadMore={handleLoadMore}
+                        stacked={isMobile}
+                    />
+                )}
             </SectionCard>
         </section>
     );

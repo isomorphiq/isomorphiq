@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 
 async function completeTask() {
     const taskId = "task-1765516228776-i0emhswko";

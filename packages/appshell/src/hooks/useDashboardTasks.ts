@@ -1,10 +1,20 @@
+// FILE_CONTEXT: "context-4d28ecbe-e543-479b-9908-c828fcb45cd0"
+
 import type { User } from "@isomorphiq/auth/types";
 import type { Task } from "@isomorphiq/tasks/types";
 import { useAtom, useSetAtom } from "jotai";
 import { useEffect, useMemo, useState } from "react";
-import { filteredTasksAtom, lastEventAtom, queueAtom, refreshAtom, tasksAtom } from "../atoms.ts";
+import {
+	filteredTasksAtom,
+	lastEventAtom,
+	queueAtom,
+	queueLoadableAtom,
+	refreshAtom,
+	tasksAtom,
+	tasksLoadableAtom,
+} from "../atoms.ts";
 import { authAtom } from "../authAtoms.ts";
-import { type OfflineTask, offlineStorage, useOfflineSync } from "./useOfflineSync";
+import { type OfflineTask, offlineStorage, useOfflineSync } from "./useOfflineSync.ts";
 
 const LOG_PREFIX = "[dashboardTasks]";
 
@@ -28,6 +38,8 @@ export function useDashboardTasks() {
 	const [filteredTasks] = useAtom(filteredTasksAtom);
 	const [queue] = useAtom(queueAtom);
 	const [allTasks] = useAtom(tasksAtom);
+	const [tasksLoadable] = useAtom(tasksLoadableAtom);
+	const [queueLoadable] = useAtom(queueLoadableAtom);
 	const bumpRefresh = useSetAtom(refreshAtom);
 	const [_lastEvent, _setLastEvent] = useAtom(lastEventAtom);
 	const [offlineTasks, setOfflineTasks] = useState<OfflineTask[]>([]);
@@ -69,6 +81,15 @@ export function useDashboardTasks() {
 					const user = data.user;
 					localStorage.setItem("user", JSON.stringify(user));
 					setAuth((prev) => ({ ...prev, user }));
+				} else if (resp.status === 401) {
+					localStorage.removeItem("authToken");
+					localStorage.removeItem("user");
+					setAuth({
+						user: null,
+						token: null,
+						isAuthenticated: false,
+						isLoading: false,
+					});
 				}
 			} catch {
 				// ignore; user can still browse public pages
@@ -82,6 +103,10 @@ export function useDashboardTasks() {
 	const mergedQueue = isOnline
 		? queue
 		: [...queue, ...offlineTasks.filter((task) => task.status === "todo")];
+	const isTasksLoading = tasksLoadable.state === "loading" && mergedTasks.length === 0;
+	const isQueueLoading =
+		queueLoadable.state === "loading" && mergedQueue.length === 0 && mergedTasks.length === 0;
+	const isInitialLoading = isTasksLoading || isQueueLoading;
 
 	const totals: DashboardTotals = useMemo(
 		() => ({
@@ -248,6 +273,8 @@ export function useDashboardTasks() {
 		mergedFilteredTasks,
 		mergedQueue,
 		totals,
+		totalTaskCount: mergedTasks.length,
+		isInitialLoading,
 		isOnline,
 		syncInProgress,
 		handleStatusChange,

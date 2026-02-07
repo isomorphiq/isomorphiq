@@ -1,6 +1,8 @@
+import { useSetAtom } from "jotai";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { User } from "@isomorphiq/auth/types";
+import { authAtom } from "../authAtoms.ts";
 
 interface RegisterFormData {
 	username: string;
@@ -15,6 +17,7 @@ interface RegisterFormProps {
 }
 
 export function RegisterForm({ onSuccess, onError }: RegisterFormProps) {
+	const setAuth = useSetAtom(authAtom);
 	const [formData, setFormData] = useState<RegisterFormData>({
 		username: "",
 		email: "",
@@ -105,6 +108,12 @@ export function RegisterForm({ onSuccess, onError }: RegisterFormProps) {
 			if (response.ok && data.token) {
 				localStorage.setItem("authToken", data.token);
 				localStorage.setItem("user", JSON.stringify(data.user));
+				setAuth({
+					user: data.user,
+					token: data.token,
+					isAuthenticated: true,
+					isLoading: false,
+				});
 				onSuccess?.(data.user);
 				navigate("/");
 			} else {

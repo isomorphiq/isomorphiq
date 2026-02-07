@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-0972d1f1-0982-42ff-af7d-1ca07855ab04"
+
 import type {
     DashboardState,
     DashboardWidget,
@@ -11,6 +13,10 @@ import type { DashboardStorage } from "./dashboard-storage.ts";
 export type AddWidgetResult =
     | { type: "added"; state: DashboardState; widget: DashboardWidget }
     | { type: "not-found"; widgetId: WidgetId };
+
+export type RemoveWidgetResult =
+    | { type: "removed"; state: DashboardState; widget: DashboardWidget }
+    | { type: "not-found"; instanceId: string; state: DashboardState };
 
 export type DashboardOptions = {
     gridColumns: number;
@@ -69,4 +75,33 @@ export const addWidgetFromLibrary = async (params: {
     await storage.save(nextState);
 
     return { type: "added", state: nextState, widget };
+};
+
+export const removeWidgetFromDashboard = async (params: {
+    storage: DashboardStorage;
+    instanceId: string;
+    options?: Partial<DashboardOptions>;
+}): Promise<RemoveWidgetResult> => {
+    const { storage, instanceId, options } = params;
+    const resolvedOptions: DashboardOptions = {
+        ...defaultOptions,
+        ...options
+    };
+
+    const currentState = (await storage.load()) ?? createEmptyDashboardState(resolvedOptions);
+    const widget = currentState.widgets.find((item) => item.instanceId === instanceId);
+
+    if (!widget) {
+        return { type: "not-found", instanceId, state: currentState };
+    }
+
+    const nextState: DashboardState = {
+        ...currentState,
+        widgets: currentState.widgets.filter((item) => item.instanceId !== instanceId),
+        updatedAt: nowIso()
+    };
+
+    await storage.save(nextState);
+
+    return { type: "removed", state: nextState, widget };
 };

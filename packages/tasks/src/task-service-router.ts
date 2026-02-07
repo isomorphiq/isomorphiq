@@ -193,6 +193,32 @@ export const taskServiceRouter = t.router({
             });
             return task;
         }),
+    claimTask: t.procedure
+        .input(
+            z.object({
+                id: z.string(),
+                workerId: z.string().min(1),
+            }),
+        )
+        .mutation(async ({ ctx, input }) => {
+            const result = await ctx.taskService.claimTaskForWorker(input.id, input.workerId);
+            if (!result.success) {
+                throw result.error;
+            }
+            const claimedTask = result.data;
+            if (!claimedTask) {
+                return null;
+            }
+            emitTaskEvent(ctx, {
+                type: "task_status_changed",
+                task: claimedTask,
+                taskId: claimedTask.id,
+                oldStatus: "todo",
+                newStatus: "in-progress",
+                updatedBy: input.workerId,
+            });
+            return claimedTask;
+        }),
     updatePriority: t.procedure
         .input(
             z.object({ id: z.string(), priority: TaskPrioritySchema, updatedBy: z.string().optional() }),

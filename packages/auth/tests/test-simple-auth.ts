@@ -6,7 +6,7 @@ import "../../../tests/test-utils/env-fetch.ts";
  * Tests basic auth functionality without database conflicts
  */
 
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 
 interface TestResult {
 	name: string;

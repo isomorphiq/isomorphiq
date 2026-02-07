@@ -1,6 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import { strict as assert } from "node:assert";
-import { ProductManager } from "@isomorphiq/user-profile";
+import { ProductManager } from "@isomorphiq/profiles";
 import { unlinkSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 

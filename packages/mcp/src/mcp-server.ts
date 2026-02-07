@@ -15,9 +15,9 @@
 import { exec } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import { readFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
-import { resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -56,7 +56,7 @@ class DaemonClient {
 	): Promise<R> {
 		return new Promise((resolve, reject) => {
 			const client = createConnection({ port: this.port, host: this.host }, () => {
-				console.log("[MCP] Connected to daemon");
+				console.error("[MCP] Connected to daemon");
 				const message = `${JSON.stringify({ command, data, environment })}\n`;
 				client.write(message);
 			});
@@ -156,22 +156,26 @@ const resolveRequestEnvironment = (headers?: Record<string, string>): string => 
 	return normalizeEnvironmentName(raw);
 };
 
+const resolveGatewayBaseUrl = (): string => {
+	const host = process.env.GATEWAY_HOST ?? "127.0.0.1";
+	const portRaw = process.env.GATEWAY_PORT ?? "3003";
+	const port = Number.parseInt(portRaw, 10);
+	const resolvedPort = Number.isFinite(port) && port > 0 ? port : 3003;
+	return `http://${host}:${resolvedPort}`;
+};
+
 const resolveTaskServiceBaseUrl = (): string => {
 	const direct = process.env.TASKS_SERVICE_URL ?? process.env.TASKS_HTTP_URL;
 	if (direct && direct.trim().length > 0) {
 		return direct.trim();
 	}
-	const host = process.env.TASKS_HOST ?? "127.0.0.1";
-	const portRaw = process.env.TASKS_HTTP_PORT ?? process.env.TASKS_PORT ?? "3006";
-	const port = Number.parseInt(portRaw, 10);
-	const resolvedPort = Number.isFinite(port) && port > 0 ? port : 3006;
-	return `http://${host}:${resolvedPort}`;
+	return `${resolveGatewayBaseUrl()}/trpc/tasks-service`;
 };
 
 const logTaskServiceTarget = (baseUrl: string): void => {
 	const logLevel = (process.env.LOG_LEVEL ?? "").toLowerCase();
 	if (logLevel !== "debug") return;
-	console.log(`[MCP] Task service URL: ${baseUrl}`);
+	console.error(`[MCP] Task service URL: ${baseUrl}`);
 };
 
 const resolveContextServiceBaseUrl = (): string => {
@@ -179,17 +183,13 @@ const resolveContextServiceBaseUrl = (): string => {
 	if (direct && direct.trim().length > 0) {
 		return direct.trim();
 	}
-	const host = process.env.CONTEXT_HOST ?? "127.0.0.1";
-	const portRaw = process.env.CONTEXT_HTTP_PORT ?? process.env.CONTEXT_PORT ?? "3008";
-	const port = Number.parseInt(portRaw, 10);
-	const resolvedPort = Number.isFinite(port) && port > 0 ? port : 3008;
-	return `http://${host}:${resolvedPort}`;
+	return `${resolveGatewayBaseUrl()}/trpc/context-service`;
 };
 
 const logContextServiceTarget = (baseUrl: string): void => {
 	const logLevel = (process.env.LOG_LEVEL ?? "").toLowerCase();
 	if (logLevel !== "debug") return;
-	console.log(`[MCP] Context service URL: ${baseUrl}`);
+	console.error(`[MCP] Context service URL: ${baseUrl}`);
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -234,6 +234,71 @@ const normalizeStringArray = (value: unknown): string[] | undefined => {
 		return filtered.length > 0 ? filtered : undefined;
 	}
 	return undefined;
+};
+
+const normalizeOptionalString = (value: unknown): string | undefined => {
+    if (typeof value !== "string") {
+        return undefined;
+    }
+    const normalized = value.trim();
+    return normalized.length > 0 ? normalized : undefined;
+};
+
+const FILE_CONTEXT_HEADER_PATTERN = /^\/\/\s*FILE_CONTEXT:\s*"([^"]+)"\s*$/;
+
+const getWorkspaceRoot = (): string => resolve(process.cwd());
+
+const isOutsideWorkspace = (workspaceRoot: string, absolutePath: string): boolean => {
+    const rel = relative(workspaceRoot, absolutePath);
+    return rel.startsWith("..") || rel === "..";
+};
+
+const toRepoRelativePath = (workspaceRoot: string, absolutePath: string): string =>
+    relative(workspaceRoot, absolutePath).split(sep).join("/");
+
+const resolveWorkspaceFilePath = (filePath: string): { absolutePath: string; repoPath: string } => {
+    const workspaceRoot = getWorkspaceRoot();
+    const absolutePath = resolve(workspaceRoot, filePath);
+    if (isOutsideWorkspace(workspaceRoot, absolutePath)) {
+        throw new Error("filePath must resolve inside the current workspace");
+    }
+    return {
+        absolutePath,
+        repoPath: toRepoRelativePath(workspaceRoot, absolutePath),
+    };
+};
+
+const extractFileContextIdFromContent = (content: string): string | null => {
+    const firstLines = content.split(/\r?\n/).slice(0, 20);
+    const matchingLine = firstLines.find((line) => FILE_CONTEXT_HEADER_PATTERN.test(line.trim()));
+    if (!matchingLine) {
+        return null;
+    }
+    const match = matchingLine.trim().match(FILE_CONTEXT_HEADER_PATTERN);
+    return match && match[1] ? match[1] : null;
+};
+
+const buildFileContextHeaderLine = (contextId: string): string =>
+    `// FILE_CONTEXT: "${contextId}"`;
+
+const ensureFileContextHeader = (content: string, contextId: string): string => {
+    const lines = content.split(/\r?\n/);
+    const headerLine = buildFileContextHeaderLine(contextId);
+    const existingHeaderIndex = lines.findIndex(
+        (line, index) => index < 20 && FILE_CONTEXT_HEADER_PATTERN.test(line.trim()),
+    );
+    if (existingHeaderIndex >= 0) {
+        const updatedLines = lines.map((line, index) =>
+            index === existingHeaderIndex ? headerLine : line,
+        );
+        return updatedLines.join("\n");
+    }
+    const hasShebang = lines.length > 0 && lines[0].startsWith("#!");
+    const insertIndex = hasShebang ? 1 : 0;
+    const head = lines.slice(0, insertIndex);
+    const tail = lines.slice(insertIndex);
+    const spacer = tail.length > 0 && tail[0].trim().length > 0 ? [""] : [];
+    return [...head, headerLine, ...spacer, ...tail].join("\n");
 };
 
 const taskStatusValues = ["todo", "in-progress", "done", "invalid"] as const;
@@ -334,6 +399,39 @@ const normalizeTaskSearchOptions = (value: unknown): TaskSearchOptions => {
 		limit: typeof value.limit === "number" ? value.limit : undefined,
 		offset: typeof value.offset === "number" ? value.offset : undefined,
 	};
+};
+
+const isTaskSearchResult = (value: unknown): value is { tasks: unknown[]; total: number } =>
+    isRecord(value)
+    && Array.isArray((value as Record<string, unknown>).tasks)
+    && typeof (value as Record<string, unknown>).total === "number";
+
+const normalizeTaskSearchResult = (value: unknown): { tasks: unknown[]; total: number } => {
+    if (isTaskSearchResult(value)) {
+        return value;
+    }
+    if (Array.isArray(value)) {
+        return { tasks: value, total: value.length };
+    }
+    return { tasks: [], total: 0 };
+};
+
+const shouldFallbackToDaemonForTaskService = (error: unknown): boolean => {
+    const message =
+        error instanceof Error
+            ? error.message
+            : typeof error === "string"
+                ? error
+                : "";
+    const normalized = message.toLowerCase();
+    return (
+        normalized.includes("fetch failed")
+        || normalized.includes("failed to fetch")
+        || normalized.includes("econnrefused")
+        || normalized.includes("enotfound")
+        || normalized.includes("timed out")
+        || normalized.includes("socket hang up")
+    );
 };
 const gbnfResourcePath = resolve(process.cwd(), "resources", "mcp-tool-calls.gbnf");
 const gbnfResourceUri = "file://resources/mcp-tool-calls.gbnf";
@@ -653,6 +751,51 @@ const tools: Tool[] = [
 				},
 			},
 			required: ["id"],
+		},
+	},
+	{
+		name: "get_file_context",
+		description:
+            "Lookup file context by repository path, auto-create if missing, and ensure FILE_CONTEXT header is present",
+		inputSchema: {
+			type: "object",
+			properties: {
+                filePath: {
+                    type: "string",
+                    description: "Workspace-relative file path",
+                },
+                operation: {
+                    type: "string",
+                    description: "Operation that is looking up this file",
+                },
+                taskId: {
+                    type: "string",
+                    description: "Optional related task id",
+                },
+                taskTitle: {
+                    type: "string",
+                    description: "Optional related task title",
+                },
+                reason: {
+                    type: "string",
+                    description: "Why this file is relevant",
+                },
+                relatedFiles: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Other files relevant to this file",
+                },
+                todos: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Known TODOs for this file",
+                },
+                contextId: {
+                    type: "string",
+                    description: "Optional explicit file context id override",
+                },
+            },
+            required: ["filePath"],
 		},
 	},
 	{
@@ -1177,6 +1320,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 		const response = await daemonClient.sendCommand(command, data, environment);
 		return resolveDaemonResult<R>(response);
 	};
+    const daemonFallbackEnabled = process.env.MCP_ENABLE_DAEMON_FALLBACK === "true";
 
 	if (!args) {
 		return {
@@ -1190,8 +1334,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 		};
 	}
 
-	// TODO: Route MCP task/context operations through the gateway once it exposes orchestration endpoints.
-	// For now we talk directly to the microservices to avoid daemon-held LevelDB locks.
+	// Default routing is gateway -> tasks/context microservices.
+	// Optional legacy daemon fallback is disabled unless MCP_ENABLE_DAEMON_FALLBACK=true.
 	const taskServiceUrl = resolveTaskServiceBaseUrl();
 	logTaskServiceTarget(taskServiceUrl);
 	const taskClient = createTaskClient({
@@ -1205,6 +1349,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 		environment,
 		url: contextServiceUrl,
 	});
+    const withTaskServiceFallback = async <T>(
+        operationName: string,
+        primary: () => Promise<T>,
+        fallback: () => Promise<T>,
+    ): Promise<T> => {
+        try {
+            return await primary();
+        } catch (error) {
+            if (!daemonFallbackEnabled || !shouldFallbackToDaemonForTaskService(error)) {
+                throw error;
+            }
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(
+                `[MCP] Task service operation ${operationName} failed (${message}); falling back to daemon TCP`,
+            );
+            return await fallback();
+        }
+    };
 
 	try {
 		switch (name) {
@@ -1221,19 +1383,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 			}
 
 			case "create_task": {
-				const newTask = await taskClient.createTask(
-					{
-						title: args.title as string,
-						description: args.description as string,
-						priority: (args.priority as "low" | "medium" | "high") || "medium",
-						type: normalizeTaskType(args.type),
-						assignedTo: args.assignedTo as string | undefined,
-						dependencies: args.dependencies as string[] | undefined,
-						collaborators: args.collaborators as string[] | undefined,
-						watchers: args.watchers as string[] | undefined,
-					},
-					args.createdBy as string | undefined,
-				);
+				const newTask = await withTaskServiceFallback(
+                    "create_task",
+                    () =>
+                        taskClient.createTask(
+                            {
+                                title: args.title as string,
+                                description: args.description as string,
+                                priority: (args.priority as "low" | "medium" | "high") || "medium",
+                                type: normalizeTaskType(args.type),
+                                assignedTo: args.assignedTo as string | undefined,
+                                dependencies: args.dependencies as string[] | undefined,
+                                collaborators: args.collaborators as string[] | undefined,
+                                watchers: args.watchers as string[] | undefined,
+                            },
+                            args.createdBy as string | undefined,
+                        ),
+                    () =>
+                        sendDaemonCommand("create_task", {
+                            title: args.title as string,
+                            description: args.description as string,
+                            priority: (args.priority as "low" | "medium" | "high") || "medium",
+                            type: normalizeTaskType(args.type) ?? "task",
+                            assignedTo: args.assignedTo as string | undefined,
+                            dependencies: args.dependencies as string[] | undefined,
+                            collaborators: args.collaborators as string[] | undefined,
+                            watchers: args.watchers as string[] | undefined,
+                            createdBy: args.createdBy as string | undefined,
+                        }),
+                );
 				return {
 					content: [
 						{
@@ -1251,11 +1429,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 				const shouldSearch = Boolean(
 					options.query || options.filters || options.sort || options.limit || options.offset,
 				);
-				const result = shouldSearch
-					? await taskClient.searchTasks(options)
-					: { tasks: await taskClient.listTasks(), total: 0 };
+				const result = await withTaskServiceFallback(
+                    "list_tasks",
+                    () =>
+                        shouldSearch
+                            ? taskClient.searchTasks(options)
+                            : taskClient.listTasks().then((tasks) => ({
+                                tasks,
+                                total: tasks.length,
+                            })),
+                    async () => {
+                        if (shouldSearch) {
+                            const fallbackSearch = await sendDaemonCommand(
+                                "search_tasks",
+                                { query: options },
+                            );
+                            return normalizeTaskSearchResult(fallbackSearch);
+                        }
+                        const fallbackTasks = await sendDaemonCommand("list_tasks", {});
+                        return normalizeTaskSearchResult(fallbackTasks);
+                    },
+                );
 				const taskList = result.tasks;
-				const total = shouldSearch ? result.total : taskList.length;
+				const total = result.total;
 				return {
 					content: [
 						{
@@ -1267,7 +1463,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 			}
 
 			case "get_task": {
-				const task = await taskClient.getTask(args.id as string);
+				const task = await withTaskServiceFallback(
+                    "get_task",
+                    () => taskClient.getTask(args.id as string),
+                    () => sendDaemonCommand("get_task", { id: args.id as string }),
+                );
 				if (!task) {
 					throw new Error(`Task with ID ${args.id} not found`);
 				}
@@ -1282,11 +1482,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 			}
 
 			case "update_task": {
-				const updatedTask = await taskClient.updateTask(
-					args.id as string,
-					(args.updates as Record<string, unknown>) ?? {},
-					args.changedBy as string | undefined,
-				);
+				const updatedTask = await withTaskServiceFallback(
+                    "update_task",
+                    () =>
+                        taskClient.updateTask(
+                            args.id as string,
+                            (args.updates as Record<string, unknown>) ?? {},
+                            args.changedBy as string | undefined,
+                        ),
+                    () =>
+                        sendDaemonCommand("update_task", {
+                            id: args.id as string,
+                            updates: (args.updates as Record<string, unknown>) ?? {},
+                            changedBy: args.changedBy as string | undefined,
+                        }),
+                );
 				return {
 					content: [
 						{
@@ -1298,11 +1508,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 			}
 
 			case "update_task_status": {
-				const updatedTask = await taskClient.updateTaskStatus(
-					args.id as string,
-					args.status as "todo" | "in-progress" | "done" | "invalid",
-					args.changedBy as string | undefined,
-				);
+				const updatedTask = await withTaskServiceFallback(
+                    "update_task_status",
+                    () =>
+                        taskClient.updateTaskStatus(
+                            args.id as string,
+                            args.status as "todo" | "in-progress" | "done" | "invalid",
+                            args.changedBy as string | undefined,
+                        ),
+                    () =>
+                        sendDaemonCommand("update_task_status", {
+                            id: args.id as string,
+                            status: args.status as "todo" | "in-progress" | "done" | "invalid",
+                            changedBy: args.changedBy as string | undefined,
+                        }),
+                );
 				return {
 					content: [
 						{
@@ -1314,11 +1534,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 			}
 
 			case "update_task_priority": {
-				const priorityUpdatedTask = await taskClient.updateTaskPriority(
-					args.id as string,
-					args.priority as "low" | "medium" | "high",
-					args.changedBy as string | undefined,
-				);
+				const priorityUpdatedTask = await withTaskServiceFallback(
+                    "update_task_priority",
+                    () =>
+                        taskClient.updateTaskPriority(
+                            args.id as string,
+                            args.priority as "low" | "medium" | "high",
+                            args.changedBy as string | undefined,
+                        ),
+                    () =>
+                        sendDaemonCommand("update_task_priority", {
+                            id: args.id as string,
+                            priority: args.priority as "low" | "medium" | "high",
+                            changedBy: args.changedBy as string | undefined,
+                        }),
+                );
 				return {
 					content: [
 						{
@@ -1330,7 +1560,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 			}
 
 			case "delete_task":
-				await taskClient.deleteTask(args.id as string);
+                await withTaskServiceFallback(
+                    "delete_task",
+                    () => taskClient.deleteTask(args.id as string),
+                    () => sendDaemonCommand("delete_task", { id: args.id as string }),
+                );
 				return {
 					content: [
 						{
@@ -1375,6 +1609,52 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 					],
 				};
 			}
+
+			case "get_file_context": {
+                const filePath = normalizeOptionalString(args.filePath);
+                if (!filePath) {
+                    throw new Error("filePath is required");
+                }
+                const operation = normalizeOptionalString(args.operation) ?? "file-context-lookup";
+                const taskId = normalizeOptionalString(args.taskId);
+                const taskTitle = normalizeOptionalString(args.taskTitle);
+                const reason = normalizeOptionalString(args.reason);
+                const relatedFiles = normalizeStringArray(args.relatedFiles);
+                const todos = normalizeStringArray(args.todos);
+                const { absolutePath, repoPath } = resolveWorkspaceFilePath(filePath);
+                await access(absolutePath);
+                const fileContent = await readFile(absolutePath, "utf-8");
+                const headerContextId =
+                    extractFileContextIdFromContent(fileContent)
+                    ?? normalizeOptionalString(args.contextId)
+                    ?? undefined;
+                const lookupRecord = await contextClient.getOrCreateFileContext({
+                    filePath: repoPath,
+                    ...(headerContextId ? { contextId: headerContextId } : {}),
+                    operation,
+                    ...(taskId ? { taskId } : {}),
+                    ...(taskTitle ? { taskTitle } : {}),
+                    ...(reason ? { reason } : {}),
+                    ...(relatedFiles ? { relatedFiles } : {}),
+                    ...(todos ? { todos } : {}),
+                });
+                const updatedContent = ensureFileContextHeader(fileContent, lookupRecord.id);
+                const headerUpdated = updatedContent !== fileContent;
+                if (headerUpdated) {
+                    await writeFile(absolutePath, updatedContent, "utf-8");
+                }
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text:
+                                `File context:\n${JSON.stringify(lookupRecord, null, 2)}\n\n`
+                                + `filePath: ${repoPath}\n`
+                                + `headerUpdated: ${headerUpdated}`,
+                        },
+                    ],
+                };
+            }
 
 			case "update_context": {
 				const id = typeof args.id === "string" ? args.id : "";
@@ -1484,7 +1764,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 						],
 					};
 				} else {
-					exec("yarn run daemon &", { cwd: process.cwd(), env: process.env });
+					exec("yarn run worker &", { cwd: process.cwd(), env: process.env });
 					return {
 						content: [
 							{

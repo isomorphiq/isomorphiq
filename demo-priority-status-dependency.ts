@@ -1,4 +1,4 @@
-import { PriorityStatusDeadlockDetector, type PriorityStatusDependency } from "./packages/daemon/src/services/priority-status-deadlock-detector.ts";
+import { PriorityStatusDeadlockDetector, type PriorityStatusDependency } from "./packages/worker/src/services/priority-status-deadlock-detector.ts";
 
 console.log("=== Priority-Status Dependency Demonstration ===\n");
 

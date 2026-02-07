@@ -1,9 +1,12 @@
+// FILE_CONTEXT: "context-0ecfd069-a64f-423c-8b30-d39e0ae033f2"
+
 import { useEffect, useMemo, useState } from "react";
 import type { Task } from "@isomorphiq/tasks/types";
 import { LegendBand } from "../../components/Band.tsx";
 import { SearchAndFilter } from "../../components/SearchAndFilter.tsx";
 import { SectionCard } from "../../components/SectionCard.tsx";
 import { TaskList } from "../../components/TaskCard.tsx";
+import { LoadingSpinner } from "../../components/UIComponents.tsx";
 import type { OfflineTask } from "../../hooks/useOfflineSync.ts";
 
 type TaskSectionProps = {
@@ -15,6 +18,8 @@ type TaskSectionProps = {
     onStatusChange: (taskId: string, newStatus: Task["status"]) => void;
     onPriorityChange: (taskId: string, newPriority: Task["priority"]) => void;
     onDelete: (taskId: string) => void;
+    totalTaskCount: number;
+    isLoading: boolean;
 };
 
 export function TaskSection({
@@ -26,10 +31,16 @@ export function TaskSection({
     onStatusChange,
     onPriorityChange,
     onDelete,
+    totalTaskCount,
+    isLoading,
 }: TaskSectionProps) {
     const [page, setPage] = useState(1);
 
     const PAGE_SIZE = 8;
+    const showLoadingState = isLoading && tasks.length === 0;
+    const showPagination = !showLoadingState && tasks.length > 0;
+    const emptyMessage =
+        totalTaskCount === 0 ? "No tasks yet - create your first one!" : "No tasks match your filters.";
 
     const pageCount = useMemo(
         () => Math.max(1, Math.ceil(tasks.length / PAGE_SIZE)),
@@ -114,7 +125,7 @@ export function TaskSection({
         <section>
             <SectionCard
                 title="All Tasks"
-                countLabel={`${visibleTasks.length} of ${tasks.length} shown`}
+                countLabel={showLoadingState ? "Loading tasks..." : `${visibleTasks.length} of ${tasks.length} shown`}
             >
                 <section
                     style={{
@@ -151,15 +162,23 @@ export function TaskSection({
                     )}
                 </section>
                 <LegendBand />
-                {renderPagination()}
-                <TaskList
-                    tasks={visibleTasks}
-                    empty="No tasks match your filters."
-                    onStatusChange={onStatusChange}
-                    onPriorityChange={onPriorityChange}
-                    onDelete={onDelete}
-                />
-                {renderPagination()}
+                {showLoadingState ? (
+                    <div style={{ padding: "28px 0", display: "flex", justifyContent: "center" }}>
+                        <LoadingSpinner message="Loading tasks..." />
+                    </div>
+                ) : (
+                    <>
+                        {showPagination && renderPagination()}
+                        <TaskList
+                            tasks={visibleTasks}
+                            empty={emptyMessage}
+                            onStatusChange={onStatusChange}
+                            onPriorityChange={onPriorityChange}
+                            onDelete={onDelete}
+                        />
+                        {showPagination && renderPagination()}
+                    </>
+                )}
             </SectionCard>
         </section>
     );

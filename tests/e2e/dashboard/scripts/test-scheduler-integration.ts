@@ -11,7 +11,7 @@ async function testSchedulerIntegration() {
 	
 	// Start daemon
 	console.log("Starting daemon for scheduler test...");
-	const daemonProcess = spawn("yarn", ["run", "daemon"], {
+	const daemonProcess = spawn("yarn", ["run", "worker"], {
 		cwd: process.cwd(),
 		env: testEnv,
 		stdio: "pipe",

@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-e45301f3-e260-4422-a8ec-e7fe7500fc41"
+
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ThemeProvider, useTheme } from '../src/components/ThemeProvider.tsx';

@@ -70,7 +70,7 @@ export const startTestDaemon = async (): Promise<TestDaemonHandle> => {
     const savedSearchesPath = path.join(dbRoot, "saved-searches-db");
     const auditPath = path.join(dbRoot, "task-audit");
 
-    const daemonProcess = spawn("yarn", ["run", "daemon"], {
+    const daemonProcess = spawn("yarn", ["run", "worker"], {
         cwd: process.cwd(),
         env: {
             ...process.env,

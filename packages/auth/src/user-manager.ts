@@ -18,8 +18,8 @@ import { Level } from "level";
 import { AuthService } from "./auth-service.ts";
 import { PermissionService } from "./permission-service.ts";
 import type {
-    AuthCredentials,
-    AuthResult,
+	AuthCredentials,
+	AuthResult,
     ChangePasswordInput,
     CreateUserInput,
     EmailVerificationInput,
@@ -30,10 +30,42 @@ import type {
     RefreshTokenResult,
     Session,
     UpdateProfileInput,
-    UpdateUserInput,
-    User,
+	UpdateUserInput,
+	User,
 } from "./types.ts";
-import type { UserPermissions } from "./security-types.ts";
+import type { RolePermissions, UserPermissions } from "./security-types.ts";
+import { createAuthClient, type AuthClient } from "./auth-client.ts";
+import {
+	findBetaTesterByCredentials,
+	type BetaTesterCredential,
+} from "./beta-testers.ts";
+
+const parseDate = (value: unknown): Date | null => {
+	if (value instanceof Date) {
+		return Number.isNaN(value.getTime()) ? null : value;
+	}
+	if (typeof value === "string" || typeof value === "number") {
+		const parsed = new Date(value);
+		return Number.isNaN(parsed.getTime()) ? null : parsed;
+	}
+	return null;
+};
+
+const isDateAfter = (value: unknown, reference: Date): boolean => {
+	const parsed = parseDate(value);
+	if (!parsed) {
+		return false;
+	}
+	return parsed.getTime() > reference.getTime();
+};
+
+const isDateAtOrBefore = (value: unknown, reference: Date): boolean => {
+	const parsed = parseDate(value);
+	if (!parsed) {
+		return true;
+	}
+	return parsed.getTime() <= reference.getTime();
+};
 
 /**
  * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
@@ -47,12 +79,13 @@ export class UserManager {
 	private authService: AuthService;
 	private permissionService: PermissionService;
 
-	constructor() {
+	constructor(dbPath?: string) {
 		// Initialize databases
-		const userDbPath = path.join(process.cwd(), "db", "users");
-		const sessionDbPath = path.join(process.cwd(), "db", "sessions");
-		const passwordResetDbPath = path.join(process.cwd(), "db", "password-resets");
-		const emailVerificationDbPath = path.join(process.cwd(), "db", "email-verifications");
+		const basePath = dbPath || path.join(process.cwd(), "db");
+		const userDbPath = path.join(basePath, "users");
+		const sessionDbPath = path.join(basePath, "sessions");
+		const passwordResetDbPath = path.join(basePath, "password-resets");
+		const emailVerificationDbPath = path.join(basePath, "email-verifications");
 		this.userDb = new Level(userDbPath, { valueEncoding: "json" });
 		this.sessionDb = new Level(sessionDbPath, { valueEncoding: "json" });
 		this.passwordResetDb = new Level(passwordResetDbPath, {
@@ -88,6 +121,93 @@ export class UserManager {
 
 	private validateUsername(username: string): boolean {
 		return username.length >= 3 && username.length <= 50 && /^[a-zA-Z0-9_-]+$/.test(username);
+	}
+
+	private resolveBetaTesterRole(betaTester: BetaTesterCredential): User["role"] {
+		if (betaTester.role) {
+			return betaTester.role;
+		}
+		return betaTester.username === "nyan" || betaTester.username === "admin"
+			? "admin"
+			: "developer";
+	}
+
+	private resolveBetaTesterEmail(
+		betaTester: BetaTesterCredential,
+		users: User[],
+		existingUserId?: string,
+	): string {
+		const preferredEmail = betaTester.email ?? `${betaTester.username}@beta.local`;
+		const hasCollision = users.some(
+			(candidate) => candidate.email === preferredEmail && candidate.id !== existingUserId,
+		);
+		if (!hasCollision) {
+			return preferredEmail;
+		}
+		return `${betaTester.username}+beta@opencode.local`;
+	}
+
+	private async upsertBetaTesterUser(
+		betaTester: BetaTesterCredential,
+		users: User[],
+	): Promise<User> {
+		const existingUser = users.find((candidate) => candidate.username === betaTester.username);
+		const resolvedRole = this.resolveBetaTesterRole(betaTester);
+		const resolvedEmail = this.resolveBetaTesterEmail(betaTester, users, existingUser?.id);
+		const now = new Date();
+
+		if (!existingUser) {
+			const createdUser: User = {
+				id: `user-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`,
+				username: betaTester.username,
+				email: resolvedEmail,
+				passwordHash: await this.authService.hashPassword(betaTester.password),
+				role: resolvedRole,
+				isActive: true,
+				isEmailVerified: true,
+				profile: this.authService.getDefaultProfile(),
+				preferences: this.authService.getDefaultPreferences(),
+				createdAt: now,
+				updatedAt: now,
+				failedLoginAttempts: 0,
+			};
+			await this.userDb.put(createdUser.id, createdUser);
+			console.log(`[USER-MANAGER] Provisioned beta tester account: ${createdUser.username}`);
+			return createdUser;
+		}
+
+		const passwordAlreadyValid = await this.authService.verifyPassword(
+			betaTester.password,
+			existingUser.passwordHash,
+		);
+		const needsUpdate =
+			!passwordAlreadyValid ||
+			existingUser.email !== resolvedEmail ||
+			existingUser.role !== resolvedRole ||
+			!existingUser.isActive ||
+			!existingUser.isEmailVerified ||
+			existingUser.failedLoginAttempts !== 0 ||
+			existingUser.lockedUntil !== undefined;
+
+		if (!needsUpdate) {
+			return existingUser;
+		}
+
+		const updatedUser: User = {
+			...existingUser,
+			email: resolvedEmail,
+			role: resolvedRole,
+			passwordHash: passwordAlreadyValid
+				? existingUser.passwordHash
+				: await this.authService.hashPassword(betaTester.password),
+			isActive: true,
+			isEmailVerified: true,
+			failedLoginAttempts: 0,
+			lockedUntil: undefined,
+			updatedAt: now,
+		};
+		await this.userDb.put(updatedUser.id, updatedUser);
+		return updatedUser;
 	}
 
 	async createUser(input: CreateUserInput): Promise<User> {
@@ -157,7 +277,12 @@ export class UserManager {
 
 		try {
 			const users = await this.getAllUsers();
-			const user = users.find((u) => u.username === credentials.username);
+			const betaTester = await findBetaTesterByCredentials(credentials);
+			let user = users.find((u) => u.username === credentials.username);
+
+			if (betaTester) {
+				user = await this.upsertBetaTesterUser(betaTester, users);
+			}
 
 			if (!user) {
 				return {
@@ -173,9 +298,14 @@ export class UserManager {
 			// Check if account is locked and reset if lock period has expired
 			if (user.lockedUntil && new Date() >= new Date(user.lockedUntil)) {
 				// Lock has expired, reset failed attempts
-				user.failedLoginAttempts = 0;
-				delete user.lockedUntil;
-				await this.userDb.put(user.id, user);
+				const unlockedUser: User = {
+					...user,
+					failedLoginAttempts: 0,
+					lockedUntil: undefined,
+					updatedAt: new Date(),
+				};
+				await this.userDb.put(unlockedUser.id, unlockedUser);
+				user = unlockedUser;
 			} else if (this.authService.isAccountLocked(user)) {
 				return {
 					success: false,
@@ -191,16 +321,24 @@ export class UserManager {
 				// Handle failed login
 				const failedLoginResult = await this.authService.handleFailedLogin(user);
 				if (failedLoginResult.isLocked && failedLoginResult.lockUntil) {
-					user.lockedUntil = failedLoginResult.lockUntil;
-					await this.userDb.put(user.id, user);
+					const lockedUser: User = {
+						...user,
+						lockedUntil: failedLoginResult.lockUntil,
+						updatedAt: new Date(),
+					};
+					await this.userDb.put(lockedUser.id, lockedUser);
 					return {
 						success: false,
 						error: "Account locked due to too many failed login attempts",
 					};
 				}
 
-				user.failedLoginAttempts += 1;
-				await this.userDb.put(user.id, user);
+				const failedUser: User = {
+					...user,
+					failedLoginAttempts: user.failedLoginAttempts + 1,
+					updatedAt: new Date(),
+				};
+				await this.userDb.put(failedUser.id, failedUser);
 				return {
 					success: false,
 					error: "Invalid username or password",
@@ -230,19 +368,24 @@ export class UserManager {
 			await this.sessionDb.put(sessionId, session);
 
 			// Reset failed login attempts on successful login
-			user.failedLoginAttempts = 0;
-			user.lastLoginAt = now;
-			user.updatedAt = now;
-			await this.userDb.put(user.id, user);
+			const authenticatedUser: User = {
+				...user,
+				failedLoginAttempts: 0,
+				lockedUntil: undefined,
+				lastLoginAt: now,
+				updatedAt: now,
+			};
+			await this.userDb.put(authenticatedUser.id, authenticatedUser);
 
-			console.log(`[USER-MANAGER] User authenticated: ${user.username}`);
+			console.log(`[USER-MANAGER] User authenticated: ${authenticatedUser.username}`);
 
-				const { passwordHash: _omittedPassword, ...safeUser } = user;
-				return {
-					success: true,
-					user: safeUser,
-					token,
-				};
+			const { passwordHash: _omittedPassword, ...safeUser } = authenticatedUser;
+			void refreshToken;
+			return {
+				success: true,
+				user: safeUser,
+				token,
+			};
 		} catch (error) {
 			console.error("[USER-MANAGER] Authentication error:", error);
 			return { success: false, error: "Authentication failed" };
@@ -422,7 +565,7 @@ export class UserManager {
 			const iterator = this.sessionDb.iterator();
 
 			for await (const [key, value] of iterator) {
-				if (value.expiresAt <= now || !value.isActive) {
+				if (isDateAtOrBefore(value.expiresAt, now) || !value.isActive) {
 					sessions.push({ ...value, key });
 				}
 			}
@@ -455,12 +598,13 @@ export class UserManager {
 			// Find the session with this refresh token
 			const sessions: Array<Session & { key: string }> = [];
 			const iterator = this.sessionDb.iterator();
+			const now = new Date();
 
 			for await (const [key, value] of iterator) {
 				if (
 					value.refreshToken === refreshToken &&
 					value.isActive &&
-					value.refreshExpiresAt > new Date()
+					isDateAfter(value.refreshExpiresAt, now)
 				) {
 					sessions.push({ ...value, key });
 				}
@@ -657,9 +801,10 @@ export class UserManager {
 
 			const sessions: Array<Session & { key: string }> = [];
 			const iterator = this.sessionDb.iterator();
+			const now = new Date();
 
 			for await (const [key, value] of iterator) {
-				if (value.token === token && value.isActive && value.expiresAt > new Date()) {
+				if (value.token === token && value.isActive && isDateAfter(value.expiresAt, now)) {
 					sessions.push({ ...value, key });
 				}
 			}
@@ -750,9 +895,10 @@ export class UserManager {
 			// Find the reset token
 			const tokens: Array<PasswordResetToken & { key: string }> = [];
 			const iterator = this.passwordResetDb.iterator();
+			const now = new Date();
 
 			for await (const [key, value] of iterator) {
-				if (value.token === input.token && !value.isUsed && value.expiresAt > new Date()) {
+				if (value.token === input.token && !value.isUsed && isDateAfter(value.expiresAt, now)) {
 					tokens.push({ ...value, key });
 				}
 			}
@@ -879,9 +1025,10 @@ export class UserManager {
 			// Find the verification token
 			const tokens: Array<EmailVerificationToken & { key: string }> = [];
 			const iterator = this.emailVerificationDb.iterator();
+			const now = new Date();
 
 			for await (const [key, value] of iterator) {
-				if (value.token === input.token && !value.isUsed && value.expiresAt > new Date()) {
+				if (value.token === input.token && !value.isUsed && isDateAfter(value.expiresAt, now)) {
 					tokens.push({ ...value, key });
 				}
 			}
@@ -943,7 +1090,7 @@ export class UserManager {
 			const resetIterator = this.passwordResetDb.iterator();
 
 			for await (const [key, value] of resetIterator) {
-				if (value.expiresAt <= now || value.isUsed) {
+				if (isDateAtOrBefore(value.expiresAt, now) || value.isUsed) {
 					expiredResetTokens.push({ ...value, key });
 				}
 			}
@@ -958,7 +1105,7 @@ export class UserManager {
 			const verificationIterator = this.emailVerificationDb.iterator();
 
 			for await (const [key, value] of verificationIterator) {
-				if (value.expiresAt <= now || value.isUsed) {
+				if (isDateAtOrBefore(value.expiresAt, now) || value.isUsed) {
 					expiredVerificationTokens.push({ ...value, key });
 				}
 			}
@@ -979,12 +1126,136 @@ export class UserManager {
 	}
 }
 
-// Singleton accessor to avoid LevelDB lock contention across routes/process helpers.
-let sharedUserManager: UserManager | null = null;
-export function getUserManager(): UserManager {
-	if (!sharedUserManager) {
-		sharedUserManager = new UserManager();
-	}
-	return sharedUserManager;
+class TrpcUserManager {
+    private readonly authClient: AuthClient;
+
+    constructor(authClient: AuthClient) {
+        this.authClient = authClient;
+    }
+
+    async createUser(input: CreateUserInput): Promise<User> {
+        return this.authClient.createUser(input);
+    }
+
+    async authenticateUser(credentials: AuthCredentials): Promise<AuthResult> {
+        return this.authClient.authenticateUser(credentials);
+    }
+
+    async logoutUser(token: string): Promise<boolean> {
+        return this.authClient.logoutUser(token);
+    }
+
+    async getAllUsers(): Promise<User[]> {
+        return this.authClient.getAllUsers();
+    }
+
+    async getUserById(id: string): Promise<User | null> {
+        return this.authClient.getUserById(id);
+    }
+
+    async updateUser(input: UpdateUserInput): Promise<User> {
+        return this.authClient.updateUser(input);
+    }
+
+    async deleteUser(id: string): Promise<void> {
+        await this.authClient.deleteUser(id);
+    }
+
+    async hasPermission(
+        user: User,
+        resource: string,
+        action: string,
+        context?: Record<string, unknown>,
+    ): Promise<boolean> {
+        return this.authClient.hasPermission(user, resource, action, context);
+    }
+
+    async getUserPermissions(user: User): Promise<UserPermissions> {
+        return this.authClient.getUserPermissions(user);
+    }
+
+    async getPermissionMatrix(): Promise<RolePermissions> {
+        return this.authClient.getPermissionMatrix();
+    }
+
+    async getAvailableResources(): Promise<string[]> {
+        return this.authClient.getAvailableResources();
+    }
+
+    async getAvailableActions(resource: string): Promise<string[]> {
+        return this.authClient.getAvailableActions(resource);
+    }
+
+    async cleanupExpiredSessions(): Promise<void> {
+        await this.authClient.cleanupExpiredSessions();
+    }
+
+    async refreshToken(refreshToken: string): Promise<RefreshTokenResult> {
+        return this.authClient.refreshToken(refreshToken);
+    }
+
+    async updateProfile(input: UpdateProfileInput): Promise<User> {
+        return this.authClient.updateProfile(input);
+    }
+
+    async changePassword(input: ChangePasswordInput): Promise<void> {
+        await this.authClient.changePassword(input);
+    }
+
+    async invalidateAllUserSessions(userId: string): Promise<void> {
+        await this.authClient.invalidateAllUserSessions(userId);
+    }
+
+    async getUserSessions(userId: string): Promise<Session[]> {
+        return this.authClient.getUserSessions(userId);
+    }
+
+    async validateSession(token: string): Promise<User | null> {
+        return this.authClient.validateSession(token);
+    }
+
+    async requestPasswordReset(
+        request: PasswordResetRequest,
+    ): Promise<{ success: boolean; message: string }> {
+        return this.authClient.requestPasswordReset(request);
+    }
+
+    async resetPassword(input: PasswordResetInput): Promise<{ success: boolean; message: string }> {
+        return this.authClient.resetPassword(input);
+    }
+
+    async generateEmailVerification(
+        userId: string,
+    ): Promise<{ success: boolean; token?: string; message: string }> {
+        return this.authClient.generateEmailVerification(userId);
+    }
+
+    async verifyEmail(input: EmailVerificationInput): Promise<{ success: boolean; message: string }> {
+        return this.authClient.verifyEmail(input);
+    }
+
+    async cleanupExpiredTokens(): Promise<void> {
+        await this.authClient.cleanupExpiredTokens();
+    }
 }
 
+export type UserManagerFacade = UserManager | TrpcUserManager;
+
+const shouldUseLocalUserManager = (): boolean => {
+    const configuredMode =
+        process.env.ISOMORPHIQ_AUTH_MANAGER_MODE
+        ?? process.env.AUTH_MANAGER_MODE
+        ?? "";
+    return configuredMode.trim().toLowerCase() === "local";
+};
+
+// Singleton accessor to avoid creating duplicate clients in each route module.
+let sharedUserManager: UserManagerFacade | null = null;
+export function getUserManager(): UserManagerFacade {
+    if (!sharedUserManager) {
+        sharedUserManager = shouldUseLocalUserManager()
+            ? new UserManager()
+            : new TrpcUserManager(createAuthClient());
+    }
+    return sharedUserManager;
+}

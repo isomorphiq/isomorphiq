@@ -1,6 +1,6 @@
-import { z } from "zod";
+// FILE_CONTEXT: "context-a2d6ff09-d979-49d1-81f9-31ff26bc956c"
 
-// Dashboard widget definitions and persistence helpers.
+import { z } from "zod";
 
 export const WidgetPlacementSchema = z.object({
     id: z.string(),
@@ -8,13 +8,13 @@ export const WidgetPlacementSchema = z.object({
     x: z.number().int().nonnegative(),
     y: z.number().int().nonnegative(),
     w: z.number().int().positive(),
-    h: z.number().int().positive(),
+    h: z.number().int().positive()
 });
 export type WidgetPlacement = z.output<typeof WidgetPlacementSchema>;
 
 export const DashboardLayoutSchema = z.object({
     version: z.literal(1),
-    placements: z.array(WidgetPlacementSchema),
+    placements: z.array(WidgetPlacementSchema)
 });
 export type DashboardLayout = z.output<typeof DashboardLayoutSchema>;
 
@@ -22,25 +22,17 @@ const STORAGE_KEY = "supervisor.dashboard.layout.v1";
 
 const defaultLayout = (): DashboardLayout => ({
     version: 1,
-    placements: [],
+    placements: []
 });
 
 const safeJsonParse = (raw: string | null): unknown | null => {
-    if (!raw) {
-        return null;
-    }
-    try {
-        return JSON.parse(raw);
-    } catch {
-        return null;
-    }
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
 };
 
 const readFromStorage = (): DashboardLayout => {
     const storage = globalThis.localStorage;
-    if (!storage) {
-        return defaultLayout();
-    }
+    if (!storage) return defaultLayout();
     const parsed = safeJsonParse(storage.getItem(STORAGE_KEY));
     const validated = DashboardLayoutSchema.safeParse(parsed);
     return validated.success ? validated.data : defaultLayout();
@@ -48,9 +40,7 @@ const readFromStorage = (): DashboardLayout => {
 
 const writeToStorage = (layout: DashboardLayout): void => {
     const storage = globalThis.localStorage;
-    if (!storage) {
-        return;
-    }
+    if (!storage) return;
     storage.setItem(STORAGE_KEY, JSON.stringify(layout));
 };
 
@@ -58,9 +48,7 @@ export const loadDashboardLayout = (): DashboardLayout => readFromStorage();
 
 const createWidgetId = (): string => {
     const cryptoApi = globalThis.crypto;
-    if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
-        return cryptoApi.randomUUID();
-    }
+    if (cryptoApi && typeof cryptoApi.randomUUID === "function") return cryptoApi.randomUUID();
     return `widget-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 };
 
@@ -72,14 +60,13 @@ const nextPlacement = (
         const bottom = placement.y + placement.h;
         return bottom > acc ? bottom : acc;
     }, 0);
-
     return {
         id: createWidgetId(),
         widgetType,
         x: 0,
         y: maxY,
         w: 4,
-        h: 3,
+        h: 3
     };
 };
 
@@ -90,7 +77,7 @@ export const addWidgetToDashboard = (
     const placement = nextPlacement(layout.placements, widgetType);
     const updated: DashboardLayout = {
         version: 1,
-        placements: [...layout.placements, placement],
+        placements: [...layout.placements, placement]
     };
     writeToStorage(updated);
     return updated;
@@ -98,13 +85,13 @@ export const addWidgetToDashboard = (
 
 export const updateWidgetPlacement = (
     layout: DashboardLayout,
-    placement: WidgetPlacement,
+    placement: WidgetPlacement
 ): DashboardLayout => {
     const updated: DashboardLayout = {
         version: 1,
         placements: layout.placements.map((item) =>
-            item.id === placement.id ? placement : item,
-        ),
+            item.id === placement.id ? placement : item
+        )
     };
     writeToStorage(updated);
     return updated;
@@ -112,11 +99,11 @@ export const updateWidgetPlacement = (
 
 export const removeWidgetFromDashboard = (
     layout: DashboardLayout,
-    widgetId: string,
+    widgetId: string
 ): DashboardLayout => {
     const updated: DashboardLayout = {
         version: 1,
-        placements: layout.placements.filter((item) => item.id !== widgetId),
+        placements: layout.placements.filter((item) => item.id !== widgetId)
     };
     writeToStorage(updated);
     return updated;

@@ -1,80 +1,263 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
-import { expect } from "../../test-utils/expect.ts";
+// FILE_CONTEXT: "context-4108fc18-a62b-4d52-b7b5-79d1854d4777"
+
+import { test, expect } from "@playwright/test";
+
+import { canUseLocalSockets, NETWORK_SKIP_REASON } from "./test-environment.ts";
+
 import { createServer } from "node:http";
 
+const describe = test.describe;
+const it = test;
+const before = test.beforeAll;
+const after = test.afterAll;
+const beforeEach = test.beforeEach;
+const afterEach = test.afterEach;
+
+let localSocketAccess = true;
+
+before(async () => {
+    localSocketAccess = await canUseLocalSockets();
+});
+
+beforeEach(() => {
+    test.skip(!localSocketAccess, NETWORK_SKIP_REASON);
+});
+
 describe("Dashboard End-to-End Workflow", () => {
-	let httpServer: any;
-	let dashboardPort: number;
+    let httpServer;
+    let dashboardPort;
 
-	beforeEach(async () => {
-		// Start a mock daemon HTTP server that responds like the dashboard
-		httpServer = createServer((req: any, res: any) => {
-			// Mock the different API endpoints
-			if (req.url === "/") {
-				res.writeHead(200, { "Content-Type": "text/html" });
-				res.end("<!DOCTYPE html><html><head><title>Test Dashboard</title></head><body>Dashboard</body></html>");
-			} else if (req.url?.startsWith("/api/metrics")) {
-				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify({
-					tasks: { total: 5, pending: 2, inProgress: 1, completed: 2 },
-					daemon: { uptime: 3600, memory: { used: 50000000, total: 100000000 } },
-					health: { status: "healthy", memoryUsage: 50, wsConnections: 1, tcpConnected: true }
-				}));
-			} else if (req.url?.startsWith("/api/tasks")) {
-				res.writeHead(200, { "Content-Type": "application/json" });
-				res.end(JSON.stringify([
-					{
-						id: "task-1",
-						title: "Test Task 1",
-						description: "First test task",
-						status: "todo",
-						priority: "high",
-						createdAt: new Date().toISOString(),
-						updatedAt: new Date().toISOString()
-					},
-					{
-						id: "task-2", 
-						title: "Test Task 2",
-						description: "Second test task",
-						status: "in-progress",
-						priority: "medium",
-						createdAt: new Date().toISOString(),
-						updatedAt: new Date().toISOString()
-					}
-				]));
-			} else if (req.url?.startsWith("/api/tasks/search")) {
-				const url = new URL(req.url, `http://localhost:${dashboardPort}`);
-				const query = url.searchParams.get("q") || "";
-				
-				res.writeHead(200, { "Content-Type": "application/json" });
-				
-				// Mock search functionality
-				const allTasks = [
-					{ id: "task-1", title: "Test Task 1", description: "First test task", status: "todo", priority: "high" },
-					{ id: "task-2", title: "Test Task 2", description: "Second test task", status: "in-progress", priority: "medium" },
-					{ id: "task-3", title: "Important Task", description: "Critical task", status: "done", priority: "high" }
-				];
-				
-				const filtered = query ? 
-					allTasks.filter(task => 
-						task.title.toLowerCase().includes(query.toLowerCase()) ||
-						task.description.toLowerCase().includes(query.toLowerCase())
-					) : allTasks;
-				
-				res.end(JSON.stringify(filtered));
-			} else {
-				res.writeHead(404);
-				res.end("Not Found");
-			}
-		});
+    beforeEach(async () => {
+        const now = new Date().toISOString();
+        const listTasks = [
+            {
+                id: "task-1",
+                title: "Test Task 1",
+                description: "First test task",
+                status: "todo",
+                priority: "high",
+                createdAt: now,
+                updatedAt: now
+            },
+            {
+                id: "task-2",
+                title: "Test Task 2",
+                description: "Second test task",
+                status: "in-progress",
+                priority: "medium",
+                createdAt: now,
+                updatedAt: now
+            }
+        ];
+        const searchTasks = [
+            ...listTasks,
+            {
+                id: "task-3",
+                title: "Important Task",
+                description: "Critical task",
+                status: "done",
+                priority: "high",
+                createdAt: now,
+                updatedAt: now
+            }
+        ];
+        const metricsPayload = {
+            tasks: {
+                total: 5,
+                pending: 2,
+                inProgress: 1,
+                completed: 2,
+                byPriority: { high: 2, medium: 2, low: 1 },
+                recent: []
+            },
+            daemon: { uptime: 3600, memory: { used: 50000000, total: 100000000 } },
+            health: { status: "healthy", memoryUsage: 50, wsConnections: 1, tcpConnected: true },
+            system: { nodeVersion: process.version, platform: process.platform }
+        };
 
-		// Find available port
-		dashboardPort = 3005 + Math.floor(Math.random() * 1000);
-		
-		await new Promise<void>((resolve) => {
-			httpServer.listen(dashboardPort, () => resolve());
-		});
-	});
+        const sendJson = (res, payload, status = 200) => {
+            res.writeHead(status, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(payload));
+        };
+
+        const readJsonBody = async (req) => {
+            const chunks = [];
+            return await new Promise((resolve) => {
+                req.on("data", (chunk) => {
+                    chunks.push(chunk);
+                });
+                req.on("end", () => {
+                    if (chunks.length === 0) {
+                        resolve({ ok: true, value: {} });
+                        return;
+                    }
+                    const raw = Buffer.concat(chunks).toString("utf8");
+                    try {
+                        resolve({ ok: true, value: JSON.parse(raw) });
+                    } catch (error) {
+                        resolve({ ok: false, value: null });
+                    }
+                });
+            });
+        };
+
+        const normalizeFilterArray = (value) => {
+            if (Array.isArray(value)) {
+                return value;
+            }
+            if (typeof value === "string" && value.length > 0) {
+                return [value];
+            }
+            return [];
+        };
+
+        const applyFilters = (tasks, filters) => {
+            const statusFilters = normalizeFilterArray(filters?.status);
+            const priorityFilters = normalizeFilterArray(filters?.priority);
+            const searchTerm = typeof filters?.search === "string" ? filters.search.toLowerCase() : "";
+
+            const filtered = tasks.filter((task) => {
+                const statusMatch =
+                    statusFilters.length === 0 || statusFilters.includes(task.status);
+                const priorityMatch =
+                    priorityFilters.length === 0 || priorityFilters.includes(task.priority);
+                const searchMatch =
+                    searchTerm.length === 0 ||
+                    task.title.toLowerCase().includes(searchTerm) ||
+                    task.description.toLowerCase().includes(searchTerm);
+                return statusMatch && priorityMatch && searchMatch;
+            });
+
+            const limitValue = typeof filters?.limit === "number" ? filters.limit : filtered.length;
+            const offsetValue = typeof filters?.offset === "number" ? filters.offset : 0;
+            return filtered.slice(offsetValue, offsetValue + limitValue);
+        };
+
+        const generateSessionId = () => {
+            const suffix = Math.random().toString(36).slice(2, 8);
+            return `client_${Date.now()}_${suffix}`;
+        };
+
+        // Start a mock daemon HTTP server that responds like the dashboard
+        httpServer = createServer(async (req, res) => {
+            const method = req.method || "GET";
+            const baseUrl = `http://localhost:${dashboardPort || 0}`;
+            const url = new URL(req.url || "/", baseUrl);
+            const pathname = url.pathname;
+
+            if (pathname === "/") {
+                res.writeHead(200, { "Content-Type": "text/html" });
+                res.end("<!DOCTYPE html><html><head><title>Test Dashboard</title></head><body>Dashboard</body></html>");
+                return;
+            }
+
+            if (pathname === "/api/metrics") {
+                sendJson(res, metricsPayload);
+                return;
+            }
+
+            if (pathname === "/api/tasks/search" && method === "GET") {
+                const query = url.searchParams.get("q") || "";
+                const statusFilter = url.searchParams.get("status");
+                const filtered = searchTasks.filter((task) => {
+                    if (!query) {
+                        return true;
+                    }
+                    const term = query.toLowerCase();
+                    return (
+                        task.title.toLowerCase().includes(term) ||
+                        task.description.toLowerCase().includes(term)
+                    );
+                });
+                const statusApplied = statusFilter
+                    ? filtered.filter((task) => task.status === statusFilter)
+                    : filtered;
+                sendJson(res, statusApplied);
+                return;
+            }
+
+            if (pathname === "/api/tasks" && method === "GET") {
+                const statusFilter = url.searchParams.get("status");
+                const statusApplied = statusFilter
+                    ? listTasks.filter((task) => task.status === statusFilter)
+                    : listTasks;
+                sendJson(res, statusApplied);
+                return;
+            }
+
+            if (pathname === "/api/tasks" && method === "POST") {
+                const body = await readJsonBody(req);
+                if (!body.ok) {
+                    sendJson(res, { error: "Invalid JSON" }, 400);
+                    return;
+                }
+                sendJson(res, { success: true, taskId: "task-3" }, 201);
+                return;
+            }
+
+            if (pathname === "/api/tasks/filtered" && method === "POST") {
+                const body = await readJsonBody(req);
+                if (!body.ok) {
+                    sendJson(res, { error: "Invalid JSON" }, 400);
+                    return;
+                }
+                const filters = body.value?.filters || {};
+                const filtered = applyFilters(listTasks, filters);
+                sendJson(res, filtered);
+                return;
+            }
+
+            if (pathname.startsWith("/api/tasks/status/") && method === "GET") {
+                const taskId = pathname.split("/").pop();
+                const task = listTasks.find((entry) => entry.id === taskId);
+                if (!task) {
+                    res.writeHead(404);
+                    res.end("Not Found");
+                    return;
+                }
+                sendJson(res, { taskId, status: task.status, updatedAt: task.updatedAt });
+                return;
+            }
+
+            if (pathname === "/api/notifications/subscribe" && method === "POST") {
+                const body = await readJsonBody(req);
+                if (!body.ok) {
+                    sendJson(res, { error: "Invalid JSON" }, 400);
+                    return;
+                }
+                const sessionId = body.value?.sessionId || generateSessionId();
+                const taskIds = Array.isArray(body.value?.taskIds) ? body.value.taskIds : [];
+                sendJson(res, {
+                    success: true,
+                    sessionId,
+                    subscribedTasks: taskIds
+                });
+                return;
+            }
+
+            res.writeHead(404);
+            res.end("Not Found");
+        });
+
+        await new Promise((resolve, reject) => {
+            httpServer.once("error", reject);
+            httpServer.listen(0, () => {
+                const address = httpServer.address();
+                if (address && typeof address === "object") {
+                    dashboardPort = address.port;
+                }
+                resolve();
+            });
+        });
+    });
+
+    afterEach(async () => {
+        if (httpServer) {
+            await new Promise((resolve) => {
+                httpServer.close(() => resolve());
+            });
+        }
+    });
 
 	describe("Complete User Workflow", () => {
 		it("should load dashboard homepage", async () => {
@@ -232,14 +415,14 @@ describe("Dashboard End-to-End Workflow", () => {
 			);
 
 			const responses = await Promise.allSettled(requests);
-			const successful = responses.filter(r => r.status === 'fulfilled');
+			const successful = responses.filter(r => r.status === "fulfilled");
 			
 			// All requests should complete successfully
 			expect(successful).toHaveLength(10);
 			
 			// All should have consistent data
 			const metricsArray = await Promise.all(
-				successful.map(r => (r as PromiseFulfilledResult<Response>).value.json())
+				successful.map(response => response.value.json())
 			);
 			
 			// All responses should have the same structure
@@ -490,20 +673,4 @@ describe("Dashboard End-to-End Workflow", () => {
 			expect(data2.sessionId).toMatch(/^client_\d+_[a-z0-9]+$/);
 		});
 	});
-
-		it("should provide task update events structure", async () => {
-			const response = await fetch(`http://localhost:${dashboardPort}/api/tasks`);
-			const tasks = await response.json();
-			
-			// Verify tasks have the structure needed for real-time updates
-			tasks.forEach(task => {
-				expect(task).toHaveProperty("id");
-				expect(task).toHaveProperty("title");
-				expect(task).toHaveProperty("status");
-				expect(task).toHaveProperty("priority");
-				expect(task).toHaveProperty("createdAt");
-				expect(task).toHaveProperty("updatedAt");
-			});
-		});
-	});
-}
+});

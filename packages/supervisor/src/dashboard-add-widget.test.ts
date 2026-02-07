@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addWidgetFromLibrary } from "./dashboard-service.ts";
+import { addWidgetFromLibrary, removeWidgetFromDashboard } from "./dashboard-service.ts";
 import { createInMemoryDashboardStorage } from "./dashboard-storage.ts";
 import type { WidgetLibrary } from "./dashboard-model.ts";
 
@@ -72,4 +72,53 @@ test("returns not-found when widget id is missing", async () => {
     });
 
     assert.deepEqual(result, { type: "not-found", widgetId: "missing" });
+});
+
+test("removes a widget and persists the updated state", async () => {
+    const storage = createInMemoryDashboardStorage();
+    const result = await addWidgetFromLibrary({
+        storage,
+        library: sampleLibrary,
+        widgetId: "cpu"
+    });
+
+    assert.equal(result.type, "added");
+    if (result.type !== "added") {
+        assert.fail("Expected widget to be added");
+    }
+
+    const removal = await removeWidgetFromDashboard({
+        storage,
+        instanceId: result.widget.instanceId
+    });
+
+    assert.equal(removal.type, "removed");
+    if (removal.type === "removed") {
+        assert.equal(removal.state.widgets.length, 0);
+    }
+
+    const loaded = await storage.load();
+    assert.equal(loaded?.widgets.length, 0);
+});
+
+test("returns not-found when removing an unknown widget", async () => {
+    const storage = createInMemoryDashboardStorage();
+    await addWidgetFromLibrary({
+        storage,
+        library: sampleLibrary,
+        widgetId: "cpu"
+    });
+
+    const removal = await removeWidgetFromDashboard({
+        storage,
+        instanceId: "missing-id"
+    });
+
+    assert.equal(removal.type, "not-found");
+    if (removal.type === "not-found") {
+        assert.equal(removal.state.widgets.length, 1);
+    }
+
+    const loaded = await storage.load();
+    assert.equal(loaded?.widgets.length, 1);
 });

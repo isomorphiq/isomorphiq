@@ -43,6 +43,7 @@ export function MobileLayout({ children, showNav = true, showFooter = true }: Mo
 		{ to: "/", label: "Dashboard", icon: "📊" },
 		{ to: "/analytics", label: "Analytics", icon: "📈" },
 		{ to: "/activity", label: "Activity", icon: "🔔" },
+		{ to: "/portfolio", label: "Portfolio", icon: "🗂️", requireAuth: true },
 		{ to: "/profiles", label: "Profiles", icon: "👥" },
 		{ to: "/workflow", label: "Workflow", icon: "🕸️" },
 		{ to: "/dependencies", label: "Dependencies", icon: "🔗" },

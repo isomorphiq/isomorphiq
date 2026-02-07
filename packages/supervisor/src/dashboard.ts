@@ -88,6 +88,22 @@ export const addWidgetToDashboard = (
     };
 };
 
+export const removeWidgetFromDashboard = (
+    state: DashboardState,
+    widgetInstanceId: string
+): DashboardState => {
+    const nextWidgets = state.widgets.filter((widget) => widget.id !== widgetInstanceId);
+    if (nextWidgets.length === state.widgets.length) {
+        return state;
+    }
+
+    return {
+        ...state,
+        widgets: nextWidgets,
+        updatedAt: new Date().toISOString()
+    };
+};
+
 const storageKeyForUser = (userId: string): string => `dashboard:${userId}`;
 
 export const loadDashboardState = (
@@ -133,6 +149,16 @@ export const addWidgetAndPersist = (
 ): DashboardState => {
     const currentState = loadDashboardState(storage, userId);
     const updatedState = addWidgetToDashboard(currentState, widgetDefinition, idFactory);
+    return saveDashboardState(storage, userId, updatedState);
+};
+
+export const removeWidgetAndPersist = (
+    storage: DashboardStorage,
+    userId: string,
+    widgetInstanceId: string
+): DashboardState => {
+    const currentState = loadDashboardState(storage, userId);
+    const updatedState = removeWidgetFromDashboard(currentState, widgetInstanceId);
     return saveDashboardState(storage, userId, updatedState);
 };
 

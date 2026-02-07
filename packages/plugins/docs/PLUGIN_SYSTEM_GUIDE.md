@@ -41,7 +41,7 @@ All plugins must implement the `ProfilePlugin` interface:
 
 ```typescript
 import { BaseProfilePlugin } from "./src/plugin-system.ts";
-import type { ACPProfile } from "@isomorphiq/user-profile";
+import type { ACPProfile } from "@isomorphiq/profiles";
 
 export default class MyPlugin extends BaseProfilePlugin {
     constructor() {

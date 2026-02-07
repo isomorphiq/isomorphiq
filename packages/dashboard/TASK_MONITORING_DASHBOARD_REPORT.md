@@ -202,7 +202,7 @@ The task manager daemon now includes a comprehensive task status monitoring dash
 ### Starting the Dashboard
 ```bash
 # Start the daemon (includes dashboard)
-yarn run daemon
+yarn run worker
 
 # Dashboard will be available at:
 # http://localhost:3005

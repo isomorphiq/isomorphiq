@@ -1,5 +1,5 @@
 import express from "express";
-import type { ProfileManager } from "@isomorphiq/user-profile";
+import type { ProfileManager } from "@isomorphiq/profiles";
 import {
     normalizeProfileManagerResolver,
     type ProfileManagerResolver,
@@ -15,7 +15,19 @@ export function registerProfileRoutes(
     router.get("/with-states", async (req, res, next) => {
         try {
             const manager = resolveProfiles(req);
+            await manager.waitForProfileOverrides();
             const profiles = manager.getProfilesWithStates();
+            res.json(profiles);
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    router.get("/configs", async (req, res, next) => {
+        try {
+            const manager = resolveProfiles(req);
+            await manager.waitForProfileOverrides();
+            const profiles = manager.getAllProfileConfigurations();
             res.json(profiles);
         } catch (error) {
             next(error);
@@ -58,6 +70,20 @@ export function registerProfileRoutes(
         }
     });
 
+    router.get("/:name/config", async (req, res, next) => {
+        try {
+            const manager = resolveProfiles(req);
+            await manager.waitForProfileOverrides();
+            const profileConfig = manager.getProfileConfiguration(req.params.name);
+            if (!profileConfig) {
+                return res.status(404).json({ error: "Profile not found" });
+            }
+            res.json(profileConfig);
+        } catch (error) {
+            next(error);
+        }
+    });
+
     router.get("/metrics", async (req, res, next) => {
         try {
             const manager = resolveProfiles(req);
@@ -93,6 +119,62 @@ export function registerProfileRoutes(
             manager.updateProfileState(req.params.name, { isActive });
 
             res.json({ success: true });
+        } catch (error) {
+            next(error);
+        }
+    });
+
+    router.put("/:name/config", async (req, res, next) => {
+        try {
+            const { runtimeName, modelName, systemPrompt, taskPromptPrefix } = req.body as {
+                runtimeName?: unknown;
+                modelName?: unknown;
+                systemPrompt?: unknown;
+                taskPromptPrefix?: unknown;
+            };
+            const isValidText = (value: unknown): boolean =>
+                value === undefined || value === null || typeof value === "string";
+            if (
+                !isValidText(runtimeName)
+                || !isValidText(modelName)
+                || !isValidText(systemPrompt)
+                || !isValidText(taskPromptPrefix)
+            ) {
+                return res.status(400).json({
+                    error: "runtimeName, modelName, systemPrompt, and taskPromptPrefix must be string, null, or undefined",
+                });
+            }
+            if (
+                runtimeName !== undefined
+                && runtimeName !== null
+                && runtimeName !== "codex"
+                && runtimeName !== "opencode"
+            ) {
+                return res.status(400).json({
+                    error: "runtimeName must be either \"codex\" or \"opencode\"",
+                });
+            }
+
+            const manager = resolveProfiles(req);
+            await manager.waitForProfileOverrides();
+            const updated = await manager.updateProfileConfiguration(req.params.name, {
+                ...(runtimeName !== undefined
+                    ? { runtimeName: runtimeName === null ? undefined : String(runtimeName) }
+                    : {}),
+                ...(modelName !== undefined
+                    ? { modelName: modelName === null ? undefined : String(modelName) }
+                    : {}),
+                ...(systemPrompt !== undefined
+                    ? { systemPrompt: systemPrompt === null ? undefined : String(systemPrompt) }
+                    : {}),
+                ...(taskPromptPrefix !== undefined
+                    ? { taskPromptPrefix: taskPromptPrefix === null ? undefined : String(taskPromptPrefix) }
+                    : {}),
+            });
+            if (!updated) {
+                return res.status(404).json({ error: "Profile not found" });
+            }
+            res.json(updated);
         } catch (error) {
             next(error);
         }

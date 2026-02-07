@@ -69,7 +69,7 @@ The web dashboard for the task manager daemon has been **fully implemented and i
 
 ## 🚀 How to Use
 
-1. **Start the daemon**: `yarn run daemon`
+1. **Start the daemon**: `yarn run worker`
 2. **Access dashboard**: http://localhost:3005
 3. **Monitor tasks**: Real-time task status and metrics
 4. **Manage tasks**: Create, update, cancel, or retry tasks

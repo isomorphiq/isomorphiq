@@ -91,7 +91,7 @@ The Task Manager Web Dashboard provides a comprehensive, real-time web interface
 
 ### Accessing the Dashboard
 
-1. **Start the daemon**: `yarn run daemon`
+1. **Start the daemon**: `yarn run worker`
 2. **Open dashboard**: Navigate to `http://localhost:3005`
 3. **WebSocket endpoint**: `ws://localhost:3005/dashboard-ws`
 

@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-8b5560f5-e39c-4594-99e4-d76e5dc2bd4f"
+
 import { describe, it, before, beforeEach, after } from "node:test";
 import { strict as assert } from "node:assert";
 import { DaemonTcpClient, type Task } from "../e2e/dashboard/tcp-client.ts";
