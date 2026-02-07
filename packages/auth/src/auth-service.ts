@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-541f5fbd-fc47-485a-819a-44e590465fef"
+
 import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -240,10 +242,13 @@ export class AuthService {
 				taskOverdue: true,
 			},
 			dashboard: {
-				defaultView: "list",
-				itemsPerPage: 25,
-				showCompleted: false,
-			},
+                defaultView: "overview",
+                refreshRate: "30s",
+                layoutDensity: "comfortable",
+                widgetNotifications: {},
+                itemsPerPage: 25,
+                showCompleted: false,
+            },
 		};
 	}
 
@@ -286,4 +291,3 @@ export class AuthService {
 		return token.length === 64 && /^[a-f0-9]+$/i.test(token);
 	}
 }
-

@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-9733e0ed-b165-4d23-871d-f29ad54018de"
+
 import { useAtom } from "jotai";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
@@ -22,6 +24,24 @@ type PreferencesForm = {
 		taskCompleted?: boolean;
 		taskOverdue?: boolean;
 	};
+};
+
+const resolvePreferencesDeviceId = (): string => {
+    if (typeof window === "undefined") {
+        return "device-unknown";
+    }
+    const storageKey = "userPreferences.device.v1";
+    try {
+        const stored = window.localStorage.getItem(storageKey);
+        if (stored && stored.trim().length > 0) {
+            return stored;
+        }
+        const created = "device-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        window.localStorage.setItem(storageKey, created);
+        return created;
+    } catch (_error) {
+        return "device-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    }
 };
 
 export function UserProfilePage() {
@@ -74,13 +94,18 @@ export function UserProfilePage() {
 		setError(null);
 		setSuccess(null);
 		try {
+        const preferencesSync = {
+            updatedAt: Date.now(),
+            deviceId: resolvePreferencesDeviceId(),
+            source: "appshell.userProfile",
+        };
 			const resp = await fetch("/api/users/me/profile", {
 				method: "PUT",
 				headers: {
 					"Content-Type": "application/json",
 					Authorization: `Bearer ${auth.token}`,
 				},
-				body: JSON.stringify({ profile, preferences }),
+				body: JSON.stringify({ profile, preferences, preferencesSync }),
 			});
 			const data = await resp.json();
 			if (!resp.ok) throw new Error(data.error || "Failed to update profile");
@@ -112,8 +137,8 @@ export function UserProfilePage() {
 		<Layout>
 			<Header title="My Profile" subtitle="Manage your account details" showAuthControls={false} />
 			<nav style={{ marginBottom: "12px" }}>
-				<Link to="/" style={{ color: "#93c5fd" }}>
-					← Back to dashboard
+				<Link to="/overview" style={{ color: "#93c5fd" }}>
+					← Back to overview
 				</Link>
 			</nav>
 

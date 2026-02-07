@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-0c2c49e2-72cb-4ed0-9515-c78474323641"
+
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";

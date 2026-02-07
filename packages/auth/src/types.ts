@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-8448176f-74bb-45ed-b175-c325e4aa256b"
+
 import { z } from "zod";
 import { impl, method, struct, trait } from "@tsimpl/runtime";
 import type { StructSelf } from "@tsimpl/runtime";
@@ -26,24 +28,233 @@ export const UserProfileSchema = z.object({
 export const UserProfileStruct = struct.name("UserProfile")<z.output<typeof UserProfileSchema>, z.input<typeof UserProfileSchema>>(UserProfileSchema);
 export type UserProfile = StructSelf<typeof UserProfileStruct>;
 
+export const NotificationPreferencesSchema = z.object({
+    email: z.boolean(),
+    push: z.boolean(),
+    taskAssigned: z.boolean(),
+    taskCompleted: z.boolean(),
+    taskOverdue: z.boolean(),
+});
+
+export const DashboardDefaultViewSchema = z.enum([
+    "overview",
+    "widgets",
+    "queue",
+    "tasks",
+    "create",
+    "history",
+    "health",
+    "logs",
+    "list",
+    "kanban",
+    "calendar",
+]);
+
+export const DashboardRefreshRateSchema = z.enum(["off", "30s", "1m", "5m"]);
+
+export const DashboardLayoutDensitySchema = z.enum(["compact", "comfortable", "spacious"]);
+
+export const DashboardNotificationTypeSchema = z.enum([
+    "task_created",
+    "task_status_changed",
+    "task_priority_changed",
+    "task_completed",
+    "task_failed",
+    "task_deleted",
+]);
+
+const DashboardNotificationTypesSchema = z.object({
+    task_created: z.boolean(),
+    task_status_changed: z.boolean(),
+    task_priority_changed: z.boolean(),
+    task_completed: z.boolean(),
+    task_failed: z.boolean(),
+    task_deleted: z.boolean(),
+});
+
+const buildDefaultNotificationTypes = (): z.output<typeof DashboardNotificationTypesSchema> => ({
+    task_created: true,
+    task_status_changed: true,
+    task_priority_changed: true,
+    task_completed: true,
+    task_failed: true,
+    task_deleted: true,
+});
+
+const normalizeNotificationTypes = (
+    value: unknown,
+): z.output<typeof DashboardNotificationTypesSchema> => {
+    if (!value || typeof value !== "object") {
+        return buildDefaultNotificationTypes();
+    }
+    const record = Object.entries(value).reduce<Record<string, unknown>>(
+        (acc, [key, entry]) => ({ ...acc, [key]: entry }),
+        {},
+    );
+    const defaults = buildDefaultNotificationTypes();
+    return Object.entries(defaults).reduce(
+        (acc, [key, defaultValue]) => {
+            const entry = record[key];
+            return {
+                ...acc,
+                [key]: typeof entry === "boolean" ? entry : defaultValue,
+            };
+        },
+        defaults,
+    );
+};
+
+const DashboardWidgetNotificationPreferenceSchemaBase = z.object({
+    enabled: z.boolean(),
+    types: DashboardNotificationTypesSchema,
+});
+
+const normalizeWidgetNotificationPreference = (value: unknown) => {
+    if (typeof value === "boolean") {
+        return {
+            enabled: value,
+            types: buildDefaultNotificationTypes(),
+        };
+    }
+    if (!value || typeof value !== "object") {
+        return {
+            enabled: true,
+            types: buildDefaultNotificationTypes(),
+        };
+    }
+    const record = Object.entries(value).reduce<Record<string, unknown>>(
+        (acc, [key, entry]) => ({ ...acc, [key]: entry }),
+        {},
+    );
+    const enabled = typeof record.enabled === "boolean" ? record.enabled : true;
+    const types = normalizeNotificationTypes(record.types);
+    return { enabled, types };
+};
+
+const DashboardWidgetNotificationPreferencesSchema = z.preprocess(
+    (value) => {
+        if (!value || typeof value !== "object") {
+            return {};
+        }
+        return Object.entries(value).reduce<Record<string, unknown>>(
+            (acc, [key, entry]) => ({
+                ...acc,
+                [key]: normalizeWidgetNotificationPreference(entry),
+            }),
+            {},
+        );
+    },
+    z.record(DashboardWidgetNotificationPreferenceSchemaBase),
+);
+
+const DashboardWidgetLayoutStateSchema = z.record(z.array(z.string().min(1)));
+
+const DashboardWidgetLayoutPayloadSchema = z.object({
+    layout: DashboardWidgetLayoutStateSchema,
+    updatedAt: z.number().int().nonnegative().optional(),
+    version: z.number().int().positive().optional(),
+});
+
+const DashboardWidgetLayoutPreferenceSchema = z.union([
+    DashboardWidgetLayoutPayloadSchema,
+    DashboardWidgetLayoutStateSchema,
+    z.object({ widgetLayout: DashboardWidgetLayoutStateSchema }).passthrough(),
+]);
+
+const DashboardPreferencesSchemaBase = z.object({
+    defaultView: DashboardDefaultViewSchema,
+    refreshRate: DashboardRefreshRateSchema,
+    layoutDensity: DashboardLayoutDensitySchema,
+    widgetNotifications: DashboardWidgetNotificationPreferencesSchema,
+    widgetLayout: DashboardWidgetLayoutPreferenceSchema.nullable().optional(),
+    itemsPerPage: z.number().int().positive(),
+    showCompleted: z.boolean(),
+});
+
+const dashboardDefaults: z.output<typeof DashboardPreferencesSchemaBase> = {
+    defaultView: "overview",
+    refreshRate: "30s",
+    layoutDensity: "comfortable",
+    widgetNotifications: {},
+    widgetLayout: undefined,
+    itemsPerPage: 25,
+    showCompleted: false,
+};
+
+const buildDashboardDefaults = (): z.output<typeof DashboardPreferencesSchemaBase> => ({
+    ...dashboardDefaults,
+    widgetNotifications: { ...dashboardDefaults.widgetNotifications },
+});
+
+const normalizeDashboardPreferences = (value: unknown): Record<string, unknown> => {
+    if (!value || typeof value !== "object") {
+        return buildDashboardDefaults();
+    }
+
+    return Object.entries(value).reduce<Record<string, unknown>>(
+        (acc, [key, entryValue]) => ({ ...acc, [key]: entryValue }),
+        buildDashboardDefaults(),
+    );
+};
+
+export const DashboardPreferencesSchema = z.preprocess(
+    normalizeDashboardPreferences,
+    DashboardPreferencesSchemaBase,
+);
+
+export const DashboardPreferencesStruct = struct.name("DashboardPreferences")<z.output<typeof DashboardPreferencesSchema>, z.input<typeof DashboardPreferencesSchema>>(DashboardPreferencesSchema);
+export type DashboardPreferences = StructSelf<typeof DashboardPreferencesStruct>;
+
 export const UserPreferencesSchema = z.object({
     theme: z.enum(["light", "dark", "auto"]),
-    notifications: z.object({
-        email: z.boolean(),
-        push: z.boolean(),
-        taskAssigned: z.boolean(),
-        taskCompleted: z.boolean(),
-        taskOverdue: z.boolean(),
-    }),
-    dashboard: z.object({
-        defaultView: z.enum(["list", "kanban", "calendar"]),
-        itemsPerPage: z.number(),
-        showCompleted: z.boolean(),
-    }),
+    notifications: NotificationPreferencesSchema,
+    dashboard: DashboardPreferencesSchema,
 });
 
 export const UserPreferencesStruct = struct.name("UserPreferences")<z.output<typeof UserPreferencesSchema>, z.input<typeof UserPreferencesSchema>>(UserPreferencesSchema);
 export type UserPreferences = StructSelf<typeof UserPreferencesStruct>;
+
+const PreferencesSyncMetadataSchemaBase = z.object({
+    updatedAt: z.number().int().nonnegative(),
+    deviceId: z.string().optional(),
+    source: z.string().optional(),
+});
+
+export const PreferencesSyncMetadataSchema = z.preprocess(
+    (value) => {
+        if (!value || typeof value !== "object") {
+            return { updatedAt: 0 };
+        }
+        const record = Object.entries(value).reduce<Record<string, unknown>>(
+            (acc, [key, entry]) => ({ ...acc, [key]: entry }),
+            {},
+        );
+        const updatedAt =
+            typeof record.updatedAt === "number" && record.updatedAt >= 0 ? record.updatedAt : 0;
+        const deviceId =
+            typeof record.deviceId === "string" && record.deviceId.trim().length > 0
+                ? record.deviceId
+                : undefined;
+        const source =
+            typeof record.source === "string" && record.source.trim().length > 0
+                ? record.source
+                : undefined;
+        return {
+            updatedAt,
+            ...(deviceId ? { deviceId } : {}),
+            ...(source ? { source } : {}),
+        };
+    },
+    PreferencesSyncMetadataSchemaBase,
+);
+
+export type PreferencesSyncMetadata = z.output<typeof PreferencesSyncMetadataSchema>;
+
+const UserPreferencesUpdateSchema = z.object({
+    theme: z.enum(["light", "dark", "auto"]).optional(),
+    notifications: NotificationPreferencesSchema.partial().optional(),
+    dashboard: DashboardPreferencesSchemaBase.partial().optional(),
+});
 
 const DateLikeSchema = z.coerce.date();
 
@@ -91,7 +302,8 @@ export const UpdateUserInputSchema = z.object({
     role: UserRoleSchema.optional(),
     isActive: z.boolean().optional(),
     profile: UserProfileSchema.partial().optional(),
-    preferences: UserPreferencesSchema.partial().optional(),
+    preferences: UserPreferencesUpdateSchema.optional(),
+    preferencesSync: PreferencesSyncMetadataSchema.optional(),
 });
 
 export const UpdateUserInputStruct = struct.name("UpdateUserInput")<z.output<typeof UpdateUserInputSchema>, z.input<typeof UpdateUserInputSchema>>(UpdateUserInputSchema);
@@ -100,7 +312,8 @@ export type UpdateUserInput = StructSelf<typeof UpdateUserInputStruct>;
 export const UpdateProfileInputSchema = z.object({
     userId: z.string(),
     profile: UserProfileSchema.partial().optional(),
-    preferences: UserPreferencesSchema.partial().optional(),
+    preferences: UserPreferencesUpdateSchema.optional(),
+    preferencesSync: PreferencesSyncMetadataSchema.optional(),
 });
 
 export const UpdateProfileInputStruct = struct.name("UpdateProfileInput")<z.output<typeof UpdateProfileInputSchema>, z.input<typeof UpdateProfileInputSchema>>(UpdateProfileInputSchema);

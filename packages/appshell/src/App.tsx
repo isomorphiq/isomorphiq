@@ -12,7 +12,8 @@ import { ActivityPage } from "./pages/ActivityPage.tsx";
 import { AnalyticsPage } from "./pages/AnalyticsPage.tsx";
 import { ContextDetailPage } from "./pages/ContextDetailPage.tsx";
 import { ContextListPage } from "./pages/ContextListPage.tsx";
-import { DashboardPage } from "./pages/DashboardPage.tsx";
+import { OverviewPage } from "./pages/OverviewPage.tsx";
+import { DashboardMicroservicePage } from "./pages/DashboardMicroservicePage.tsx";
 import { DependencyAnalysisRoute } from "./pages/DependencyAnalysisRoute.tsx";
 import { LoginPage } from "./pages/LoginPage.tsx";
 import { ProfileAnalyticsPage } from "./pages/ProfileAnalyticsPage.tsx";
@@ -46,7 +47,9 @@ export function App() {
 
             <EnhancedErrorBoundary>
                 <Routes>
-                    <Route index element={<DashboardPage />} />
+                    <Route index element={<Navigate to="/overview" replace />} />
+                    <Route path="/dashboard" element={<DashboardMicroservicePage />} />
+                    <Route path="/overview" element={<OverviewPage />} />
                     <Route
                         path="/login"
                         element={
@@ -96,8 +99,22 @@ export function App() {
                             </ProtectedRoute>
                         }
                     />
-                    <Route path="/profiles" element={<ProfilesPage />} />
-                    <Route path="/profiles/:profileName" element={<ProfilesPage />} />
+                    <Route
+                        path="/profiles"
+                        element={
+                            <ProtectedRoute>
+                                <ProfilesPage />
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/profiles/:profileName"
+                        element={
+                            <ProtectedRoute>
+                                <ProfilesPage />
+                            </ProtectedRoute>
+                        }
+                    />
                     <Route
                         path="/profile-analytics"
                         element={<ProfileAnalyticsPage />}
@@ -125,7 +142,7 @@ export function App() {
                         }
                     />
                     <Route path="/theme-demo" element={<ThemeDemoPage />} />
-                    <Route path="*" element={<Navigate to="/" replace />} />
+                    <Route path="*" element={<Navigate to="/overview" replace />} />
                 </Routes>
             </EnhancedErrorBoundary>
         </ThemeProvider>

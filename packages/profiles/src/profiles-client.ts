@@ -1,13 +1,16 @@
+// FILE_CONTEXT: "context-7775d616-1d17-451a-8777-937f51dd5a7b"
+
 import { createTRPCClient, httpLink } from "@trpc/client";
 import type { Operation, TRPCClient } from "@trpc/client";
 import { ConfigManager } from "@isomorphiq/core";
 import { z } from "zod";
 import type {
     UpsertUserProfileInput,
+    UserPreferencesExport,
     UserProfileRecord,
     UserProfileSeed,
 } from "./profiles-domain.ts";
-import { UserProfileRecordSchema } from "./profiles-domain.ts";
+import { UserPreferencesExportSchema, UserProfileRecordSchema } from "./profiles-domain.ts";
 
 type UserProfileServiceRouter = import("./profiles-service-router.ts").UserProfileServiceRouter;
 
@@ -21,6 +24,9 @@ export type UserProfileClient = {
     getProfile: (userId: string) => Promise<UserProfileRecord | null>;
     getOrCreateProfile: (userId: string, seed?: UserProfileSeed) => Promise<UserProfileRecord>;
     upsertProfile: (input: UpsertUserProfileInput) => Promise<UserProfileRecord>;
+    resetDashboardPreferences: (userId: string) => Promise<UserProfileRecord>;
+    exportPreferences: (userId: string) => Promise<UserPreferencesExport>;
+    importPreferences: (userId: string, payload: UserPreferencesExport) => Promise<UserProfileRecord>;
 };
 
 const resolveEnvironmentHeaderName = (): string =>
@@ -117,5 +123,13 @@ export const createUserProfileClient = (
             normalizeProfile(await client.getOrCreateProfile.mutate({ userId, seed })),
         upsertProfile: async (input) =>
             normalizeProfile(await client.upsertProfile.mutate(input)),
+        resetDashboardPreferences: async (userId) =>
+            normalizeProfile(await client.resetDashboardPreferences.mutate({ userId })),
+        exportPreferences: async (userId) =>
+            UserPreferencesExportSchema.parse(
+                await client.exportPreferences.query({ userId })
+            ) as UserPreferencesExport,
+        importPreferences: async (userId, payload) =>
+            normalizeProfile(await client.importPreferences.mutate({ userId, payload })),
     };
 };

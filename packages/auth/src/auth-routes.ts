@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-8d4bcb8e-bb10-4d46-a602-7c629f8b07dc"
+
 import type express from "express";
 import type {
     AuthCredentials,
@@ -227,7 +229,7 @@ export function registerAuthRoutes(app: express.Application) {
         async (req: AuthContextRequest, res, next) => {
             try {
                 const user = req.user as User;
-                const { profile, preferences } = req.body as UpdateProfileInput;
+                const { profile, preferences, preferencesSync } = req.body as UpdateProfileInput;
 
                 const userManager = getUserManager();
                 const updateData: UpdateProfileInput = { userId: user.id };
@@ -237,6 +239,7 @@ export function registerAuthRoutes(app: express.Application) {
                     userId: user.id,
                     profile: updateData.profile,
                     preferences: updateData.preferences,
+                    preferencesSync,
                 });
                 await sendCurrentUser(req, res);
             } catch (error) {
@@ -251,12 +254,45 @@ export function registerAuthRoutes(app: express.Application) {
         async (req: AuthContextRequest, res, next) => {
             try {
                 const user = req.user as User;
-                const { profile, preferences } = req.body as UpdateProfileInput;
+                const { profile, preferences, preferencesSync } = req.body as UpdateProfileInput;
                 await userProfileClient.upsertProfile({
                     userId: user.id,
                     profile,
                     preferences,
+                    preferencesSync,
                 });
+                await sendCurrentUser(req, res);
+            } catch (error) {
+                next(error);
+            }
+        },
+    );
+    app.get(
+        "/api/users/me/preferences/export",
+        authenticateToken,
+        async (req: AuthContextRequest, res, next) => {
+            try {
+                const user = req.user as User;
+                const exported = await userProfileClient.exportPreferences(user.id);
+                res.json({ export: exported });
+            } catch (error) {
+                next(error);
+            }
+        },
+    );
+    app.post(
+        "/api/users/me/preferences/import",
+        authenticateToken,
+        enforceAdminWriteAccess,
+        async (req: AuthContextRequest, res, next) => {
+            try {
+                const user = req.user as User;
+                const body = req.body as { export?: unknown } | undefined;
+                const payload = body?.export ?? body;
+                await userProfileClient.importPreferences(
+                    user.id,
+                    payload as Record<string, unknown>,
+                );
                 await sendCurrentUser(req, res);
             } catch (error) {
                 next(error);

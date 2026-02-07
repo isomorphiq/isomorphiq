@@ -39,6 +39,31 @@ If you ever add or edit imports, always include the `.ts` extension on local mod
 
 Use functional programming style that avoids mutation of data.
 
+## File Organization & Editing Principles
+
+**Prefer atomic edits over bulk writes:**
+- Use the `edit` tool for targeted changes to specific functions or lines
+- Avoid using `write` to rewrite entire files unless creating new files
+- Make small, focused edits that are easy to review and revert
+
+**Keep functions small and focused:**
+- Each function should do one thing and do it well
+- Target 20-50 lines per function; refactor when functions exceed 80 lines
+- Extract complex logic into well-named helper functions
+- Functions should fit on a single screen without scrolling
+
+**Keep files small and cohesive:**
+- Limit files to 1-2 highly related functions or a single cohesive unit
+- Target 100-200 lines per file; refactor when files exceed 300 lines
+- Split large files by feature, responsibility, or domain boundary
+- Each file should have a clear, single purpose
+
+**Organize directories thoughtfully:**
+- Group related functionality together (by domain, not by type)
+- Use clear, descriptive directory and file names
+- Avoid deep nesting (max 3-4 levels)
+- Co-locate tests with source files or in parallel `__tests__` directories
+
 4-space indentation (...we are not heathen)
 use `"` double quotes for quoting strings; eg do not use `'` apostrophes; (again... we are not heathen.)
 Prefer struct/trait/impl from `@tsimpl/*` with `StructSelf` types; avoid interfaces, type casts, and `z.infer` in favor of zod schemas + type aliases.

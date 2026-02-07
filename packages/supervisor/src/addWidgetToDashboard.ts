@@ -81,9 +81,104 @@ export type AddWidgetInput = {
     defaultPlacementSize?: PlacementSize;
 };
 
+const clamp = (value: number, min: number, max: number): number =>
+    Math.min(max, Math.max(min, value));
+
+const normalizePlacementSize = (size: PlacementSize, cols: number): PlacementSize => {
+    const safeColumns = Math.max(1, cols);
+    const width = clamp(size.w, 1, safeColumns);
+    const height = Math.max(1, size.h);
+    return { w: width, h: height };
+};
+
+const normalizePlacementCandidate = (
+    placement: Omit<WidgetPlacement, "id">,
+    cols: number,
+    size: PlacementSize
+): Omit<WidgetPlacement, "id"> => {
+    const safeColumns = Math.max(1, cols);
+    const maxX = Math.max(0, safeColumns - size.w);
+    return {
+        x: clamp(placement.x, 0, maxX),
+        y: Math.max(0, placement.y),
+        w: size.w,
+        h: size.h
+    };
+};
+
+const overlaps = (left: Omit<WidgetPlacement, "id">, right: WidgetPlacement): boolean => {
+    const leftRight = left.x + left.w;
+    const rightRight = right.x + right.w;
+    const leftBottom = left.y + left.h;
+    const rightBottom = right.y + right.h;
+
+    const separatedHorizontally = leftRight <= right.x || rightRight <= left.x;
+    const separatedVertically = leftBottom <= right.y || rightBottom <= left.y;
+
+    return !(separatedHorizontally || separatedVertically);
+};
+
+const collides = (candidate: Omit<WidgetPlacement, "id">, placements: WidgetPlacement[]): boolean =>
+    placements.some((existing) => overlaps(candidate, existing));
+
+const findNextPlacement = (
+    placements: WidgetPlacement[],
+    cols: number,
+    defaultPlacementSize?: PlacementSize,
+    placementOverride?: Omit<WidgetPlacement, "id">
+): Omit<WidgetPlacement, "id"> => {
+    const baseSize = placementOverride
+        ? { w: placementOverride.w, h: placementOverride.h }
+        : defaultPlacementSize ?? { w: 4, h: 4 };
+    const size = normalizePlacementSize(baseSize, cols);
+    const safeColumns = Math.max(1, cols);
+    const maxX = Math.max(0, safeColumns - size.w);
+    const maxY = placements.reduce(
+        (currentMax, placement) => Math.max(currentMax, placement.y + placement.h),
+        0
+    );
+    const basePlacement = placementOverride ?? {
+        x: 0,
+        y: 0,
+        w: size.w,
+        h: size.h
+    };
+    const candidate = normalizePlacementCandidate(basePlacement, cols, size);
+
+    const searchStartY = placementOverride ? candidate.y : 0;
+    const searchMaxY = Math.max(maxY, candidate.y) + size.h + 1;
+
+    for (let y = searchStartY; y <= searchMaxY; y += 1) {
+        const xStart = y === candidate.y ? candidate.x : 0;
+        for (let x = xStart; x <= maxX; x += 1) {
+            const nextCandidate = {
+                x,
+                y,
+                w: size.w,
+                h: size.h
+            };
+            if (!collides(nextCandidate, placements)) {
+                return nextCandidate;
+            }
+        }
+    }
+
+    return {
+        x: 0,
+        y: searchMaxY,
+        w: size.w,
+        h: size.h
+    };
+};
+
 export const addWidgetToLayout = (input: AddWidgetInput): DashboardLayout => {
     const { layout, widget, placement, defaultPlacementSize } = input;
-    const nextPlacement = placement ?? findNextPlacement(layout.placements, layout.cols, defaultPlacementSize);
+    const nextPlacement = findNextPlacement(
+        layout.placements,
+        layout.cols,
+        defaultPlacementSize,
+        placement
+    );
     const filteredWidgets = layout.widgets.filter((existing) => existing.id !== widget.id);
     const filteredPlacements = layout.placements.filter((existing) => existing.id !== widget.id);
 
@@ -101,9 +196,27 @@ export const addWidgetToLayout = (input: AddWidgetInput): DashboardLayout => {
 };
 
 export const updateWidgetPlacement = (layout: DashboardLayout, placement: WidgetPlacement): DashboardLayout => {
-    const nextPlacements = layout.placements.map((existing) =>
-        existing.id === placement.id ? { ...existing, ...placement } : existing
+    const remainingPlacements = layout.placements.filter((existing) => existing.id !== placement.id);
+    const nextPlacement = findNextPlacement(
+        remainingPlacements,
+        layout.cols,
+        { w: placement.w, h: placement.h },
+        placement
     );
+    const resolvedPlacement = {
+        ...nextPlacement,
+        id: placement.id
+    };
+    const nextPlacements = layout.placements.some((existing) => existing.id === placement.id)
+        ? layout.placements.map((existing) =>
+            existing.id === placement.id
+                ? {
+                    ...existing,
+                    ...resolvedPlacement
+                }
+                : existing
+        )
+        : remainingPlacements.concat(resolvedPlacement);
 
     return {
         ...layout,
@@ -116,20 +229,20 @@ export const ensurePlacements = (
     defaultPlacementSize?: PlacementSize
 ): DashboardLayout => {
     const placementIds = new Set(layout.placements.map((placement) => placement.id));
-    const missingPlacements = layout.widgets
-        .filter((widget) => !placementIds.has(widget.id))
-        .map((widget) => ({
-            ...findNextPlacement(layout.placements, layout.cols, defaultPlacementSize),
-            id: widget.id
-        }));
+    const missingWidgets = layout.widgets.filter((widget) => !placementIds.has(widget.id));
 
-    if (missingPlacements.length === 0) {
+    if (missingWidgets.length === 0) {
         return layout;
     }
 
+    const nextPlacements = missingWidgets.reduce((placements, widget) => {
+        const nextPlacement = findNextPlacement(placements, layout.cols, defaultPlacementSize);
+        return placements.concat({ ...nextPlacement, id: widget.id });
+    }, layout.placements);
+
     return {
         ...layout,
-        placements: [...layout.placements, ...missingPlacements]
+        placements: nextPlacements
     };
 };
 
@@ -184,25 +297,6 @@ export const createLocalStorageDashboardStorage = (
 
             window.localStorage.setItem(key, JSON.stringify(layout));
         }
-    };
-};
-
-const findNextPlacement = (
-    placements: WidgetPlacement[],
-    cols: number,
-    defaultPlacementSize?: PlacementSize
-): Omit<WidgetPlacement, "id"> => {
-    const size = defaultPlacementSize ?? { w: 4, h: 4 };
-    const maxY = placements.reduce((currentMax, placement) => {
-        const bottom = placement.y + placement.h;
-        return bottom > currentMax ? bottom : currentMax;
-    }, 0);
-
-    return {
-        x: 0,
-        y: maxY,
-        w: Math.min(size.w, cols),
-        h: size.h
     };
 };
 

@@ -7,6 +7,7 @@
 	"workspaces": [
 		"packages/types",
 		"packages/*",
+		"packages/core/*",
 		"packages/api-prelude",
 		"packages/http-server",
 		"packages/plugins/plugins/*",
@@ -31,8 +32,10 @@
 		"supervisor:watch": "yarn workspace @isomorphiq/supervisor start:watch",
 		"supervisor:ps": "yarn workspace @isomorphiq/supervisor ps",
 		"worker": "yarn workspace @isomorphiq/worker start:worker",
+		"worker-manager": "yarn workspace @isomorphiq/worker-manager start",
 		"worker:control": "yarn workspace @isomorphiq/worker start:control",
 		"worker:kill": "node --experimental-strip-types packages/worker/scripts/kill.ts",
+		"workers:reset": "yarn workspace @isomorphiq/supervisor reset_workers",
 		"gateway": "yarn workspace @isomorphiq/gateway start",
 		"web": "rsbuild dev",
 		"start": "node --experimental-strip-types scripts/start.ts",
@@ -76,7 +79,9 @@
 		"playwright": "^1.57.0",
 		"react": "^18.3.1",
 		"react-dom": "^18.3.1",
+		"react-markdown": "^10.1.0",
 		"react-router-dom": "^7.10.1",
+		"remark-gfm": "^4.0.1",
 		"uuid": "^13.0.0",
 		"ws": "^8.18.3"
 	},

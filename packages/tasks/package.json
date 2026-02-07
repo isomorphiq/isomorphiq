@@ -29,6 +29,7 @@
     },
     "dependencies": {
         "@isomorphiq/core": "workspace:*",
+        "@isomorphiq/core-microservice": "workspace:*",
         "@isomorphiq/persistence-level": "workspace:*",
         "@isomorphiq/realtime": "workspace:*",
         "@isomorphiq/search": "workspace:*",

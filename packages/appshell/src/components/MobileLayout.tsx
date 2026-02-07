@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-50ef6fa5-bc4d-4a28-9074-d2319d354383"
+
 import { useAtomValue } from "jotai";
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
@@ -15,10 +17,12 @@ export function MobileLayout({ children, showNav = true, showFooter = true }: Mo
 	const location = useLocation();
 	const [_showMobileMenu, setShowMobileMenu] = useState(false);
 	const [_showUserMenu, _setShowUserMenu] = useState(false);
-	const { isOnline, syncInProgress, getSyncQueueSize } = useOfflineSync();
-	const [_syncQueueSize, setSyncQueueSize] = useState(0);
+	const { isOnline, syncInProgress, syncError, syncRetryDelayMs, retrySyncNow, getSyncQueueSize } =
+		useOfflineSync();
+	const [syncQueueSize, setSyncQueueSize] = useState(0);
 	const getIsMobile = () => (typeof window !== "undefined" ? window.innerWidth <= 768 : false);
 	const [isMobile, setIsMobile] = useState(getIsMobile());
+	const retryInSeconds = syncRetryDelayMs > 0 ? Math.ceil(syncRetryDelayMs / 1000) : 0;
 
 	useEffect(() => {
 		const updateSyncQueueSize = async () => {
@@ -40,7 +44,8 @@ export function MobileLayout({ children, showNav = true, showFooter = true }: Mo
 	}, []);
 
 	const navItems = [
-		{ to: "/", label: "Dashboard", icon: "📊" },
+		{ to: "/dashboard", label: "Dashboard", icon: "📊" },
+		{ to: "/overview", label: "Overview", icon: "🧾" },
 		{ to: "/analytics", label: "Analytics", icon: "📈" },
 		{ to: "/activity", label: "Activity", icon: "🔔" },
 		{ to: "/portfolio", label: "Portfolio", icon: "🗂️", requireAuth: true },
@@ -104,6 +109,53 @@ export function MobileLayout({ children, showNav = true, showFooter = true }: Mo
 					</div>
 				</div>
 			</header>
+
+			{syncError && (
+				<div
+					role="status"
+					style={{
+						background: "#7f1d1d",
+						color: "#fee2e2",
+						padding: "12px 16px",
+						borderBottom: "1px solid #991b1b",
+						display: "flex",
+						flexDirection: "column",
+						gap: "8px",
+						fontSize: "12px",
+					}}
+				>
+					<div>{syncError}</div>
+					<div
+						style={{
+							display: "flex",
+							flexWrap: "wrap",
+							alignItems: "center",
+							gap: "12px",
+						}}
+					>
+						{syncQueueSize > 0 && <span>Pending changes: {syncQueueSize}</span>}
+						{syncInProgress && <span>Retrying now...</span>}
+						{!syncInProgress && retryInSeconds > 0 && (
+							<span>Retrying in {retryInSeconds}s</span>
+						)}
+						<button
+							type="button"
+							onClick={() => void retrySyncNow()}
+							style={{
+								background: "#fee2e2",
+								color: "#7f1d1d",
+								border: "none",
+								borderRadius: "6px",
+								padding: "6px 10px",
+								fontWeight: 600,
+								cursor: "pointer",
+							}}
+						>
+							Retry now
+						</button>
+					</div>
+				</div>
+			)}
 
 			{/* Mobile Menu Overlay */}
 			{_showMobileMenu && (

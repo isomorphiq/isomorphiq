@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-92a51acd-40ea-474a-843e-4b0307eca288"
+
 import { Level } from "level";
 import type { KeyValueAdapter, KeyValueIterator } from "@isomorphiq/persistence-adapter";
 

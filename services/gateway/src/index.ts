@@ -5,6 +5,7 @@ import { createContextClient } from "@isomorphiq/context";
 import { ConfigManager, resolveEnvironmentFromHeaders } from "@isomorphiq/core";
 import { createTaskClient } from "@isomorphiq/tasks";
 
+
 const readNumber = (value: string | undefined, fallback: number): number => {
     if (!value) {
         return fallback;
@@ -30,6 +31,8 @@ const getNotificationsHost = (): string => process.env.NOTIFICATIONS_HOST || "12
 const getUserProfilePort = (): number =>
     readNumber(process.env.USER_PROFILE_HTTP_PORT ?? process.env.USER_PROFILE_PORT, 3010);
 const getUserProfileHost = (): string => process.env.USER_PROFILE_HOST || "127.0.0.1";
+const getDashboardPort = (): number => readNumber(process.env.DASHBOARD_PORT, 3005);
+const getDashboardHost = (): string => process.env.DASHBOARD_HOST || "127.0.0.1";
 
 const authClient = createAuthClient();
 
@@ -63,8 +66,24 @@ const isPublicApiPath = (pathname: string): boolean => {
         "/api/health",
         "/api/queue",
     ]);
-    return publicPaths.has(pathname);
+    return publicPaths.has(pathname)
+        || pathname === "/api/dashboard"
+        || pathname.startsWith("/api/dashboard/");
 };
+
+const isKnownServiceTrpcPath = (pathname: string): boolean =>
+    pathname === "/trpc/profile-service"
+    || pathname.startsWith("/trpc/profile-service/")
+    || pathname === "/trpc/auth-service"
+    || pathname.startsWith("/trpc/auth-service/")
+    || pathname === "/trpc/search"
+    || pathname.startsWith("/trpc/search/")
+    || pathname === "/trpc/context-service"
+    || pathname.startsWith("/trpc/context-service/")
+    || pathname === "/trpc/notifications-service"
+    || pathname.startsWith("/trpc/notifications-service/")
+    || pathname === "/trpc/tasks-service"
+    || pathname.startsWith("/trpc/tasks-service/");
 
 const resolvePermissionRequirement = (
     pathname: string,
@@ -162,6 +181,9 @@ const authorizeApiRequest = async (
 
 const resolveTarget = (req: http.IncomingMessage): { host: string; port: number; path: string } => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    if (url.pathname === "/ws/dashboard-ws") {
+        return { host: getDashboardHost(), port: getDashboardPort(), path: `/dashboard-ws${url.search}` };
+    }
     if (url.pathname.startsWith("/trpc/profile-service")) {
         const suffix = url.pathname.slice("/trpc/profile-service".length);
         const path = `/trpc${suffix}${url.search}`;
@@ -284,6 +306,67 @@ const decodePathSegment = (value: string): string | null => {
     } catch {
         return null;
     }
+};
+
+const isProfilesApiPath = (pathname: string): boolean =>
+    pathname === "/api/profiles" || pathname.startsWith("/api/profiles/");
+
+const handleProfilesApiRequest = async (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+): Promise<boolean> => {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const pathname = url.pathname;
+    if (!isProfilesApiPath(pathname)) {
+        return false;
+    }
+
+    await new Promise<void>((resolve) => {
+        let settled = false;
+        const resolveOnce = () => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            resolve();
+        };
+
+        const proxy = http.request(
+            {
+                host: getUserProfileHost(),
+                port: getUserProfilePort(),
+                method: req.method,
+                path: req.url ?? "/",
+                headers: req.headers,
+            },
+            (proxyRes) => {
+                res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+                proxyRes.pipe(res);
+                proxyRes.on("end", resolveOnce);
+                proxyRes.on("error", resolveOnce);
+                res.on("close", resolveOnce);
+            },
+        );
+
+        proxy.on("error", (error) => {
+            console.error("[GATEWAY] Profiles API request failed:", error);
+            if (!res.headersSent) {
+                res.writeHead(502, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Profiles service unavailable" }));
+            } else {
+                res.end();
+            }
+            resolveOnce();
+        });
+
+        req.on("aborted", () => {
+            proxy.destroy();
+            resolveOnce();
+        });
+
+        req.pipe(proxy);
+    });
+    return true;
 };
 
 const getTaskActorFromRequest = (req: http.IncomingMessage): string | undefined => {
@@ -1115,6 +1198,172 @@ const handleContextApiRequest = async (
     }
 };
 
+const handleGatewayApiRequest = async (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+): Promise<boolean> => {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const pathname = url.pathname;
+    const method = (req.method ?? "GET").toUpperCase();
+
+    if (pathname === "/api/health" && method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+            JSON.stringify({
+                status: "ok",
+                service: "gateway",
+                timestamp: new Date().toISOString(),
+            }),
+        );
+        return true;
+    }
+
+    if (pathname === "/api/environments" && method === "GET") {
+        const config = ConfigManager.getInstance().getEnvironmentConfig();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+            JSON.stringify({
+                available: config.available,
+                default: config.default,
+                headerName: config.headerName,
+            }),
+        );
+        return true;
+    }
+
+    return false;
+};
+
+const isDashboardGatewayPath = (pathname: string): boolean =>
+    pathname === "/api/dashboard" || pathname.startsWith("/api/dashboard/");
+
+const toDashboardProxyPath = (url: URL): string => {
+    if (url.pathname === "/api/dashboard") {
+        return `/${url.search}`;
+    }
+    const suffix = url.pathname.slice("/api/dashboard".length);
+    const normalized = suffix.startsWith("/") ? suffix : `/${suffix}`;
+    return `${normalized}${url.search}`;
+};
+
+const handleDashboardProxyApiRequest = async (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+): Promise<boolean> => {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    if (!isDashboardGatewayPath(url.pathname)) {
+        return false;
+    }
+
+    await new Promise<void>((resolve) => {
+        let settled = false;
+        const resolveOnce = () => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            resolve();
+        };
+
+        const proxy = http.request(
+            {
+                host: getDashboardHost(),
+                port: getDashboardPort(),
+                method: req.method,
+                path: toDashboardProxyPath(url),
+                headers: req.headers,
+            },
+            (proxyRes) => {
+                res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+                proxyRes.pipe(res);
+                proxyRes.on("end", resolveOnce);
+                proxyRes.on("error", resolveOnce);
+                res.on("close", resolveOnce);
+            },
+        );
+
+        proxy.on("error", (error) => {
+            console.error("[GATEWAY] Dashboard proxy request failed:", error);
+            if (!res.headersSent) {
+                res.writeHead(502, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Dashboard service unavailable" }));
+            } else {
+                res.end();
+            }
+            resolveOnce();
+        });
+
+        req.on("aborted", () => {
+            proxy.destroy();
+            resolveOnce();
+        });
+
+        req.pipe(proxy);
+    });
+
+    return true;
+};
+
+const isDashboardLogsPath = (pathname: string): boolean => pathname === "/api/logs";
+
+const handleDashboardLogsRequest = async (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+): Promise<boolean> => {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    if (!isDashboardLogsPath(url.pathname)) {
+        return false;
+    }
+
+    await new Promise<void>((resolve) => {
+        let settled = false;
+        const resolveOnce = () => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            resolve();
+        };
+
+        const proxy = http.request(
+            {
+                host: getDashboardHost(),
+                port: getDashboardPort(),
+                method: req.method,
+                path: `${url.pathname}${url.search}`,
+                headers: req.headers,
+            },
+            (proxyRes) => {
+                res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+                proxyRes.pipe(res);
+                proxyRes.on("end", resolveOnce);
+                proxyRes.on("error", resolveOnce);
+                res.on("close", resolveOnce);
+            },
+        );
+
+        proxy.on("error", (error) => {
+            console.error("[GATEWAY] Dashboard logs request failed:", error);
+            if (!res.headersSent) {
+                res.writeHead(502, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Activity log service unavailable" }));
+            } else {
+                res.end();
+            }
+            resolveOnce();
+        });
+
+        req.on("aborted", () => {
+            proxy.destroy();
+            resolveOnce();
+        });
+
+        req.pipe(proxy);
+    });
+
+    return true;
+};
+
 const proxyHttpRequest = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     try {
         const authorization = await authorizeApiRequest(req, res);
@@ -1159,6 +1408,60 @@ const proxyHttpRequest = async (req: http.IncomingMessage, res: http.ServerRespo
         return;
     }
 
+    const profilesApiHandled = await handleProfilesApiRequest(req, res);
+    if (profilesApiHandled) {
+        return;
+    }
+
+    const gatewayApiHandled = await handleGatewayApiRequest(req, res);
+    if (gatewayApiHandled) {
+        return;
+    }
+
+    const dashboardProxyHandled = await handleDashboardProxyApiRequest(req, res);
+    if (dashboardProxyHandled) {
+        return;
+    }
+
+    const dashboardLogsHandled = await handleDashboardLogsRequest(req, res);
+    if (dashboardLogsHandled) {
+        return;
+    }
+
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const pathname = url.pathname;
+    const method = (req.method ?? "GET").toUpperCase();
+
+    if (pathname === "/trpc" && method !== "OPTIONS") {
+        res.writeHead(426, { "Content-Type": "application/json" });
+        res.end(
+            JSON.stringify({
+                error: "Bare /trpc is unavailable in microservice mode. Use /trpc/<service>.",
+            }),
+        );
+        return;
+    }
+
+    if (pathname.startsWith("/trpc") && !isKnownServiceTrpcPath(pathname)) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(
+            JSON.stringify({
+                error: `Unknown TRPC service route: ${pathname}`,
+            }),
+        );
+        return;
+    }
+
+    if (pathname.startsWith("/api/")) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(
+            JSON.stringify({
+                error: `Endpoint not available via gateway: ${pathname}`,
+            }),
+        );
+        return;
+    }
+
     const target = resolveTarget(req);
     const targetPath = target.path;
 
@@ -1177,7 +1480,10 @@ const proxyHttpRequest = async (req: http.IncomingMessage, res: http.ServerRespo
     );
 
     proxy.on("error", (error) => {
-        console.error("[GATEWAY] Proxy request failed:", error);
+        console.error(
+            `[GATEWAY] Proxy request failed (${req.method ?? "GET"} ${req.url ?? "/"}) -> ${target.host}:${target.port}${targetPath}:`,
+            error,
+        );
         if (!res.headersSent) {
             res.writeHead(502);
         }

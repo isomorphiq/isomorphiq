@@ -6,6 +6,7 @@ Use this guide whenever a workflow step requires MCP tools.
 - The ACP tool list is authoritative for the current turn.
 - Do not claim the tool list is inaccessible when tools are visible there.
 - Use the exact tool name exposed in the ACP turn.
+- In OpenCode sessions, tools are often exposed as `task-manager_<tool>` (for example: `task-manager_list_tasks`).
 - In Codex ACP sessions, MCP tools are commonly exposed as `functions.mcp__<server>__<tool>` (for example: `functions.mcp__task-manager__list_tasks`).
 - Do not call bare names such as `list_tasks` unless that exact bare name appears in the visible tool list.
 - Pass a JSON object as the tool arguments.
@@ -24,6 +25,13 @@ Use this guide whenever a workflow step requires MCP tools.
 - `update_context` -> `functions.mcp__task-manager__update_context`
 
 If a profile/runtime exposes different names (for example OpenCode or custom MCP server aliases), use the exact visible names from that turn.
+
+### Common OpenCode Mappings
+- `list_tasks` -> `task-manager_list_tasks`
+- `get_task` -> `task-manager_get_task`
+- `create_task` -> `task-manager_create_task`
+- `update_task` -> `task-manager_update_task`
+- `update_task_priority` -> `task-manager_update_task_priority`
 
 ## 2. When to Call Tools
 - Read first:

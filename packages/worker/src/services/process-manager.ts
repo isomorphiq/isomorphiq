@@ -102,6 +102,21 @@ export class ProcessManager extends EventEmitter {
                 }
                 await this.productManager.updateTaskStatus(id, status, updatedBy);
             },
+            updateTask: async (id, updates, updatedBy) => {
+                if (!this.productManager) {
+                    throw new Error("[PROCESS-MANAGER] Product manager is not initialized");
+                }
+                if (typeof updates.branch !== "string" || updates.branch.trim().length === 0) {
+                    throw new Error(
+                        `[PROCESS-MANAGER] updateTask requires a non-empty branch for task ${id}`,
+                    );
+                }
+                return await this.productManager.updateTask(
+                    id,
+                    { branch: updates.branch },
+                    updatedBy ?? "workflow",
+                );
+            },
             appendTaskActionLogEntry: async (taskId, entry, fallbackLog) => {
                 if (!this.productManager) {
                     return;
@@ -490,22 +505,24 @@ export class ProcessManager extends EventEmitter {
 					result = Array.from(this.configs.keys());
 					break;
 				// Legacy task management commands
-				case "create_task": {
-					if (!this.productManager) throw new Error("ProductManager not initialized");
-					const createdTask = await this.productManager.createTask(
-						command.data.title,
-						command.data.description,
+                case "create_task": {
+                    if (!this.productManager) throw new Error("ProductManager not initialized");
+                    const createdTask = await this.productManager.createTask(
+                        command.data.title,
+                        command.data.description,
 						command.data.priority || "medium",
 						command.data.dependencies || [],
-						command.data.createdBy,
-						command.data.assignedTo,
-						command.data.collaborators,
-						command.data.watchers,
-					);
-					result = createdTask;
-					if (this.webSocketManager) {
-						this.webSocketManager.broadcastTaskCreated(createdTask);
-					}
+                        command.data.createdBy,
+                        command.data.assignedTo,
+                        command.data.collaborators,
+                        command.data.watchers,
+                        command.data.type || "task",
+                        command.data.prd,
+                    );
+                    result = createdTask;
+                    if (this.webSocketManager) {
+                        this.webSocketManager.broadcastTaskCreated(createdTask);
+                    }
 					break;
 				}
 				case "list_tasks":
@@ -616,8 +633,9 @@ export class ProcessManager extends EventEmitter {
 					await this.restartAll();
 					result = { success: true, message: "Restarting..." };
 					break;
-				default:
-					throw new Error(`Unknown command: ${command.command}`);
+				case "reset_workers":
+					result = await this.resetWorkerClaims();
+					break;
 			}
 
 			socket.write(`${JSON.stringify(result)}\n`);
@@ -651,41 +669,73 @@ export class ProcessManager extends EventEmitter {
 		});
 	}
 
-	// Restart all processes
-	private async restartAll(): Promise<void> {
-		console.log("[PROCESS-MANAGER] Restarting all processes...");
+// Restart all processes
+ 	private async restartAll(): Promise<void> {
+ 		console.log("[PROCESS-MANAGER] Restarting all processes...");
 
-		// Stop all processes
-		for (const name of Array.from(this.processes.keys())) {
-			await this.stopProcess(name, true);
-		}
+ 		// Stop all processes
+ 		for (const name of Array.from(this.processes.keys())) {
+ 			await this.stopProcess(name, true);
+ 		}
 
-		// Stop core services
-		if (this.webSocketManager) {
-			await this.webSocketManager.stop();
-		}
-		if (this.httpServer) {
-			this.httpServer.close();
-		}
-		if (this.commandServer) {
-			this.commandServer.close();
-		}
+ 		// Stop core services
+ 		if (this.webSocketManager) {
+ 			await this.webSocketManager.stop();
+ 		}
+ 		if (this.httpServer) {
+ 			this.httpServer.close();
+ 		}
+ 		if (this.commandServer) {
+ 			this.commandServer.close();
+ 		}
 
-		// Spawn new daemon process
-		const { spawn } = await import("node:child_process");
-		spawn("yarn", ["run", "worker"], {
-			cwd: process.cwd(),
-			env: process.env,
-			detached: true,
-			stdio: "ignore",
-			shell: true,
-		});
+ 		// Spawn new daemon process
+ 		const { spawn } = await import("node:child_process");
+ 		spawn("yarn", ["run", "worker"], {
+ 			cwd: process.cwd(),
+ 			env: process.env,
+ 			detached: true,
+ 			stdio: "ignore",
+ 			shell: true,
+ 		});
 
-		// Exit current process
-		setTimeout(() => process.exit(0), 1000);
-	}
+ 		// Exit current process
+ 		setTimeout(() => process.exit(0), 1000);
+ 	}
 
-	// Graceful shutdown
+ 	// Reset worker claims (clear all task assignments)
+ 	private async resetWorkerClaims(): Promise<void> {
+ 		console.log("[PROCESS-MANAGER] Resetting worker claims...");
+ 		if (!this.productManager) throw new Error("ProductManager not initialized");
+
+ 		const allTasks = await this.productManager.getAllTasks();
+ 		for (const task of allTasks) {
+ 			if (task.status === "in-progress" && task.assignedTo) {
+ 				await this.productManager.updateTask(task.id, {
+ 					status: "todo",
+ 					assignedTo: undefined,
+ 				});
+ 				console.log(`[PROCESS-MANAGER] Reset claim for task ${task.id}`);
+ 			}
+ 		}
+
+ 		if (this.webSocketManager) {
+ 			for (const task of allTasks) {
+ 				if (task.status === "in-progress" && task.assignedTo) {
+ 					this.webSocketManager.broadcastTaskStatusChanged(
+ 						task.id,
+ 						"in-progress",
+ 						"todo",
+ 						await this.productManager.getTask(task.id),
+ 					);
+ 				}
+ 			}
+ 		}
+
+ 		console.log("[PROCESS-MANAGER] Worker claims reset complete");
+ 	}
+
+ 	// Graceful shutdown
 	async shutdown(): Promise<void> {
 		console.log("[PROCESS-MANAGER] Starting graceful shutdown...");
 

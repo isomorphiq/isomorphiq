@@ -16,6 +16,22 @@ export type TransitionEffect = (payload?: unknown) => Promise<unknown> | unknown
 
 export type MaybePromise<T> = T | Promise<T>;
 
+export type DeciderContext = Record<string, unknown> & {
+    tasks: WorkflowTask[];
+};
+
+export type DeciderFn<Context extends DeciderContext = DeciderContext> = (
+    context: Context,
+) => MaybePromise<boolean>;
+
+export type StateDecider<
+    TransitionName extends string = string,
+    Context extends DeciderContext = DeciderContext,
+> = {
+    transitionName: TransitionName;
+    decider: DeciderFn<Context>;
+};
+
 export interface TransitionDefinition<
 	Name extends string = string,
 	Next extends WorkflowStateName = WorkflowStateName,
@@ -36,7 +52,7 @@ export interface StateDefinition<
 	promptHint?: string;
 	defaultTransition?: string;
 	transitions: TDefs;
-	decider?: (tasks: WorkflowTask[], context?: unknown) => MaybePromise<TDefs[number]["name"]>;
+	deciders: Array<StateDecider<TDefs[number]["name"]>>;
 }
 
 export interface RuntimeTransition {
@@ -58,7 +74,7 @@ export interface RuntimeState<
 	promptHint?: string;
 	defaultTransition?: string;
 	transitions: TransitionRecord<TNames>;
-	decider?: (tasks: WorkflowTask[], context?: unknown) => MaybePromise<TNames>;
+	deciders: Array<StateDecider<TNames>>;
 }
 
 export function createTransition<Name extends string, Next extends WorkflowStateName>(
@@ -88,7 +104,7 @@ export function createState<
 		promptHint: def.promptHint,
 		defaultTransition: def.defaultTransition,
 		transitions: transitions as TransitionRecord<TDefs[number]["name"]>,
-		decider: def.decider,
+		deciders: def.deciders,
 	};
 }
 

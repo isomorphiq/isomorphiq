@@ -65,6 +65,12 @@ export const taskServiceRouter = t.router({
             const task = await resolveTaskOrNull(ctx.taskService, input.id);
             return task;
         }),
+    getByBranch: t.procedure
+        .input(z.object({ branch: z.string() }))
+        .query(async ({ ctx, input }) => {
+            const result = await ctx.taskService.getTaskByBranch(input.branch);
+            return resolveResult(result);
+        }),
     search: t.procedure
         .input(TaskSearchOptionsSchema)
         .query(async ({ ctx, input }) => {

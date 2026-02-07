@@ -267,6 +267,11 @@ describe("Dashboard Server Tests", { skip: !canListen }, () => {
 
             expect(html).toContain("Widget Library");
             expect(html).toContain("widget-library-list");
+            expect(html).toContain("widget-library-controls");
+            expect(html).toContain("widgetLibrarySearch");
+            expect(html).toContain("widgetLibraryFilterGroup");
+            expect(html).toContain("widgetLibrarySelectionSummary");
+            expect(html).toContain("clearSelectedWidgetsBtn");
             expect(html).toContain("WIDGET_VISIBILITY_STORAGE_KEY");
         });
 
@@ -279,6 +284,25 @@ describe("Dashboard Server Tests", { skip: !canListen }, () => {
             expect(html).toContain("addSelectedWidgetsLabel");
             expect(html).toContain("widget-library-select");
             expect(html).toContain("widget-library-add");
+        });
+
+        it("should expose widget library filters and tooltip preview styles", async () => {
+            const response = await fetch(`http://localhost:${serverPort}/`);
+            expect(response.status).toBe(200);
+            const html = await response.text();
+
+            expect(html).toContain("widget-library-filter-btn");
+            expect(html).toContain("widget-library-tooltip");
+            expect(html).toContain("widget-library-item-description");
+        });
+
+        it("should include widget limit messaging for add actions", async () => {
+            const response = await fetch(`http://localhost:${serverPort}/`);
+            expect(response.status).toBe(200);
+            const html = await response.text();
+
+            expect(html).toContain("Widget limit reached");
+            expect(html).toContain("data-widget-limit=\"20\"");
         });
 
         it("should include widget placement persistence for add-selected widgets", async () => {

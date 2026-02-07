@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-1f7469e1-500e-46e4-8b30-280ff03741d4"
+
 // TODO: This file is too complex (715 lines) and should be refactored into several modules.
 // Current concerns mixed: Layout structure, navigation, environment management,
 // mobile responsiveness, admin settings, user menu, theme toggle.
@@ -16,7 +18,7 @@
 
 import { useAtomValue } from "jotai";
 import type { CSSProperties, ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { authAtom } from "../authAtoms.ts";
 import type { EnvironmentConfig } from "../environment.ts";
@@ -57,6 +59,7 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 	const auth = useAtomValue(authAtom);
 	const location = useLocation();
 	const [showUserMenu, setShowUserMenu] = useState(false);
+    const [showSkipLink, setShowSkipLink] = useState(false);
 	const [navOpen, setNavOpen] = useState(false);
 	const [isMobile, setIsMobile] = useState(getIsMobile());
 	const [adminSettings, setAdminSettings] = useState<AdminSettings>({
@@ -66,14 +69,19 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 	const [adminSettingsError, setAdminSettingsError] = useState<string | null>(null);
 	const [environmentConfig, setEnvironmentConfig] = useState<EnvironmentConfig | null>(null);
 	const [environment, setEnvironmentState] = useState<string>(getEnvironment());
+    const navId = useId();
+    const userMenuId = useId();
+    const environmentSelectId = useId();
+    const mainId = useId();
 
 	const navItems = [
-		{ to: "/", label: "Dashboard", icon: "📊" },
+		{ to: "/dashboard", label: "Dashboard", icon: "📊" },
+		{ to: "/overview", label: "Overview", icon: "🧾" },
 		{ to: "/analytics", label: "Analytics", icon: "📈" },
 		{ to: "/activity", label: "Activity", icon: "🔔" },
 		{ to: "/portfolio", label: "Portfolio", icon: "🗂️", requireAuth: true },
 		{ to: "/context", label: "Context", icon: "🧠", requireAuth: true },
-		{ to: "/profiles", label: "Profiles", icon: "👥" },
+		{ to: "/profiles", label: "Profiles", icon: "👥", requireAuth: true },
 		{ to: "/workflow", label: "Workflow", icon: "🕸️" },
 		{ to: "/dependencies", label: "Dependencies", icon: "🔗" },
 		{ to: "/users/me", label: "My Profile", icon: "👤", requireAuth: true },
@@ -181,9 +189,34 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 		window.location.reload();
 	};
 
+    const skipLinkStyles: CSSProperties = {
+        position: "absolute",
+        top: "16px",
+        left: showSkipLink ? "16px" : "-999px",
+        padding: "8px 12px",
+        borderRadius: "8px",
+        background: "var(--color-surface-primary)",
+        color: "var(--color-text-primary)",
+        border: "1px solid var(--color-border-primary)",
+        boxShadow: "0 6px 16px var(--color-shadow-md)",
+        fontWeight: 700,
+        zIndex: 50,
+    };
+
+    const handleSkipLinkClick = () => {
+        if (typeof document === "undefined") {
+            return;
+        }
+        const main = document.getElementById(mainId);
+        if (main instanceof HTMLElement) {
+            main.focus();
+        }
+    };
+
 	return (
 		<div
 			style={{
+				position: "relative",
 				padding: isMobile ? "16px" : "24px",
 				fontFamily: "Inter, system-ui, sans-serif",
 				background: "var(--color-bg-primary)",
@@ -191,6 +224,26 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 				color: "var(--color-text-primary)",
 			}}
 		>
+            <a
+                href={`#${mainId}`}
+                onClick={handleSkipLinkClick}
+                onFocus={() => setShowSkipLink(true)}
+                onBlur={() => setShowSkipLink(false)}
+                style={skipLinkStyles}
+            >
+                Skip to main content
+            </a>
+            <style>{`
+                a:focus-visible,
+                button:focus-visible,
+                input:focus-visible,
+                select:focus-visible,
+                textarea:focus-visible,
+                [tabindex]:focus-visible {
+                    outline: 2px solid var(--color-accent-secondary);
+                    outline-offset: 2px;
+                }
+            `}</style>
 			<header
 				style={{
 					...headerShell,
@@ -209,7 +262,7 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 					}}
 				>
 					<Link
-						to="/"
+						to="/dashboard"
 						style={{
 							color: "var(--color-text-primary)",
 							fontWeight: 800,
@@ -225,6 +278,9 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 						<button
 							type="button"
 							onClick={() => setNavOpen((value) => !value)}
+                            aria-expanded={navOpen}
+                            aria-controls={navId}
+                            aria-label={navOpen ? "Close navigation menu" : "Open navigation menu"}
 							style={{
 								padding: "10px 12px",
 								borderRadius: "10px",
@@ -240,6 +296,8 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 					)}
 					{showNav && (
 						<nav
+                            id={navId}
+                            aria-label="Primary"
 							style={
 								isMobile
 									? {
@@ -261,6 +319,7 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 										<Link
 											key={item.to}
 											to={item.to}
+                                            aria-current={active ? "page" : undefined}
 											onClick={() => {
 												if (navOpen) {
 													setNavOpen(false);
@@ -301,8 +360,11 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 					}}
 				>
 					<div style={environmentControl}>
-						<span style={environmentLabel}>Env</span>
+						<label htmlFor={environmentSelectId} style={environmentLabel}>
+							Env
+						</label>
 						<select
+                            id={environmentSelectId}
 							value={environment}
 							onChange={(event) => handleEnvironmentChange(event.target.value)}
 							style={environmentSelect}
@@ -317,12 +379,19 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 					<ThemeToggle size="small" />
 					{auth.isAuthenticated && auth.user ? (
 					<div style={{ position: "relative" }}>
-						<button type="button" onClick={() => setShowUserMenu((s) => !s)} style={userButton}>
+						<button
+                            type="button"
+                            onClick={() => setShowUserMenu((s) => !s)}
+                            aria-expanded={showUserMenu}
+                            aria-controls={userMenuId}
+                            aria-label="User menu"
+                            style={userButton}
+                        >
 							<span>{auth.user.username || auth.user.email}</span>
 							<span style={{ fontSize: "12px" }}>▼</span>
 						</button>
 						{showUserMenu && (
-							<div style={menuPanel}>
+							<div id={userMenuId} aria-label="User menu" style={menuPanel}>
 								<div
 									style={{ padding: "10px", borderBottom: "1px solid var(--color-border-primary)", color: "var(--color-text-secondary)" }}
 								>
@@ -430,7 +499,9 @@ export function Layout({ children, showNav = true, showFooter = true }: LayoutPr
 				</div>
 			</header>
 
-			{children}
+            <main id={mainId} tabIndex={-1}>
+                {children}
+            </main>
 			{showFooter && (
 				<footer
 					style={{
@@ -540,7 +611,7 @@ const menuLinkStyle: CSSProperties = {
 
 const loginBtn: CSSProperties = {
 	background: "var(--color-accent-primary)",
-	color: "white",
+	color: "var(--color-text-on-accent)",
 	padding: "8px 14px",
 	borderRadius: "8px",
 	textDecoration: "none",
@@ -572,6 +643,7 @@ export function Header({
 	showAuthControls?: boolean;
 }) {
 	const [showUserMenu, setShowUserMenu] = useState(false);
+    const userMenuId = useId();
 	// Registration always open for now; adjust when status endpoint is wired
 	const registrationDisabled = false;
 
@@ -594,6 +666,9 @@ export function Header({
 					<button
 						type="button"
 						onClick={() => setShowUserMenu(!showUserMenu)}
+                        aria-expanded={showUserMenu}
+                        aria-controls={userMenuId}
+                        aria-label="User menu"
 						style={{
 							padding: "8px 12px",
 							background: "var(--color-surface-primary)",
@@ -613,6 +688,8 @@ export function Header({
 
 					{showUserMenu && (
 						<div
+                            id={userMenuId}
+                            aria-label="User menu"
 							style={{
 								position: "absolute",
 								top: "100%",
@@ -705,7 +782,7 @@ export function Header({
 						to="/login"
 						style={{
 							background: "var(--color-accent-primary)",
-							color: "white",
+							color: "var(--color-text-on-accent)",
 							padding: "8px 14px",
 							borderRadius: "8px",
 							textDecoration: "none",

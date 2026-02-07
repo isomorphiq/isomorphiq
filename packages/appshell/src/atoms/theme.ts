@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-d51225cd-04a7-4490-ada7-192618d1034f"
+
 import { atom } from "jotai";
 
 export type Theme = "light" | "dark" | "system";

@@ -174,6 +174,10 @@ const createLocalTaskClient = (taskService: TaskServiceApi): TaskClient => ({
         const result = await taskService.getTask(id);
         return result.success ? (result.data as TaskEntity) : null;
     },
+    getTaskByBranch: async (branch: string) => {
+        const result = await taskService.getTaskByBranch(branch);
+        return result.success ? result.data : null;
+    },
     searchTasks: async (options: TaskSearchOptions) =>
         resolveTaskResult(await taskService.searchTasks(options)),
     createTask: async (input: CreateTaskInputWithPriority, createdBy?: string) =>
@@ -416,27 +420,29 @@ export class ProductManager {
 	/**
 	 * Create a new task with full validation and business logic
 	 */
-	async createTask(
-		title: string,
-		description: string,
-		priority: "low" | "medium" | "high" = "medium",
-		dependencies: string[] = [],
-		createdBy?: string,
-		assignedTo?: string,
-		collaborators?: string[],
-		watchers?: string[],
-		_type: TaskType = "task",
-	): Promise<Task> {
+    async createTask(
+        title: string,
+        description: string,
+        priority: "low" | "medium" | "high" = "medium",
+        dependencies: string[] = [],
+        createdBy?: string,
+        assignedTo?: string,
+        collaborators?: string[],
+        watchers?: string[],
+        _type: TaskType = "task",
+        prd?: string,
+    ): Promise<Task> {
 		await this.ensureInitialized();
 
-		const input: CreateTaskInputWithPriority & { type?: TaskType } = {
-			title,
-			description,
-			priority,
-			dependencies,
-			type: _type,
-			...(assignedTo && { assignedTo }),
-			...(collaborators && { collaborators }),
+        const input: CreateTaskInputWithPriority & { type?: TaskType } = {
+            title,
+            description,
+            ...(typeof prd === "string" ? { prd } : {}),
+            priority,
+            dependencies,
+            type: _type,
+            ...(assignedTo && { assignedTo }),
+            ...(collaborators && { collaborators }),
 			...(watchers && { watchers }),
 		};
 
@@ -492,8 +498,10 @@ export class ProductManager {
         updates: Partial<{
             title: string;
             description: string;
+            prd: string;
             status: TaskStatus;
             priority: "low" | "medium" | "high";
+            branch: string;
             assignedTo: string;
             collaborators: string[];
             watchers: string[];
@@ -1247,18 +1255,20 @@ export class ProductManager {
 	/**
 	 * Convert TaskEntity to Task (for backward compatibility)
 	 */
-	private convertTaskEntityToTask(entity: TaskEntity): Task {
-		const task: Task = {
-			id: entity.id,
-			title: entity.title,
-			description: entity.description,
-			status: entity.status,
-			priority: entity.priority,
-			type: entity.type ?? "task",
-			dependencies: entity.dependencies,
-			createdBy: entity.createdBy,
-			createdAt: entity.createdAt,
-			updatedAt: entity.updatedAt,
+    private convertTaskEntityToTask(entity: TaskEntity): Task {
+        const task: Task = {
+            id: entity.id,
+            title: entity.title,
+            description: entity.description,
+            ...(typeof entity.prd === "string" ? { prd: entity.prd } : {}),
+            status: entity.status,
+            priority: entity.priority,
+            type: entity.type ?? "task",
+            branch: entity.branch,
+            dependencies: entity.dependencies,
+            createdBy: entity.createdBy,
+            createdAt: entity.createdAt,
+            updatedAt: entity.updatedAt,
             actionLog: entity.actionLog ?? [],
 		};
 
@@ -1279,18 +1289,20 @@ export class ProductManager {
 	/**
 	 * Convert Task to TaskEntity
 	 */
-	private convertTaskToTaskEntity(task: Task): TaskEntity {
-		const entity: TaskEntity = {
-			id: task.id,
-			title: task.title,
-			description: task.description,
-			status: task.status,
-			priority: task.priority,
-			type: task.type ?? "task",
-			dependencies: task.dependencies,
-			createdBy: task.createdBy,
-			createdAt: task.createdAt,
-			updatedAt: task.updatedAt,
+    private convertTaskToTaskEntity(task: Task): TaskEntity {
+        const entity: TaskEntity = {
+            id: task.id,
+            title: task.title,
+            description: task.description,
+            ...(typeof task.prd === "string" ? { prd: task.prd } : {}),
+            status: task.status,
+            priority: task.priority,
+            type: task.type ?? "task",
+            branch: task.branch,
+            dependencies: task.dependencies,
+            createdBy: task.createdBy,
+            createdAt: task.createdAt,
+            updatedAt: task.updatedAt,
             actionLog: task.actionLog ?? [],
 		};
 

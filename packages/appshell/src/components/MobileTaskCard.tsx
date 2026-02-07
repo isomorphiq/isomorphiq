@@ -1,10 +1,14 @@
-import { useLayoutEffect, useRef, useState } from "react";
+// FILE_CONTEXT: "context-2d6dbc05-129a-42c7-aef8-82ff3ad93acb"
+
+import type { KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Task } from "@isomorphiq/tasks/types";
-import { PriorityBadge } from "./PriorityBadge";
-import { TypeBadge } from "./TypeBadge";
+import { ActionErrorBanner, useFeedbackToasts } from "./ActionFeedback.tsx";
+import { PriorityBadge } from "./PriorityBadge.tsx";
+import { TypeBadge } from "./TypeBadge.tsx";
 
-interface MobileTaskCardProps {
+type MobileTaskCardProps = {
     task: Task & { isOffline?: boolean }; // Allow for offline tasks
     highlight?: boolean;
     showIndex?: number;
@@ -12,7 +16,33 @@ interface MobileTaskCardProps {
     onPriorityChange?: (taskId: string, newPriority: Task["priority"]) => void;
     onDelete?: (taskId: string) => void;
     compact?: boolean;
-}
+};
+
+type ActionError = {
+    message: string;
+    actionLabel?: string;
+    onAction?: () => void;
+};
+
+const visuallyHiddenStyle = {
+    position: "absolute",
+    width: "1px",
+    height: "1px",
+    padding: 0,
+    margin: "-1px",
+    overflow: "hidden",
+    clip: "rect(0 0 0 0)",
+    whiteSpace: "nowrap",
+    border: 0,
+};
+
+const isEditableTarget = (target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement)) {
+        return false;
+    }
+    const tag = target.tagName.toLowerCase();
+    return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
+};
 
 export function MobileTaskCard({
     task,
@@ -25,15 +55,34 @@ export function MobileTaskCard({
 }: MobileTaskCardProps) {
     const [isUpdating, setIsUpdating] = useState(false);
     const [showActions, setShowActions] = useState(false);
+    const [statusAnnouncement, setStatusAnnouncement] = useState("");
+    const [actionError, setActionError] = useState<ActionError | null>(null);
+    const hasMountedStatusRef = useRef(false);
+    const lastStatusRef = useRef("");
+    const actionsId = useId();
+    const { pushToast } = useFeedbackToasts();
 
     const handleStatusChange = async (newStatus: Task["status"]) => {
         if (!onStatusChange || isUpdating) return;
 
         setIsUpdating(true);
+        setActionError(null);
         try {
             await onStatusChange(task.id, newStatus);
+            const statusLabel = newStatus.replace("-", " ");
+            const message =
+                newStatus === "done"
+                    ? `Marked "${task.title}" complete.`
+                    : `Set "${task.title}" to ${statusLabel}.`;
+            pushToast({ message, tone: "success" });
         } catch (error) {
             console.error("Failed to update status:", error);
+            setShowActions(true);
+            setActionError({
+                message: error instanceof Error ? error.message : "Failed to update task status.",
+                actionLabel: "Retry",
+                onAction: () => void handleStatusChange(newStatus),
+            });
         } finally {
             setIsUpdating(false);
         }
@@ -43,10 +92,18 @@ export function MobileTaskCard({
         if (!onPriorityChange || isUpdating) return;
 
         setIsUpdating(true);
+        setActionError(null);
         try {
             await onPriorityChange(task.id, newPriority);
+            pushToast({ message: `Priority set to ${newPriority}.`, tone: "success" });
         } catch (error) {
             console.error("Failed to update priority:", error);
+            setShowActions(true);
+            setActionError({
+                message: error instanceof Error ? error.message : "Failed to update priority.",
+                actionLabel: "Retry",
+                onAction: () => void handlePriorityChange(newPriority),
+            });
         } finally {
             setIsUpdating(false);
         }
@@ -57,10 +114,18 @@ export function MobileTaskCard({
 
         if (window.confirm("Are you sure you want to delete this task?")) {
             setIsUpdating(true);
+            setActionError(null);
             try {
                 await onDelete(task.id);
+                pushToast({ message: `Deleted "${task.title}".`, tone: "success" });
             } catch (error) {
                 console.error("Failed to delete task:", error);
+                setShowActions(true);
+                setActionError({
+                    message: error instanceof Error ? error.message : "Failed to delete task.",
+                    actionLabel: "Retry",
+                    onAction: () => void handleDelete(),
+                });
             } finally {
                 setIsUpdating(false);
             }
@@ -72,13 +137,56 @@ export function MobileTaskCard({
         "in-progress": "#f59e0b",
         done: "#10b981",
     };
+    const statusLabel = task.status.replace("-", " ");
 
     const isMobile = window.innerWidth <= 768;
     const cardPadding = compact ? (isMobile ? "12px" : "16px") : isMobile ? "16px" : "20px";
 
+    useEffect(() => {
+        if (!hasMountedStatusRef.current) {
+            hasMountedStatusRef.current = true;
+            return;
+        }
+        const nextMessage = `Task ${task.title} marked ${statusLabel}.`;
+        if (nextMessage === lastStatusRef.current) {
+            return;
+        }
+        const timeout = setTimeout(() => {
+            lastStatusRef.current = nextMessage;
+            setStatusAnnouncement(nextMessage);
+        }, 120);
+        return () => clearTimeout(timeout);
+    }, [task.status, task.title, statusLabel]);
+
+    useEffect(() => {
+        setActionError(null);
+    }, [task.status, task.priority]);
+
+    const handleCardKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+        if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+            return;
+        }
+        if (isEditableTarget(event.target)) {
+            return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            void handleStatusChange("done");
+            return;
+        }
+        if (event.key.toLowerCase() === "c" && task.status !== "done") {
+            event.preventDefault();
+            void handleStatusChange("done");
+        }
+    };
+
     return (
         <button
             type="button"
+            aria-label={`Task ${task.title}, status ${statusLabel}`}
+            aria-expanded={showActions}
+            aria-controls={actionsId}
+            aria-keyshortcuts="C"
             style={{
                 padding: cardPadding,
                 borderRadius: "12px",
@@ -101,12 +209,11 @@ export function MobileTaskCard({
                     navigator.vibrate(10);
                 }
             }}
-            onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                    handleStatusChange("done" as Task["status"]);
-                }
-            }}
+            onKeyDown={handleCardKeyDown}
         >
+            <div role="status" aria-live="polite" aria-atomic="true" style={visuallyHiddenStyle}>
+                {statusAnnouncement}
+            </div>
             {/* Offline Indicator */}
             {task.isOffline && (
                 <div
@@ -126,6 +233,21 @@ export function MobileTaskCard({
                     Offline
                 </div>
             )}
+
+            {actionError ? (
+                <div
+                    style={{ marginBottom: "12px" }}
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                >
+                    <ActionErrorBanner
+                        message={actionError.message}
+                        actionLabel={actionError.actionLabel}
+                        onAction={actionError.onAction}
+                        onDismiss={() => setActionError(null)}
+                    />
+                </div>
+            ) : null}
 
             {/* Header */}
             <div
@@ -158,6 +280,7 @@ export function MobileTaskCard({
 
                 <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                     <span
+                        aria-label={`Status ${statusLabel}`}
                         style={{
                             fontSize: isMobile ? "10px" : "12px",
                             color: statusColors[task.status],
@@ -167,7 +290,7 @@ export function MobileTaskCard({
                             background: `${statusColors[task.status]}20`,
                         }}
                     >
-                        {task.status.replace("-", " ")}
+                        {statusLabel}
                     </span>
 
                     {onDelete && (
@@ -178,6 +301,7 @@ export function MobileTaskCard({
                                 handleDelete();
                             }}
                             disabled={isUpdating}
+                            aria-label={`Delete ${task.title}`}
                             style={{
                                 background: "none",
                                 border: "none",
@@ -239,6 +363,7 @@ export function MobileTaskCard({
             {/* Expandable Actions */}
             {showActions && (
                 <section
+                    id={actionsId}
                     aria-label="Task actions"
                     style={{
                         marginTop: "12px",
@@ -259,10 +384,34 @@ export function MobileTaskCard({
                         }}
                     >
                         {onStatusChange && task.status !== "done" && (
+                            <button
+                                type="button"
+                                onClick={() => void handleStatusChange("done")}
+                                disabled={isUpdating}
+                                aria-label={`Mark ${task.title} complete`}
+                                aria-keyshortcuts="C"
+                                style={{
+                                    padding: "6px 10px",
+                                    borderRadius: "6px",
+                                    border: "1px solid #10b981",
+                                    background: isUpdating ? "#064e3b" : "#0f766e",
+                                    color: "#ecfeff",
+                                    fontSize: isMobile ? "12px" : "14px",
+                                    fontWeight: 600,
+                                    cursor: isUpdating ? "not-allowed" : "pointer",
+                                }}
+                                title="Shortcut: C"
+                            >
+                                Mark complete
+                            </button>
+                        )}
+
+                        {onStatusChange && task.status !== "done" && (
                             <select
                                 value={task.status}
                                 onChange={(e) => handleStatusChange(e.target.value as Task["status"])}
                                 disabled={isUpdating}
+                                aria-label={`Update status for ${task.title}`}
                                 style={{
                                     padding: "6px 10px",
                                     borderRadius: "6px",
@@ -285,6 +434,7 @@ export function MobileTaskCard({
                                 value={task.priority}
                                 onChange={(e) => handlePriorityChange(e.target.value as Task["priority"])}
                                 disabled={isUpdating}
+                                aria-label={`Update priority for ${task.title}`}
                                 style={{
                                     padding: "6px 10px",
                                     borderRadius: "6px",
@@ -421,14 +571,14 @@ export function MobileTaskCard({
     );
 }
 
-interface MobileTaskListProps {
+type MobileTaskListProps = {
     tasks: Task[];
     empty: string;
     onStatusChange?: (taskId: string, newStatus: Task["status"]) => void;
     onPriorityChange?: (taskId: string, newPriority: Task["priority"]) => void;
     onDelete?: (taskId: string) => void;
     compact?: boolean;
-}
+};
 
 export function MobileTaskList({
     tasks,
@@ -443,6 +593,8 @@ export function MobileTaskList({
     if (!tasks.length) {
         return (
             <div
+                role="status"
+                aria-live="polite"
                 style={{
                     textAlign: "center",
                     padding: isMobile ? "40px 20px" : "60px 40px",
@@ -456,7 +608,7 @@ export function MobileTaskList({
     }
 
     return (
-        <div style={{ display: "grid", gap: isMobile ? "8px" : "12px" }}>
+        <div role="list" aria-label="Tasks" style={{ display: "grid", gap: isMobile ? "8px" : "12px" }}>
             {tasks.map((task) => (
                 <MobileTaskCard
                     key={task.id}
@@ -471,12 +623,12 @@ export function MobileTaskList({
     );
 }
 
-interface MobileQueueListProps {
+type MobileQueueListProps = {
     tasks: Task[];
     onStatusChange?: (taskId: string, newStatus: Task["status"]) => void;
     onPriorityChange?: (taskId: string, newPriority: Task["priority"]) => void;
     onDelete?: (taskId: string) => void;
-}
+};
 
 export function MobileQueueList({
     tasks,
@@ -496,6 +648,8 @@ export function MobileQueueList({
     if (!tasks.length) {
         return (
             <div
+                role="status"
+                aria-live="polite"
                 style={{
                     textAlign: "center",
                     padding: isMobile ? "40px 20px" : "60px 40px",
@@ -511,7 +665,7 @@ export function MobileQueueList({
     if (isMobile) {
         // On mobile, show as a vertical list instead of horizontal scroll
         return (
-            <div style={{ display: "grid", gap: "12px" }}>
+            <div role="list" aria-label="Queued tasks" style={{ display: "grid", gap: "12px" }}>
                 {tasks.map((task, idx) => (
                     <MobileTaskCard
                         key={task.id}
@@ -532,6 +686,8 @@ export function MobileQueueList({
     return (
         <div
             ref={scrollRef}
+            role="region"
+            aria-label="Queued tasks"
             style={{
                 width: "100%",
                 overflowX: "auto",
@@ -542,6 +698,8 @@ export function MobileQueueList({
             }}
         >
             <div
+                role="list"
+                aria-label="Queued tasks"
                 style={{
                     display: "inline-flex",
                     gap: "12px",

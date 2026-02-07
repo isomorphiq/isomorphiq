@@ -1,10 +1,14 @@
+// FILE_CONTEXT: "context-4a40b6b1-8634-4f97-987f-23ebeb84aaaf"
+
+import type { FormEvent } from "react";
 import { useEffect, useState } from "react";
 import { useOfflineSync } from "../hooks/useOfflineSync.ts";
+import { ActionErrorBanner, useFeedbackToasts } from "./ActionFeedback.tsx";
 
-interface MobileCreateTaskFormProps {
+type MobileCreateTaskFormProps = {
 	onSuccess?: () => void;
 	onCancel?: () => void;
-}
+};
 
 export function MobileCreateTaskForm({ onSuccess, onCancel }: MobileCreateTaskFormProps) {
 	const [title, setTitle] = useState("");
@@ -16,8 +20,11 @@ export function MobileCreateTaskForm({ onSuccess, onCancel }: MobileCreateTaskFo
 	const [dependencies, setDependencies] = useState("");
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [errors, setErrors] = useState<Record<string, string>>({});
+	const [submitError, setSubmitError] = useState<string | null>(null);
+	const [submitRetryable, setSubmitRetryable] = useState(false);
 
 	const { createOfflineTask, isOnline } = useOfflineSync();
+	const { pushToast } = useFeedbackToasts();
 	const isMobile = window.innerWidth <= 768;
 
 	useEffect(() => {
@@ -81,8 +88,9 @@ export function MobileCreateTaskForm({ onSuccess, onCancel }: MobileCreateTaskFo
 		return /^[a-zA-Z0-9_-]{8,}$/.test(taskId);
 	};
 
-	const handleSubmit = async (e: React.FormEvent) => {
-		e.preventDefault();
+	const submitTask = async () => {
+		setSubmitError(null);
+		setSubmitRetryable(false);
 
 		if (!validateForm()) {
 			return;
@@ -105,8 +113,10 @@ export function MobileCreateTaskForm({ onSuccess, onCancel }: MobileCreateTaskFo
 						.filter(Boolean)
 				: [];
 
+			const trimmedTitle = title.trim();
+
 			await createOfflineTask({
-				title: title.trim(),
+				title: trimmedTitle,
 				description: description.trim(),
 				priority,
 				type,
@@ -126,15 +136,26 @@ export function MobileCreateTaskForm({ onSuccess, onCancel }: MobileCreateTaskFo
 			setDependencies("");
 			setErrors({});
 
+			const toastMessage = isOnline
+				? `Created "${trimmedTitle}".`
+				: `Saved "${trimmedTitle}" for sync.`;
+			pushToast({ message: toastMessage, tone: "success" });
+
 			if (onSuccess) {
 				onSuccess();
 			}
 		} catch (error) {
 			console.error("Failed to create task:", error);
-			setErrors({ submit: "Failed to create task. Please try again." });
+			setSubmitError("Failed to create task. Please try again.");
+			setSubmitRetryable(true);
 		} finally {
 			setIsSubmitting(false);
 		}
+	};
+
+	const handleSubmit = (event: FormEvent) => {
+		event.preventDefault();
+		void submitTask();
 	};
 
 	const inputStyle = {
@@ -385,22 +406,29 @@ export function MobileCreateTaskForm({ onSuccess, onCancel }: MobileCreateTaskFo
 					{errors.dependencies && <div style={errorStyle}>{errors.dependencies}</div>}
 				</div>
 
-				{/* Submit Error */}
-				{errors.submit && (
-					<div
-						style={{
-							background: "#ef444420",
-							border: "1px solid #ef444450",
-							borderRadius: "8px",
-							padding: "10px",
-							marginBottom: "16px",
-							color: "#ef4444",
-							fontSize: isMobile ? "12px" : "14px",
-						}}
-					>
-						{errors.submit}
-					</div>
-				)}
+			{/* Submit Error */}
+			{submitError ? (
+				<div
+					style={{ marginBottom: "16px" }}
+					onClick={(event) => event.stopPropagation()}
+					onKeyDown={(event) => event.stopPropagation()}
+				>
+					<ActionErrorBanner
+						message={submitError}
+						actionLabel={submitRetryable ? "Retry" : undefined}
+						onAction={
+							submitRetryable
+								? () => {
+										if (!isSubmitting) {
+											void submitTask();
+										}
+									}
+								: undefined
+						}
+						onDismiss={() => setSubmitError(null)}
+					/>
+				</div>
+			) : null}
 
 				{/* Actions */}
 				<div

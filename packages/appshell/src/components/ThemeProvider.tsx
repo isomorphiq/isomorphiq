@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-9509d8c5-ec89-4253-b753-64a6db04c31e"
+
 import { useAtom } from "jotai";
 import { useEffect } from "react";
 import { effectiveThemeAtom, setStoredTheme, themeAtom, type Theme } from "../atoms/themeAtoms.ts";
@@ -20,9 +22,9 @@ export function useTheme() {
     };
 }
 
-interface ThemeProviderProps {
+type ThemeProviderProps = {
     children: React.ReactNode;
-}
+};
 
 export function ThemeProvider({ children }: ThemeProviderProps) {
     const { effectiveTheme } = useTheme();
@@ -45,9 +47,9 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
         });
         
         // Update theme-color meta tag for mobile browsers
-        const themeColorMeta = document.getElementById('theme-color');
+        const themeColorMeta = document.getElementById("theme-color");
         if (themeColorMeta) {
-            themeColorMeta.setAttribute('content', colors['bg-primary']);
+            themeColorMeta.setAttribute("content", colors["bg-primary"]);
         }
     }, [effectiveTheme]);
 
@@ -85,10 +87,11 @@ function getThemeColors(theme: "light" | "dark") {
             
             // Text colors
             "text-primary": "#0f172a",
-            "text-secondary": "#475569",
-            "text-tertiary": "#64748b",
+            "text-secondary": "#334155",
+            "text-tertiary": "#475569",
             "text-inverse": "#f8fafc",
-            "text-muted": "#94a3b8",
+            "text-muted": "#64748b",
+            "text-on-accent": "#ffffff",
             
             // Border colors
             "border-primary": "#e2e8f0",
@@ -97,16 +100,16 @@ function getThemeColors(theme: "light" | "dark") {
             "border-inverse": "#334155",
             
             // Accent colors
-            "accent-primary": "#3b82f6",
-            "accent-primary-hover": "#2563eb",
-            "accent-secondary": "#06b6d4",
-            "accent-success": "#22c55e",
-            "accent-warning": "#f59e0b",
-            "accent-error": "#ef4444",
+            "accent-primary": "#1d4ed8",
+            "accent-primary-hover": "#1e40af",
+            "accent-secondary": "#0e7490",
+            "accent-success": "#15803d",
+            "accent-warning": "#b45309",
+            "accent-error": "#b91c1c",
             
             // State colors
             "state-active-bg": "#eff6ff",
-            "state-active-border": "#3b82f6",
+            "state-active-border": "#1d4ed8",
             "state-hover-bg": "#f8fafc",
             "state-pressed-bg": "#f1f5f9",
             
@@ -135,7 +138,8 @@ function getThemeColors(theme: "light" | "dark") {
             "text-secondary": "#e2e8f0",
             "text-tertiary": "#cbd5e1",
             "text-inverse": "#0f172a",
-            "text-muted": "#94a3b8",
+            "text-muted": "#cbd5e1",
+            "text-on-accent": "#0f172a",
             
             // Border colors
             "border-primary": "#334155",
@@ -144,16 +148,16 @@ function getThemeColors(theme: "light" | "dark") {
             "border-inverse": "#e2e8f0",
             
             // Accent colors
-            "accent-primary": "#3b82f6",
-            "accent-primary-hover": "#2563eb",
-            "accent-secondary": "#06b6d4",
-            "accent-success": "#22c55e",
-            "accent-warning": "#f59e0b",
-            "accent-error": "#ef4444",
+            "accent-primary": "#93c5fd",
+            "accent-primary-hover": "#bfdbfe",
+            "accent-secondary": "#2dd4bf",
+            "accent-success": "#4ade80",
+            "accent-warning": "#fbbf24",
+            "accent-error": "#fca5a5",
             
             // State colors
             "state-active-bg": "#1e3a8a",
-            "state-active-border": "#3b82f6",
+            "state-active-border": "#93c5fd",
             "state-hover-bg": "#334155",
             "state-pressed-bg": "#475569",
             

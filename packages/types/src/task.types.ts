@@ -61,9 +61,11 @@ export type TaskActionLog = StructSelf<typeof TaskActionLogStruct>;
 export const TaskSchema = TaskIdentitySchema.extend({
     title: z.string(),
     description: z.string(),
+    prd: z.string().optional(),
     status: TaskStatusSchema,
     priority: TaskPrioritySchema,
     type: TaskTypeSchema,
+    branch: z.string().optional(),
     dependencies: z.array(z.string()),
     createdBy: z.string(),
     assignedTo: z.string().optional(),

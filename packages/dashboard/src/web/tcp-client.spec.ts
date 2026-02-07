@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-c363cda5-61fa-40b4-9976-6289fdd493c0"
+
 import { describe, it, beforeEach, afterEach, mock } from "node:test";
 import assert from "node:assert";
 import { DaemonTcpClient, type Task } from "./tcp-client.ts";
@@ -309,16 +311,19 @@ describe("DaemonTcpClient", () => {
     describe("Connection Management", () => {
         it("should check connection status", async () => {
             // Mock successful connection
-            const mockCreateConnection = mock.fn((options, callback) => {
-                // Simulate successful connection
-                const mockSocket = {
-                    end: mock.fn(),
-                    on: mock.fn(),
-                    destroy: mock.fn(),
-                };
-                queueMicrotask(() => callback());
-                return mockSocket;
-            });
+const mockCreateConnection = mock.fn((options, callback) => {
+                 // Simulate successful connection
+                 const mockSocket = {
+                     end: mock.fn(),
+                     on: mock.fn((event, handler) => {
+                         if (event === "connect") {
+                             handler();
+                         }
+                     }),
+                     destroy: mock.fn(),
+                 };
+                 return mockSocket;
+             });
 
             const originalConnect = tcpClient["connect"];
             tcpClient["connect"] = mockCreateConnection;
@@ -331,30 +336,40 @@ describe("DaemonTcpClient", () => {
             }
         });
 
-        it("should handle connection errors", async () => {
-            // Mock failed connection
-            const mockCreateConnection = mock.fn((options, callback) => {
-                const mockSocket = {
-                    end: mock.fn(),
-                    on: mock.fn((event, handler) => {
-                        if (event === "error") {
-                            handler(new Error("Connection refused"));
-                        }
-                    }),
-                    destroy: mock.fn(),
-                };
-                return mockSocket;
-            });
+it("should handle connection errors", async () => {
+             // Mock failed connection - prevent callback invocation and HTTP fallback to simulate total failure
+             const mockCreateConnection = mock.fn((options, callback) => {
+                 const mockSocket = {
+                     end: mock.fn(),
+                     on: mock.fn((event, handler) => {
+                         if (event === "error") {
+                             handler(new Error("Connection refused"));
+                         }
+                     }),
+                     destroy: mock.fn(),
+                 };
+                 return mockSocket;
+             });
+const originalConnect = tcpClient["connect"];
+             tcpClient["connect"] = mockCreateConnection;
+             
+             // Mock gateway fetch to fail
+             const originalFetch = globalThis.fetch;
+             globalThis.fetch = mock.fn(() => {
+                 return Promise.resolve({
+                     ok: false,
+                     status: 503,
+                     text: () => Promise.resolve("Service unavailable"),
+                 });
+             });
 
-            const originalConnect = tcpClient["connect"];
-            tcpClient["connect"] = mockCreateConnection;
-
-            try {
-                const isConnected = await tcpClient.checkConnection();
-                assert.strictEqual(isConnected, false);
-            } finally {
-                tcpClient["connect"] = originalConnect;
-            }
+try {
+                 const isConnected = await tcpClient.checkConnection();
+                 assert.strictEqual(isConnected, false);
+             } finally {
+                 tcpClient["connect"] = originalConnect;
+                 globalThis.fetch = originalFetch;
+             }
         });
     });
 

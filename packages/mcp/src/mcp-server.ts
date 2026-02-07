@@ -401,6 +401,30 @@ const normalizeTaskSearchOptions = (value: unknown): TaskSearchOptions => {
 	};
 };
 
+const normalizeTaskTypeFilters = (value: unknown): TaskTypeValue[] | undefined =>
+    normalizeEnumArray(value, taskTypeValues);
+
+type ListTasksQuery = {
+    options: TaskSearchOptions;
+    rawFilters: Record<string, unknown>;
+    typeFilters?: TaskTypeValue[];
+};
+
+const normalizeListTasksQuery = (value: unknown): ListTasksQuery => {
+    if (!isRecord(value)) {
+        return {
+            options: {},
+            rawFilters: {},
+        };
+    }
+    const filtersSource = isRecord(value.filters) ? value.filters : value;
+    return {
+        options: normalizeTaskSearchOptions(value),
+        rawFilters: filtersSource,
+        typeFilters: normalizeTaskTypeFilters(filtersSource.type),
+    };
+};
+
 const isTaskSearchResult = (value: unknown): value is { tasks: unknown[]; total: number } =>
     isRecord(value)
     && Array.isArray((value as Record<string, unknown>).tasks)
@@ -414,6 +438,87 @@ const normalizeTaskSearchResult = (value: unknown): { tasks: unknown[]; total: n
         return { tasks: value, total: value.length };
     }
     return { tasks: [], total: 0 };
+};
+
+const applyLocalTaskTypeFilter = (
+    tasks: unknown[],
+    typeFilters: TaskTypeValue[] | undefined,
+): unknown[] => {
+    if (!typeFilters || typeFilters.length === 0) {
+        return tasks;
+    }
+    return tasks.filter((task) => {
+        if (!isRecord(task)) {
+            return false;
+        }
+        const normalizedType = normalizeTaskType(task.type);
+        return normalizedType ? typeFilters.includes(normalizedType) : false;
+    });
+};
+
+const toCountMap = (tasks: unknown[], field: "type" | "status"): Record<string, number> =>
+    tasks.reduce<Record<string, number>>((acc, task) => {
+        if (!isRecord(task)) {
+            return acc;
+        }
+        const raw = task[field];
+        const key =
+            typeof raw === "string" && raw.trim().length > 0
+                ? raw.trim().toLowerCase()
+                : "unknown";
+        return {
+            ...acc,
+            [key]: (acc[key] ?? 0) + 1,
+        };
+    }, {});
+
+const summarizeCounts = (counts: Record<string, number>): string => {
+    const entries = Object.entries(counts);
+    if (entries.length === 0) {
+        return "none";
+    }
+    return entries
+        .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+        .map(([key, value]) => `${key}:${value}`)
+        .join(", ");
+};
+
+const summarizeTaskIds = (tasks: unknown[], maxItems = 6): string => {
+    const ids = tasks
+        .flatMap((task) => {
+            if (!isRecord(task)) return [];
+            const id = task.id;
+            return typeof id === "string" && id.trim().length > 0 ? [id] : [];
+        })
+        .slice(0, maxItems);
+    return ids.length > 0 ? ids.join(", ") : "none";
+};
+
+const toCompactJson = (value: unknown, maxLength = 600): string => {
+    try {
+        const serialized = JSON.stringify(value);
+        if (!serialized) {
+            return "null";
+        }
+        if (serialized.length <= maxLength) {
+            return serialized;
+        }
+        return `${serialized.slice(0, maxLength)}...`;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return `[unserializable:${message}]`;
+    }
+};
+
+const resolveRequestId = (request: unknown): string => {
+    if (!isRecord(request)) {
+        return randomUUID();
+    }
+    const value = request.id;
+    if (typeof value === "string" || typeof value === "number") {
+        return String(value);
+    }
+    return randomUUID();
 };
 
 const shouldFallbackToDaemonForTaskService = (error: unknown): boolean => {
@@ -490,14 +595,19 @@ const tools: Tool[] = [
 					type: "string",
 					description: "The title of the task",
 				},
-				description: {
-					type: "string",
-					description: "The description of the task",
-				},
-				priority: {
-					type: "string",
-					enum: ["low", "medium", "high"],
-					description: "The priority level of the task",
+                description: {
+                    type: "string",
+                    description: "The description of the task",
+                },
+                prd: {
+                    type: "string",
+                    description:
+                        "Product Requirements Document (required for feature tasks). Target depth: roughly 7-8 A4 pages.",
+                },
+                priority: {
+                    type: "string",
+                    enum: ["low", "medium", "high"],
+                    description: "The priority level of the task",
 					default: "medium",
 				},
 				type: {
@@ -588,13 +698,18 @@ const tools: Tool[] = [
 								{ type: "array", items: { type: "string" } },
 							],
 						},
-						dateFrom: { type: "string" },
-						dateTo: { type: "string" },
-						type: { type: "string" },
-						limit: { type: "number" },
-						offset: { type: "number" },
-						search: { type: "string" },
-					},
+							dateFrom: { type: "string" },
+							dateTo: { type: "string" },
+							type: {
+								oneOf: [
+									{ type: "string" },
+									{ type: "array", items: { type: "string" } },
+								],
+							},
+							limit: { type: "number" },
+							offset: { type: "number" },
+							search: { type: "string" },
+						},
 				},
 			},
 		},
@@ -626,13 +741,14 @@ const tools: Tool[] = [
 				updates: {
 					type: "object",
 					description: "Fields to update",
-					properties: {
-						title: { type: "string" },
-						description: { type: "string" },
-						status: {
-							type: "string",
-							enum: ["todo", "in-progress", "done", "invalid"],
-						},
+                    properties: {
+                        title: { type: "string" },
+                        description: { type: "string" },
+                        prd: { type: "string" },
+                        status: {
+                            type: "string",
+                            enum: ["todo", "in-progress", "done", "invalid"],
+                        },
 						priority: {
 							type: "string",
 							enum: ["low", "medium", "high"],
@@ -1314,25 +1430,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 // Handle tool calls
 server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-	const { name, arguments: args } = request.params;
+	const { name } = request.params;
+    const args = isRecord(request.params.arguments) ? request.params.arguments : {};
+    const requestId = resolveRequestId(request);
 	const environment = resolveRequestEnvironment(resolveHeadersFromExtra(extra));
 	const sendDaemonCommand = async <T = unknown, R = unknown>(command: string, data: T): Promise<R> => {
 		const response = await daemonClient.sendCommand(command, data, environment);
 		return resolveDaemonResult<R>(response);
 	};
     const daemonFallbackEnabled = process.env.MCP_ENABLE_DAEMON_FALLBACK === "true";
-
-	if (!args) {
-		return {
-			content: [
-				{
-					type: "text",
-					text: "Error: No arguments provided",
-				},
-			],
-			isError: true,
-		};
-	}
 
 	// Default routing is gateway -> tasks/context microservices.
 	// Optional legacy daemon fallback is disabled unless MCP_ENABLE_DAEMON_FALLBACK=true.
@@ -1383,6 +1489,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 			}
 
 			case "create_task": {
+                const taskType = normalizeTaskType(args.type) ?? "task";
+                const prd = typeof args.prd === "string" ? args.prd : undefined;
+                if (taskType === "feature" && (!prd || prd.trim().length === 0)) {
+                    throw new Error(
+                        "Feature tasks require a prd field (Product Requirements Document)",
+                    );
+                }
 				const newTask = await withTaskServiceFallback(
                     "create_task",
                     () =>
@@ -1390,8 +1503,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                             {
                                 title: args.title as string,
                                 description: args.description as string,
+                                prd,
                                 priority: (args.priority as "low" | "medium" | "high") || "medium",
-                                type: normalizeTaskType(args.type),
+                                type: taskType,
                                 assignedTo: args.assignedTo as string | undefined,
                                 dependencies: args.dependencies as string[] | undefined,
                                 collaborators: args.collaborators as string[] | undefined,
@@ -1403,8 +1517,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                         sendDaemonCommand("create_task", {
                             title: args.title as string,
                             description: args.description as string,
+                            prd,
                             priority: (args.priority as "low" | "medium" | "high") || "medium",
-                            type: normalizeTaskType(args.type) ?? "task",
+                            type: taskType,
                             assignedTo: args.assignedTo as string | undefined,
                             dependencies: args.dependencies as string[] | undefined,
                             collaborators: args.collaborators as string[] | undefined,
@@ -1422,14 +1537,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 				};
 			}
 
-			case "list_tasks": {
-				const options = normalizeTaskSearchOptions(
-					isRecord(args.filters) ? args.filters : {},
-				);
-				const shouldSearch = Boolean(
-					options.query || options.filters || options.sort || options.limit || options.offset,
-				);
-				const result = await withTaskServiceFallback(
+				case "list_tasks": {
+                    const query = normalizeListTasksQuery(args);
+					const options = query.options;
+					const shouldSearch = Boolean(
+						options.query || options.filters || options.sort || options.limit || options.offset,
+					);
+					const result = await withTaskServiceFallback(
                     "list_tasks",
                     () =>
                         shouldSearch
@@ -1446,21 +1560,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                             );
                             return normalizeTaskSearchResult(fallbackSearch);
                         }
-                        const fallbackTasks = await sendDaemonCommand("list_tasks", {});
-                        return normalizeTaskSearchResult(fallbackTasks);
-                    },
-                );
-				const taskList = result.tasks;
-				const total = result.total;
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Found ${total} tasks:\n${JSON.stringify(taskList, null, 2)}`,
-						},
-					],
-				};
-			}
+	                        const fallbackTasks = await sendDaemonCommand("list_tasks", {});
+	                        return normalizeTaskSearchResult(fallbackTasks);
+	                    },
+	                );
+                    const taskList = applyLocalTaskTypeFilter(result.tasks, query.typeFilters);
+					const total = taskList.length;
+                    const rawTotal = result.total;
+                    const typeSummary = summarizeCounts(toCountMap(taskList, "type"));
+                    const statusSummary = summarizeCounts(toCountMap(taskList, "status"));
+                    const sampleIds = summarizeTaskIds(taskList);
+                    const filtersSummary = JSON.stringify(query.rawFilters);
+                    const typeFilterSummary =
+                        query.typeFilters && query.typeFilters.length > 0
+                            ? query.typeFilters.join(",")
+                            : "none";
+                    console.error(
+                        `[MCP][list_tasks][${requestId}] env=${environment} shouldSearch=${shouldSearch} filters=${filtersSummary} typeFilter=${typeFilterSummary} rawTotal=${rawTotal} matchedTotal=${total} types=${typeSummary} statuses=${statusSummary} sampleIds=${sampleIds}`,
+                    );
+					return {
+						content: [
+							{
+								type: "text",
+                                text:
+                                    `Found ${total} tasks:\n${JSON.stringify(taskList, null, 2)}`
+                                    + `\n\nApplied filters: ${filtersSummary}`
+                                    + `\nType filter: ${typeFilterSummary}`
+                                    + `\nRaw total before local type filtering: ${rawTotal}`,
+							},
+						],
+					};
+				}
 
 			case "get_task": {
 				const task = await withTaskServiceFallback(
@@ -1533,8 +1663,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 				};
 			}
 
-			case "update_task_priority": {
-				const priorityUpdatedTask = await withTaskServiceFallback(
+				case "update_task_priority": {
+					const priorityUpdatedTask = await withTaskServiceFallback(
                     "update_task_priority",
                     () =>
                         taskClient.updateTaskPriority(
@@ -1542,17 +1672,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
                             args.priority as "low" | "medium" | "high",
                             args.changedBy as string | undefined,
                         ),
-                    () =>
-                        sendDaemonCommand("update_task_priority", {
-                            id: args.id as string,
-                            priority: args.priority as "low" | "medium" | "high",
-                            changedBy: args.changedBy as string | undefined,
-                        }),
-                );
-				return {
-					content: [
-						{
-							type: "text",
+	                    () =>
+	                        sendDaemonCommand("update_task_priority", {
+	                            id: args.id as string,
+	                            priority: args.priority as "low" | "medium" | "high",
+	                            changedBy: args.changedBy as string | undefined,
+	                        }),
+	                );
+                    const updatedPriority =
+                        isRecord(priorityUpdatedTask) && typeof priorityUpdatedTask.priority === "string"
+                            ? priorityUpdatedTask.priority
+                            : "unknown";
+                    console.error(
+                        `[MCP][update_task_priority][${requestId}] env=${environment} id=${String(args.id)} requested=${String(args.priority)} updated=${updatedPriority}`,
+                    );
+					return {
+						content: [
+							{
+								type: "text",
 							text: `Task priority updated successfully: ${JSON.stringify(priorityUpdatedTask, null, 2)}`,
 						},
 					],
@@ -1921,8 +2058,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 			}
 
 			case "search_tasks": {
+                const searchOptionsInput = isRecord(args.query) ? args.query : args;
 				const searchResult = await taskClient.searchTasks(
-					normalizeTaskSearchOptions(args.query),
+					normalizeTaskSearchOptions(searchOptionsInput),
 				);
 				return {
 					content: [
@@ -2029,17 +2167,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
 		default:
 			throw new Error(`Unknown tool: ${name}`);
 		}
-	} catch (error) {
-		return {
-			content: [
-				{
-					type: "text",
-					text: `Error: ${(error as Error).message}`,
-				},
-			],
-			isError: true,
-		};
-	} finally {
+		} catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error(
+                `[MCP][tool_error][${requestId}] name=${name} env=${environment} args=${toCompactJson(args)} error=${errorMessage}`,
+            );
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Error: ${errorMessage}`,
+					},
+				],
+				isError: true,
+			};
+		} finally {
 		await taskClient.close();
 	}
 });

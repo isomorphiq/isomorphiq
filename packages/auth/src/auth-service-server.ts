@@ -1,6 +1,15 @@
 import http from "node:http";
 import path from "node:path";
 import { nodeHTTPRequestHandler } from "@trpc/server/adapters/node-http";
+import {
+    createHttpMicroserviceRuntime,
+    MicroserviceTrait,
+    resolveLevelDbRootPath,
+    resolveTrpcProcedurePath,
+    tryHandleMicroserviceHealthRequest,
+    writeJsonNotFound,
+    writeJsonResponse,
+} from "@isomorphiq/core-microservice";
 import { ConfigManager, resolveEnvironmentFromHeaders } from "@isomorphiq/core";
 import { authServiceRouter, type AuthServiceContext } from "./auth-service-router.ts";
 import { UserManager } from "./user-manager.ts";
@@ -22,9 +31,7 @@ const configManager = ConfigManager.getInstance();
 const environmentConfig = configManager.getEnvironmentConfig();
 
 const resolveDefaultDbPath = (): string => {
-    const basePath = configManager.getDatabaseConfig().path;
-    const resolvedBase = path.isAbsolute(basePath) ? basePath : path.join(process.cwd(), basePath);
-    return path.join(resolvedBase, "auth");
+    return path.join(resolveLevelDbRootPath(), "auth");
 };
 
 const resolveAuthDbPath = (): string => {
@@ -67,33 +74,25 @@ export async function startAuthServiceServer(): Promise<http.Server> {
     const server = http.createServer(async (req, res) => {
         const url = req.url ?? "/";
         const parsed = new URL(url, `http://${req.headers.host ?? "localhost"}`);
+        const path = parsed.pathname;
 
-        if (req.method === "GET" && parsed.pathname === "/health") {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(
-                JSON.stringify({
-                    status: "ok",
-                    service: "auth-service",
-                }),
-            );
+        const healthHandled = await tryHandleMicroserviceHealthRequest(
+            req,
+            res,
+            path,
+            async () => await MicroserviceTrait.health(microservice.runtime as any),
+        );
+        if (healthHandled) {
             return;
         }
 
-        if (!parsed.pathname.startsWith("/trpc")) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Not found" }));
+        if (!path.startsWith("/trpc")) {
+            writeJsonNotFound(res);
             return;
         }
-        const basePath = "/trpc";
-        const procedurePath =
-            parsed.pathname === basePath
-                ? ""
-                : parsed.pathname.startsWith(`${basePath}/`)
-                    ? parsed.pathname.slice(basePath.length + 1)
-                    : parsed.pathname.slice(1);
+        const procedurePath = resolveTrpcProcedurePath(path, "/trpc");
         if (!procedurePath) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Procedure path missing" }));
+            writeJsonResponse(res, 404, { error: "Procedure path missing" });
             return;
         }
         await nodeHTTPRequestHandler({
@@ -105,17 +104,19 @@ export async function startAuthServiceServer(): Promise<http.Server> {
         });
     });
 
-    return await new Promise((resolve, reject) => {
-        server.listen(resolvedPort, host, () => {
-            console.log(`[AUTH] Auth service listening on http://${host}:${resolvedPort}/trpc`);
-            console.log(`[AUTH] LevelDB path: ${authDbPath}`);
-            resolve(server);
-        });
-        server.on("error", (error) => {
-            console.error("[AUTH] Failed to start auth service:", error);
-            reject(error);
-        });
+    const microservice = createHttpMicroserviceRuntime({
+        id: "auth-service",
+        name: "auth-service",
+        kind: "trpc",
+        host,
+        port: resolvedPort,
+        server,
     });
+
+    await MicroserviceTrait.start(microservice.runtime as any);
+    console.log(`[AUTH] Auth service listening on http://${host}:${resolvedPort}/trpc`);
+    console.log(`[AUTH] LevelDB path: ${authDbPath}`);
+    return microservice.server;
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {

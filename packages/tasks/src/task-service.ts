@@ -17,6 +17,7 @@ export type TaskServiceApi = {
 	// CRUD operations
 	createTask(input: CreateTaskInputWithPriority, createdBy: string): Promise<Result<TaskEntity>>;
 	getTask(id: string): Promise<Result<TaskEntity>>;
+	getTaskByBranch(branch: string): Promise<Result<TaskEntity | null>>;
 	getAllTasks(): Promise<Result<TaskEntity[]>>;
 	updateTask(id: string, input: ExtendedUpdateTaskInput, updatedBy: string): Promise<Result<TaskEntity>>;
 	deleteTask(id: string, deletedBy: string): Promise<Result<void>>;
@@ -156,6 +157,10 @@ export class TaskService implements TaskServiceApi {
 		}
 
 		return { success: true, data: result.data };
+	}
+
+	async getTaskByBranch(branch: string): Promise<Result<TaskEntity | null>> {
+		return await this.taskRepository.findByBranch(branch);
 	}
 
 	async getAllTasks(): Promise<Result<TaskEntity[]>> {
@@ -544,4 +549,3 @@ export class TaskService implements TaskServiceApi {
 		return false;
 	}
 }
-

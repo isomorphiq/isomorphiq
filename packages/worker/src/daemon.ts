@@ -113,6 +113,16 @@ async function main() {
 			updateTaskStatus: async (id, status, updatedBy) => {
 				await productManager.updateTaskStatus(id, status, updatedBy);
 			},
+            updateTask: async (id, updates, updatedBy) => {
+                if (typeof updates.branch !== "string" || updates.branch.trim().length === 0) {
+                    throw new Error(`[DAEMON] updateTask requires a non-empty branch for task ${id}`);
+                }
+                return await productManager.updateTask(
+                    id,
+                    { branch: updates.branch },
+                    updatedBy ?? "workflow",
+                );
+            },
             appendTaskActionLogEntry: async (taskId, entry, fallbackLog) => {
                 const task = await productManager.getTask(taskId);
                 const currentLog = task?.actionLog ?? fallbackLog ?? [];
@@ -540,17 +550,18 @@ async function main() {
 					switch (message.command) {
 						case "create_task":
 							try {
-								const task = await pm.createTask(
-									message.data.title,
-									message.data.description,
-									message.data.priority || "medium",
-									message.data.dependencies || [],
+                                const task = await pm.createTask(
+                                    message.data.title,
+                                    message.data.description,
+                                    message.data.priority || "medium",
+                                    message.data.dependencies || [],
 									message.data.createdBy,
 									message.data.assignedTo,
-									message.data.collaborators,
-									message.data.watchers,
-									message.data.type || "task",
-								);
+                                    message.data.collaborators,
+                                    message.data.watchers,
+                                    message.data.type || "task",
+                                    message.data.prd,
+                                );
 								result = { success: true, data: task };
 								
 								// Record task creation in audit trail
@@ -1087,31 +1098,122 @@ async function main() {
 								data: { message: "Session cleanup completed" },
 							};
 							break;
-						// Profile management commands
-                        case "get_profile_states":
-                            result = { success: true, data: profileManager.getAllProfileStates() };
-                            break;
-                        case "get_profile_state":
-                            result = { success: true, data: profileManager.getProfileState(message.data.name) };
-                            break;
-                        case "get_profile_metrics":
-                            result = { success: true, data: profileManager.getProfileMetrics(message.data.name) };
-                            break;
-                        case "get_all_profile_metrics":
-                            result = {
-                                success: true,
-                                data: Object.fromEntries(profileManager.getAllProfileMetrics()),
-                            };
-                            break;
-                        case "get_profiles_with_states":
-                            result = { success: true, data: profileManager.getProfilesWithStates() };
-                            break;
-                        case "get_profile_task_queue":
-                            result = { success: true, data: profileManager.getTaskQueue(message.data.name) };
-                            break;
-                        case "update_profile_status": {
-                            const state = profileManager.getProfileState(message.data.name);
-                            if (!state) {
+							// Profile management commands
+	                        case "get_profile_states":
+	                            result = { success: true, data: profileManager.getAllProfileStates() };
+	                            break;
+	                        case "get_profile_state": {
+	                            const state = profileManager.getProfileState(message.data.name);
+	                            result = state
+	                                ? { success: true, data: state }
+	                                : { success: false, error: new Error("Profile not found") };
+	                            break;
+	                        }
+	                        case "get_profile_metrics": {
+	                            const metrics = profileManager.getProfileMetrics(message.data.name);
+	                            result = metrics
+	                                ? { success: true, data: metrics }
+	                                : { success: false, error: new Error("Profile not found") };
+	                            break;
+	                        }
+	                        case "get_all_profile_metrics":
+	                            result = {
+	                                success: true,
+	                                data: Object.fromEntries(profileManager.getAllProfileMetrics()),
+	                            };
+	                            break;
+	                        case "get_profiles_with_states":
+	                            await profileManager.waitForProfileOverrides();
+	                            result = { success: true, data: profileManager.getProfilesWithStates() };
+	                            break;
+	                        case "get_profile_task_queue": {
+	                            const profile = profileManager.getProfile(message.data.name);
+	                            if (!profile) {
+	                                result = { success: false, error: new Error("Profile not found") };
+	                                break;
+	                            }
+	                            result = { success: true, data: profileManager.getTaskQueue(message.data.name) };
+	                            break;
+	                        }
+	                        case "get_profile_configuration": {
+	                            await profileManager.waitForProfileOverrides();
+	                            const snapshot = profileManager.getProfileConfiguration(message.data.name);
+	                            result = snapshot
+	                                ? { success: true, data: snapshot }
+	                                : { success: false, error: new Error("Profile not found") };
+	                            break;
+	                        }
+	                        case "list_profile_configurations":
+	                            await profileManager.waitForProfileOverrides();
+	                            result = { success: true, data: profileManager.getAllProfileConfigurations() };
+	                            break;
+	                        case "update_profile_configuration": {
+	                            await profileManager.waitForProfileOverrides();
+	                            const runtimeName = message.data.runtimeName;
+	                            const modelName = message.data.modelName;
+	                            const systemPrompt = message.data.systemPrompt;
+	                            const taskPromptPrefix = message.data.taskPromptPrefix;
+	                            const isValidText = (value: unknown): boolean =>
+	                                value === undefined || value === null || typeof value === "string";
+	                            if (
+	                                !isValidText(runtimeName)
+	                                || !isValidText(modelName)
+	                                || !isValidText(systemPrompt)
+	                                || !isValidText(taskPromptPrefix)
+	                            ) {
+	                                result = {
+	                                    success: false,
+	                                    error: new Error(
+	                                        "runtimeName, modelName, systemPrompt, and taskPromptPrefix must be string, null, or undefined",
+	                                    ),
+	                                };
+	                                break;
+	                            }
+	                            if (
+	                                runtimeName !== undefined
+	                                && runtimeName !== null
+	                                && runtimeName !== "codex"
+	                                && runtimeName !== "opencode"
+	                            ) {
+	                                result = {
+	                                    success: false,
+	                                    error: new Error("runtimeName must be either \"codex\" or \"opencode\""),
+	                                };
+	                                break;
+	                            }
+
+	                            const patch: {
+	                                runtimeName?: string;
+	                                modelName?: string;
+	                                systemPrompt?: string;
+	                                taskPromptPrefix?: string;
+	                            } = {};
+	                            if (Object.prototype.hasOwnProperty.call(message.data, "runtimeName")) {
+	                                patch.runtimeName = runtimeName === null ? undefined : String(runtimeName);
+	                            }
+	                            if (Object.prototype.hasOwnProperty.call(message.data, "modelName")) {
+	                                patch.modelName = modelName === null ? undefined : String(modelName);
+	                            }
+	                            if (Object.prototype.hasOwnProperty.call(message.data, "systemPrompt")) {
+	                                patch.systemPrompt = systemPrompt === null ? undefined : String(systemPrompt);
+	                            }
+	                            if (Object.prototype.hasOwnProperty.call(message.data, "taskPromptPrefix")) {
+	                                patch.taskPromptPrefix =
+	                                    taskPromptPrefix === null ? undefined : String(taskPromptPrefix);
+	                            }
+
+	                            const updated = await profileManager.updateProfileConfiguration(
+	                                message.data.name,
+	                                patch,
+	                            );
+	                            result = updated
+	                                ? { success: true, data: updated }
+	                                : { success: false, error: new Error("Profile not found") };
+	                            break;
+	                        }
+	                        case "update_profile_status": {
+	                            const state = profileManager.getProfileState(message.data.name);
+	                            if (!state) {
                                 result = { success: false, error: new Error("Profile not found") };
                                 break;
                             }

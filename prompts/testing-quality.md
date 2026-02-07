@@ -54,8 +54,9 @@ Provide performance metrics and optimization recommendations.
   - Use `get_task` / `get_context` to understand current test expectations.
 - After running tests:
   - Use `update_context` to write `testStatus` and structured `testReport`.
-  - Use `update_task_status`:
-    - `done` when tests pass
-    - `in-progress` when tests fail
+  - Prefer one consolidated `update_context` write; only send additional writes for materially new findings.
+  - Do not loop repeated equivalent `update_context` patches.
+  - Do not use `update_task_status` during QA transitions.
+  - Workflow controls task lifecycle; completion is handled by the `tests-passing` transition.
 - For file-level failure tracking:
   - Use `get_file_context` on files implicated by failures and record `todos`/`relatedFiles`.

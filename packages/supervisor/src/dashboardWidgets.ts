@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-49e31b45-1c57-48ba-82e5-bb9b6a31c146"
+
 import { z } from "zod";
 
 const WidgetPlacementSchema = z.object({

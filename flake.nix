@@ -4,13 +4,11 @@
     inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
 
     outputs = { self, nixpkgs }:
-      let
-        systems = [ "x86_64-linux" "aarch64-linux" ];
-      in
-      nixpkgs.lib.genAttrs systems (system:
         let
-          pkgs = import nixpkgs { inherit system; };
-          manifest = pkgs.writeText "isomorphiq-k8s.yaml" ''
+            systems = [ "x86_64-linux" "aarch64-linux" ];
+            forAllSystems = nixpkgs.lib.genAttrs systems;
+            mkManifest = pkgs:
+                pkgs.writeText "isomorphiq-k8s.yaml" ''
             apiVersion: v1
             kind: Namespace
             metadata:
@@ -157,14 +155,66 @@
                         - configMapRef:
                             name: isomorphiq-env
           '';
-        in {
-          packages.manifests = manifest;
-          apps.kubectl-apply = {
-            type = "app";
-            program = "${pkgs.kubectl}/bin/kubectl apply -f ${manifest}";
-          };
-          devShells.default = pkgs.mkShell {
-            packages = [ pkgs.kubectl ];
-          };
-        });
+        in
+        {
+            packages = forAllSystems (system:
+                let
+                    pkgs = import nixpkgs { inherit system; };
+                    manifest = mkManifest pkgs;
+                in
+                {
+                    manifests = manifest;
+                    default = manifest;
+                });
+
+            apps = forAllSystems (system:
+                let
+                    pkgs = import nixpkgs { inherit system; };
+                    manifest = mkManifest pkgs;
+                    kubectlApply = pkgs.writeShellScript "kubectl-apply" ''
+                        exec ${pkgs.kubectl}/bin/kubectl apply -f ${manifest} "$@"
+                    '';
+                in
+                {
+                    kubectl-apply = {
+                        type = "app";
+                        program = kubectlApply;
+                    };
+                });
+
+            devShells = forAllSystems (system:
+                let
+                    pkgs = import nixpkgs { inherit system; };
+                in
+                {
+                    default = pkgs.mkShell {
+                        packages = [
+                            pkgs.kubectl
+                            pkgs.python312
+                            pkgs.uv
+                            pkgs.stdenv.cc.cc.lib
+                        ];
+                        shellHook = ''
+                            cpp_lib_path="${pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ]}"
+                            nvidia_driver_paths="/run/opengl-driver/lib:/run/opengl-driver/lib64:/usr/lib/wsl/lib"
+                            export LD_LIBRARY_PATH="''${cpp_lib_path}:''${nvidia_driver_paths}:''${LD_LIBRARY_PATH:-}"
+                            for cuda_dir in /run/opengl-driver/lib /run/opengl-driver/lib64 /usr/lib/wsl/lib; do
+                                if [ -f "''${cuda_dir}/libcuda.so.1" ]; then
+                                    export TRITON_LIBCUDA_PATH="''${cuda_dir}"
+                                    break
+                                fi
+                            done
+
+                            if [ ! -d ".venv" ]; then
+                                echo "[nix develop] Creating Python virtualenv at .venv"
+                                uv venv .venv --python ${pkgs.python312}/bin/python3.12
+                            fi
+                            if [ -f ".venv/bin/activate" ]; then
+                                . .venv/bin/activate
+                                echo "[nix develop] Activated virtualenv: $VIRTUAL_ENV"
+                            fi
+                        '';
+                    };
+                });
+        };
 }

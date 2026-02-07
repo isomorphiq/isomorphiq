@@ -100,7 +100,7 @@ const buildProductResearchState = (baseState: RuntimeState): RuntimeState => ({
     profile: "product-manager",
     targetType: "feature",
     promptHint:
-        "Use MCP tool calls to create features. Call create_task with type \"feature\" for each item, then call list_tasks to confirm. If an initiative context is provided, include its id as a dependency.",
+        "Use MCP tool calls to create features. Call create_task with type \"feature\" for each item, include a comprehensive `prd` (Product Requirements Document, minimum 2800 words), then call list_tasks to confirm. If an initiative context is provided, include its id as a dependency.",
 });
 
 const summarizeExistingFeatures = (tasks: WorkflowTask[]): string => {
@@ -143,6 +143,7 @@ export const handleProductResearchTransition = async (
     const researchDescription = [
         "Generate one or more high-value features for the product backlog.",
         "Do not propose duplicates of existing features.",
+        "Every created feature must include a `prd` field with a long-form Product Requirements Document (minimum 2800 words).",
         existingSummary,
         initiativeSummary,
     ].join("\n");

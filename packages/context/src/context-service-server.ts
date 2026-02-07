@@ -1,6 +1,14 @@
 import http from "node:http";
-import path from "node:path";
 import { nodeHTTPRequestHandler } from "@trpc/server/adapters/node-http";
+import {
+    createHttpMicroserviceRuntime,
+    MicroserviceTrait,
+    resolveEnvironmentLevelDbPath,
+    resolveTrpcProcedurePath,
+    tryHandleMicroserviceHealthRequest,
+    writeJsonNotFound,
+    writeJsonResponse,
+} from "@isomorphiq/core-microservice";
 import { ConfigManager, resolveEnvironmentFromHeaders, resolveEnvironmentValue } from "@isomorphiq/core";
 import { createContextService, type ContextService } from "./context-service.ts";
 import { contextServiceRouter, type ContextServiceContext } from "./context-service-router.ts";
@@ -32,15 +40,8 @@ const configManager = ConfigManager.getInstance();
 const environmentConfig = configManager.getEnvironmentConfig();
 const environmentNames = Array.from(new Set(environmentConfig.available));
 
-const resolveBasePath = (): string => {
-    const basePath = configManager.getDatabaseConfig().path;
-    return path.isAbsolute(basePath) ? basePath : path.join(process.cwd(), basePath);
-};
-
 const createEnvironmentService = async (environment: string): Promise<ContextService> => {
-    const basePath = resolveBasePath();
-    const envPath = path.join(basePath, environment);
-    const contextPath = path.join(envPath, "context");
+    const contextPath = resolveEnvironmentLevelDbPath(environment, ["context"]);
     const service = createContextService({ contextPath });
     await service.open();
 
@@ -113,33 +114,25 @@ export async function startContextServiceServer(): Promise<http.Server> {
     const server = http.createServer(async (req, res) => {
         const url = req.url ?? "/";
         const parsed = new URL(url, `http://${req.headers.host ?? "localhost"}`);
+        const path = parsed.pathname;
 
-        if (req.method === "GET" && parsed.pathname === "/health") {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(
-                JSON.stringify({
-                    status: "ok",
-                    service: "context-service",
-                }),
-            );
+        const healthHandled = await tryHandleMicroserviceHealthRequest(
+            req,
+            res,
+            path,
+            async () => await MicroserviceTrait.health(microservice.runtime as any),
+        );
+        if (healthHandled) {
             return;
         }
 
-        if (!parsed.pathname.startsWith("/trpc")) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Not found" }));
+        if (!path.startsWith("/trpc")) {
+            writeJsonNotFound(res);
             return;
         }
-        const basePath = "/trpc";
-        const pathValue =
-            parsed.pathname === basePath
-                ? ""
-                : parsed.pathname.startsWith(`${basePath}/`)
-                    ? parsed.pathname.slice(basePath.length + 1)
-                    : parsed.pathname.slice(1);
-        if (!pathValue) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Procedure path missing" }));
+        const procedurePath = resolveTrpcProcedurePath(path, "/trpc");
+        if (!procedurePath) {
+            writeJsonResponse(res, 404, { error: "Procedure path missing" });
             return;
         }
         await nodeHTTPRequestHandler({
@@ -147,20 +140,22 @@ export async function startContextServiceServer(): Promise<http.Server> {
             res,
             router: contextServiceRouter,
             createContext,
-            path: pathValue,
+            path: procedurePath,
         });
     });
 
-    return await new Promise((resolve, reject) => {
-        server.listen(resolvedPort, host, () => {
-            console.log(`[CONTEXT] Context service listening on http://${host}:${resolvedPort}/trpc`);
-            resolve(server);
-        });
-        server.on("error", (error) => {
-            console.error("[CONTEXT] Failed to start context service:", error);
-            reject(error);
-        });
+    const microservice = createHttpMicroserviceRuntime({
+        id: "context-service",
+        name: "context-service",
+        kind: "trpc",
+        host,
+        port: resolvedPort,
+        server,
     });
+
+    await MicroserviceTrait.start(microservice.runtime as any);
+    console.log(`[CONTEXT] Context service listening on http://${host}:${resolvedPort}/trpc`);
+    return microservice.server;
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {

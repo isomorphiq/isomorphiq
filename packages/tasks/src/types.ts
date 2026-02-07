@@ -65,6 +65,7 @@ export {
 export const CreateTaskInputSchema = z.object({
     title: z.string(),
     description: z.string(),
+    prd: z.string().optional(),
     dependencies: z.array(z.string()).optional(),
     assignedTo: z.string().optional(),
     collaborators: z.array(z.string()).optional(),
@@ -79,7 +80,9 @@ export const UpdateTaskInputSchema = z.object({
     status: TaskStatusSchema.optional(),
     title: z.string().optional(),
     description: z.string().optional(),
+    prd: z.string().optional(),
     priority: TaskPrioritySchema.optional(),
+    branch: z.string().optional(),
     dependencies: z.array(z.string()).optional(),
     assignedTo: z.string().optional(),
     collaborators: z.array(z.string()).optional(),

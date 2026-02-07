@@ -77,3 +77,22 @@ Watch for these log patterns:
 
 ## 🛑 Daemon Safety (Critical)
 - Do not kill or restart the daemon process directly (no `pkill`, `kill`, or signals). Use the `restart_daemon` MCP tool when a restart is required.
+
+## ✏️ Editing Best Practices
+
+### Tool Selection
+- **Use `edit`** for modifying existing code (preferred)
+- **Use `write`** only for creating new files
+- **Avoid** rewriting entire files when making changes
+
+### Code Organization
+- **Functions**: 20-50 lines target, 80 max
+- **Files**: 100-200 lines target, refactor at 300+
+- **Structure**: Group by domain, not by type
+- **Naming**: Clear, descriptive, intention-revealing
+
+### Refactoring Guidelines
+- Make atomic changes - one logical thing per edit
+- Extract complex logic into helpers
+- Split large files by responsibility
+- Keep directories shallow (max 3-4 levels)

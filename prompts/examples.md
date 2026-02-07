@@ -2,10 +2,18 @@
 
 ## Web Application Feature
 ```
-Implement a user dashboard for our TypeScript/React application. Requirements:
-- Display user profile information
-- Show recent activity feed
-- Include navigation to key features
+Implement a user dashboard for our TypeScript/React application using atomic, focused components:
+
+Component Structure (one component per file):
+- UserProfileCard - Display user profile information (keep under 100 lines)
+- ActivityFeed - Show recent activity feed (extract list items to ActivityItem component)
+- DashboardNavigation - Include navigation to key features
+- DashboardLayout - Responsive container with loading/error states
+
+Requirements per component:
+- Single responsibility (one purpose per component)
+- Max 80 lines per component function
+- Extract helpers into separate utility files
 - Responsive design for mobile/desktop
 - Loading states and error handling
 

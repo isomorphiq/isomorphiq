@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-3293fc63-cd5f-4640-9861-73fd2b0909af"
+
 // TODO: This file is too complex (972 lines) and should be refactored into several modules.
 // Current concerns mixed: User CRUD operations, session management, password reset,
 // email verification, authentication, profile updates, database management.

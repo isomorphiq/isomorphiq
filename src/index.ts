@@ -62,6 +62,7 @@ const savedSearchesDb = new Level<string, SavedSearch>(savedSearchesDbPath, { va
 const automationTaskCreatedSchema = z.object({
     title: z.string(),
     description: z.string(),
+    prd: z.string().optional(),
     priority: TaskPrioritySchema.optional(),
     dependencies: z.array(z.string()).optional(),
     createdBy: z.string().optional(),
@@ -116,6 +117,7 @@ const normalizeTask = (value: unknown): Task | null => {
         id: typeof value.id === "string" ? value.id : "",
         title: typeof value.title === "string" ? value.title : "",
         description: typeof value.description === "string" ? value.description : "",
+        prd: typeof value.prd === "string" ? value.prd : undefined,
         status: statusResult.success ? statusResult.data : "todo",
         priority: priorityResult.success ? priorityResult.data : "medium",
         type: typeResult.success ? typeResult.data : "task",
@@ -262,18 +264,20 @@ export class ProductManager {
 							break;
 						}
 						const payload = created.data;
-						await this.createTask(
-							payload.title,
-							payload.description,
-							payload.priority ?? "medium",
-							payload.dependencies ?? [],
-							payload.createdBy,
-							payload.assignedTo,
-							payload.collaborators,
-							payload.watchers,
-						);
-						break;
-					}
+                        await this.createTask(
+                            payload.title,
+                            payload.description,
+                            payload.priority ?? "medium",
+                            payload.dependencies ?? [],
+                            payload.createdBy,
+                            payload.assignedTo,
+                            payload.collaborators,
+                            payload.watchers,
+                            "task",
+                            payload.prd,
+                        );
+                        break;
+                    }
 					case "task_updated": {
 						const updated = automationTaskUpdatedSchema.safeParse(data);
 						if (!updated.success) {
@@ -372,28 +376,30 @@ export class ProductManager {
 	}
 
 	// Create a new task
-	async createTask(
-		title: string,
-		description: string,
-		priority: "low" | "medium" | "high" = "medium",
-		dependencies: string[] = [],
-		createdBy?: string,
-		assignedTo?: string,
-		collaborators?: string[],
-		watchers?: string[],
-		type: TaskType = "task",
-	): Promise<Task> {
+    async createTask(
+        title: string,
+        description: string,
+        priority: "low" | "medium" | "high" = "medium",
+        dependencies: string[] = [],
+        createdBy?: string,
+        assignedTo?: string,
+        collaborators?: string[],
+        watchers?: string[],
+        type: TaskType = "task",
+        prd?: string,
+    ): Promise<Task> {
 		// Ensure database is open
 		await this.ensureDbOpen();
 
 		const id = `task-${Date.now()}`;
-		const task: Task = {
-			id,
-			title,
-			description,
-			status: "todo",
-			priority,
-			type,
+        const task: Task = {
+            id,
+            title,
+            description,
+            ...(typeof prd === "string" ? { prd } : {}),
+            status: "todo",
+            priority,
+            type,
 			dependencies,
 			createdBy: createdBy || "system",
 			...(assignedTo && { assignedTo }),
@@ -982,17 +988,26 @@ export class ProductManager {
 					return qaResult;
 				});
 
-			const runQaFailureEffect = (
-				stageLabel: string,
-				payload?: unknown,
-			) =>
-				(() => {
-					const lastOutput = getLastTestResultFromPayload(payload)?.output;
-					return acpEffect(
-						"development",
-						`${stageLabel} failed. Here is the output:\n${lastOutput ?? "No output"}\nImplement targeted fixes and summarize what changed.`,
-					)();
-				})();
+				const runQaFailureEffect = (
+					stageLabel: string,
+					payload?: unknown,
+				) =>
+					(() => {
+						const lastOutput = getLastTestResultFromPayload(payload)?.output;
+						return acpEffect(
+							"development",
+							`${stageLabel} failed. Root-cause remediation is the priority.
+
+Failure output:
+${lastOutput ?? "No output"}
+
+Required workflow:
+1) Identify the specific failing checks and write a root-cause hypothesis.
+2) Implement the smallest targeted fix for that root cause.
+3) Re-run the failing scope first.
+4) Summarize root cause, files changed, and test results.`,
+						)();
+					})();
 
 		const workflow = buildWorkflowWithEffects({
 			"new-feature-proposed": {
@@ -1008,7 +1023,8 @@ Step-by-step:
 1) Call create_task exactly once with JSON parameters:
    {
      "title": "<feature request title>",
-     "description": "<description with user value + acceptance criteria>",
+     "description": "<concise summary with user value + acceptance criteria>",
+     "prd": "# Product Requirements Document\\n<minimum 2800 words (roughly 7-8 A4 pages) including goals, scope, requirements, UX flows, API/contracts, rollout, risks, and testing>",
      "type": "feature",
      "priority": "low|medium|high",
      "createdBy": "product-manager"
@@ -1026,7 +1042,7 @@ Return a short summary after tool calls.`,
 						);
 					}),
 				"prioritize-features": acpEffect(
-					"product-manager",
+					"product-prioritization-lead",
 					"Prioritize newly proposed features and push the top one to UX.",
 				),
 			},
@@ -1039,13 +1055,13 @@ Return a short summary after tool calls.`,
 - Do NOT produce tasks here.`,
 				),
 				"prioritize-stories": acpEffect(
-					"ux-specialist",
+					"story-prioritization-lead",
 					"Re-prioritize existing Stories only; do not create tasks here.",
 				),
 			},
 			"stories-created": {
 				"prioritize-stories": acpEffect(
-					"ux-specialist",
+					"story-prioritization-lead",
 					"Draft 3-5 user stories (title, description, AC) and rank them.",
 				),
 				"request-feature": acpEffect(
@@ -1057,8 +1073,18 @@ Return a short summary after tool calls.`,
 				"refine-into-tasks": acpEffect(
 					"refinement",
 					`Take the highest-priority Story and break it into 3-7 executable Tasks.
-- Tasks should be implementation-ready, small, and testable.
-- Do NOT create new stories or features here.`,
+- Do NOT create new stories or features here.
+- Tasks must be implementation-ready, small, and testable.
+- For each implementation task description, include:
+  - objective and user impact
+  - explicit scope + non-goals
+  - relevant file paths with why each file matters
+  - APIs/contracts involved, plus example payloads when applicable
+  - interaction/gotcha notes across files/services
+  - concrete testing plan (unit/integration/e2e + commands)
+  - future-state notes that should influence current implementation
+  - AGENTS.md constraints relevant to execution (4-space indentation, double quotes, functional style, .ts local import extensions)
+- Descriptions must be actionable without unresolved architecture questions.`,
 				),
 			},
 			"tasks-prepared": {
@@ -1145,11 +1171,11 @@ Return a short summary after tool calls.`,
 					"Task closed. Announce completion and request next task.",
 				),
 				"prioritize-features": acpEffect(
-					"product-manager",
+					"product-prioritization-lead",
 					"Revisit feature priorities after recent deliveries.",
 				),
 				"prioritize-stories": acpEffect(
-					"ux-specialist",
+					"story-prioritization-lead",
 					"Re-rank stories based on the latest delivery context.",
 				),
 			},
@@ -1164,12 +1190,21 @@ Return a short summary after tool calls.`,
 				const tasks = await this.getAllTasks();
 
 				// Decide transition for the current state
-				const decider = workflow[token.state]?.decider;
-				let transition = decider ? decider(tasks) : undefined;
-
-					if (!transition) {
-						throw new Error(`No transition chosen for state ${token.state}`);
+				const state = workflow[token.state];
+				const deciderContext = { tasks };
+				let transition: string | undefined;
+				for (const { transitionName, decider } of state?.deciders ?? []) {
+					if (await decider(deciderContext)) {
+						transition = transitionName;
+						break;
 					}
+				}
+				if (!transition) {
+					transition = state?.defaultTransition ?? Object.keys(state?.transitions ?? {})[0];
+				}
+				if (!transition) {
+					throw new Error(`No transition chosen for state ${token.state}`);
+				}
 				console.log(
 					`[WORKFLOW] Token state=${token.state} transition=${transition} tasks=${tasks.length}`,
 				);

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import React from "react";
 import { Box, Text, render } from "ink";
+import { createWorkerManagerClient, type WorkerRecord } from "@isomorphiq/worker-manager";
 import {
     buildServiceEnvironment,
     createSupervisorServiceCatalog,
@@ -32,6 +33,7 @@ type SupervisorServiceRow = {
     entryExists: boolean;
     status: ServiceHealth;
     endpoints: readonly EndpointProbeResult[];
+    delegatedProcesses: readonly WorkerRecord[];
 };
 
 const hasFile = (candidate: string): boolean => {
@@ -76,7 +78,13 @@ const probeTcpEndpoint = (
 
 const isHealthyStatusValue = (value: string): boolean => {
     const normalized = value.trim().toLowerCase();
-    return normalized === "ok" || normalized === "healthy" || normalized === "up";
+    return ![
+        "error",
+        "failed",
+        "down",
+        "stopped",
+        "unhealthy",
+    ].includes(normalized);
 };
 
 const probeHttpHealthEndpoint = async (
@@ -173,6 +181,25 @@ const toRow = async (
         resolvedEndpoints.map((endpoint) => probeEndpoint(endpoint)),
     );
     const status = resolveServiceHealth(entryExists, endpoints);
+    const delegatedProcesses =
+        service.id === "worker-manager"
+            ? await (async () => {
+                const endpoint = endpoints.find(
+                    (item) => item.enabled && item.protocol === "http" && item.reachable,
+                );
+                if (!endpoint) {
+                    return [];
+                }
+                const baseUrl = `http://${normalizeProbeHost(endpoint.host)}:${endpoint.port}`;
+                try {
+                    const client = createWorkerManagerClient({ baseUrl });
+                    return [...(await client.listWorkers())];
+                } catch (error) {
+                    console.warn("[SUPERVISOR-PS] Failed to fetch workers from worker-manager:", error);
+                    return [];
+                }
+            })()
+            : [];
 
     return {
         id: service.id,
@@ -182,6 +209,7 @@ const toRow = async (
         entryExists,
         status,
         endpoints,
+        delegatedProcesses,
     };
 };
 
@@ -222,6 +250,14 @@ const ServiceRow = ({ service }: { service: SupervisorServiceRow }): React.React
                     `${endpoint.host}:${endpoint.port}` +
                     `${endpoint.protocol === "http" ? endpoint.healthPath ?? "" : ""} ` +
                     `${!endpoint.enabled ? "disabled" : endpoint.reachable ? "running" : "stopped"}`,
+            ),
+        ),
+        ...service.delegatedProcesses.map((worker) =>
+            React.createElement(
+                Text,
+                { key: `${service.id}:worker:${worker.id}`, color: "gray" },
+                `delegated worker: ${worker.id} status=${worker.status} ` +
+                    `pid=${worker.pid ?? "n/a"} port=${worker.port}`,
             ),
         ),
     );

@@ -31,6 +31,8 @@ export const createTaskServiceClient = (client: TaskClient): TaskServiceApi => (
             }
             return task;
         }),
+    getTaskByBranch: async (branch: string): Promise<Result<TaskEntity | null>> =>
+        wrapResult(() => client.getTaskByBranch(branch)),
     getAllTasks: async (): Promise<Result<TaskEntity[]>> => wrapResult(() => client.listTasks()),
     updateTask: async (
         id: string,

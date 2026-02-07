@@ -1,8 +1,11 @@
 // FILE_CONTEXT: "context-0972d1f1-0982-42ff-af7d-1ca07855ab04"
 
+import { randomUUID } from "node:crypto";
 import type {
+    DashboardSessionMetadata,
     DashboardState,
     DashboardWidget,
+    WidgetPlacement,
     WidgetId,
     WidgetLibrary
 } from "./dashboard-model.ts";
@@ -28,9 +31,42 @@ const defaultOptions: DashboardOptions = {
 
 const nowIso = (): string => new Date().toISOString();
 
+const createSessionId = (): string => {
+    try {
+        return randomUUID();
+    } catch {
+        return `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+};
+
+const createSessionMetadata = (): DashboardSessionMetadata => {
+    const now = nowIso();
+    return {
+        sessionId: createSessionId(),
+        startedAt: now,
+        lastActiveAt: now
+    };
+};
+
+const touchSessionMetadata = (
+    session?: DashboardSessionMetadata
+): DashboardSessionMetadata => {
+    const now = nowIso();
+    if (!session) {
+        return {
+            sessionId: createSessionId(),
+            startedAt: now,
+            lastActiveAt: now
+        };
+    }
+    return { ...session, lastActiveAt: now };
+};
+
 const createEmptyDashboardState = (options: DashboardOptions): DashboardState => ({
     widgets: [],
     gridColumns: options.gridColumns,
+    selectedWidgetIds: [],
+    session: createSessionMetadata(),
     updatedAt: nowIso()
 });
 
@@ -38,9 +74,10 @@ export const addWidgetFromLibrary = async (params: {
     storage: DashboardStorage;
     library: WidgetLibrary;
     widgetId: WidgetId;
+    placement?: Partial<WidgetPlacement>;
     options?: Partial<DashboardOptions>;
 }): Promise<AddWidgetResult> => {
-    const { storage, library, widgetId, options } = params;
+    const { storage, library, widgetId, placement: placementOverride, options } = params;
     const resolvedOptions: DashboardOptions = {
         ...defaultOptions,
         ...options
@@ -56,19 +93,25 @@ export const addWidgetFromLibrary = async (params: {
     const placement = computeNextPlacement(
         currentState.widgets.map((widget) => widget.placement),
         widgetDefinition.defaultSize,
-        resolvedOptions.gridColumns
+        resolvedOptions.gridColumns,
+        placementOverride
     );
 
     const widget: DashboardWidget = {
         instanceId: createWidgetInstanceId(),
         widgetId: widgetDefinition.id,
-        placement
+        placement,
+        config: {
+            settings: {},
+            selections: []
+        }
     };
 
     const nextState: DashboardState = {
         ...currentState,
         widgets: [...currentState.widgets, widget],
         gridColumns: resolvedOptions.gridColumns,
+        session: touchSessionMetadata(currentState.session),
         updatedAt: nowIso()
     };
 
@@ -98,6 +141,7 @@ export const removeWidgetFromDashboard = async (params: {
     const nextState: DashboardState = {
         ...currentState,
         widgets: currentState.widgets.filter((item) => item.instanceId !== instanceId),
+        session: touchSessionMetadata(currentState.session),
         updatedAt: nowIso()
     };
 

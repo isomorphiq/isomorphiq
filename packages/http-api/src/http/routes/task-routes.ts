@@ -22,6 +22,29 @@ const validateTaskInput = (title: string, description: string, priority?: string
     }
 };
 
+const FEATURE_PRD_MIN_WORDS = 2800;
+
+const countWords = (value: string): number =>
+    value
+        .trim()
+        .split(/\s+/)
+        .filter((word) => word.length > 0).length;
+
+const validateFeaturePrdInput = (type: string, prd: unknown) => {
+    if (type !== "feature") {
+        return;
+    }
+    if (typeof prd !== "string" || prd.trim().length === 0) {
+        throw new Error("Feature tasks require a non-empty prd (Product Requirements Document)");
+    }
+    const words = countWords(prd);
+    if (words < FEATURE_PRD_MIN_WORDS) {
+        throw new Error(
+            `Feature PRD must be at least ${FEATURE_PRD_MIN_WORDS} words (roughly 7-8 A4 pages)`,
+        );
+    }
+};
+
 const validateTaskStatus = (status: string) => {
     if (!["todo", "in-progress", "done", "invalid"].includes(status)) {
         throw new Error("Status must be one of: todo, in-progress, done, invalid");
@@ -182,6 +205,7 @@ export function registerTaskRoutes(
                 const {
                     title,
                     description,
+                    prd,
                     priority = "medium",
                     assignedTo,
                     collaborators,
@@ -215,6 +239,8 @@ export function registerTaskRoutes(
                     return res.status(400).json({ error: "Invalid task type" });
                 }
 
+                validateFeaturePrdInput(type, prd);
+
                 const pm = resolvePm(req);
                 const task = await pm.createTask(
                     title,
@@ -226,6 +252,7 @@ export function registerTaskRoutes(
                     collaborators || undefined,
                     watchers || undefined,
                     type,
+                    typeof prd === "string" ? prd : undefined,
                 );
                 res.status(201).json({ task });
             } catch (error) {

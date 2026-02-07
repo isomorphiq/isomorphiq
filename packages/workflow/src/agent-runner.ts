@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-41992560-1f4d-42d3-9c12-d5ad095e6962"
+
 // TODO: This file is too complex (987 lines) and should be refactored into several modules.
 // Current concerns mixed: ACP connection management, workflow execution, task creation,
 // profile management, file operations, result processing.
@@ -26,6 +28,7 @@ export type WorkflowTask = {
     description?: string;
     priority?: string;
     type?: string;
+    branch?: string;
     status?: string;
     assignedTo?: string;
     dependencies?: string[];
@@ -299,7 +302,8 @@ const shouldEnforceWorkflowProfile = (
         workflowTransition === "close-invalid-task" ||
         workflowTransition === "prioritize-features" ||
         workflowTransition === "prioritize-themes" ||
-        workflowTransition === "prioritize-initiatives"
+        workflowTransition === "prioritize-initiatives" ||
+        workflowTransition === "prioritize-stories"
     );
 };
 
@@ -311,10 +315,16 @@ const resolveProfile = (
     return profileManager.getProfile(mapped) ?? profileManager.getProfile(profileName);
 };
 
-const selectPromptFiles = (profile: ACPProfile, task: WorkflowTask): string[] => {
+const selectPromptFiles = (
+    profile: ACPProfile,
+    task: WorkflowTask,
+    workflowTransition?: string | null,
+): string[] => {
     const title = task.title ?? "";
     const description = task.description ?? "";
     const text = `${title} ${description}`;
+    const transition = (workflowTransition ?? "").trim().toLowerCase();
+    const failureTransition = isQaFailureTransition(transition);
 
     const hasRefactor = /refactor|cleanup|maintenance/i.test(text);
     const hasDocs = /doc|documentation|readme/i.test(text);
@@ -327,6 +337,13 @@ const selectPromptFiles = (profile: ACPProfile, task: WorkflowTask): string[] =>
 
     switch (profile.name) {
         case "senior-developer": {
+            if (failureTransition) {
+                return unique([
+                    ...baselineFiles,
+                    "implementation-development.md",
+                    "testing-quality.md",
+                ]);
+            }
             const files = [...baselineFiles, "implementation-development.md"];
             if (hasRefactor) files.push("refactoring-maintenance.md");
             if (hasDocs) files.push("documentation-knowledge.md");
@@ -338,7 +355,13 @@ const selectPromptFiles = (profile: ACPProfile, task: WorkflowTask): string[] =>
             return unique([...baselineFiles, "testing-quality.md"]);
         }
         case "principal-architect": {
-            return unique([...baselineFiles, "architecture-planning.md"]);
+            return unique([...baselineFiles, "architecture-planning.md", "implementation-development.md"]);
+        }
+        case "refinement": {
+            const files = [...baselineFiles, "implementation-development.md"];
+            if (hasArchitecture) files.push("architecture-planning.md");
+            if (hasTests) files.push("testing-quality.md");
+            return unique(files);
         }
         case "project-manager": {
             return unique(hasArchitecture ? [...baselineFiles, "architecture-planning.md"] : baselineFiles);
@@ -483,16 +506,27 @@ const resolveTransitionRequiredBaseTools = (workflowTransition?: string | null):
         || transition === "retry-product-research"
         || transition === "research-new-features"
         || transition === "do-ux-research"
-        || transition === "refine-into-tasks"
-        || transition === "need-more-tasks"
     ) {
         return ["list_tasks", "get_task", "create_task", "update_task"];
     }
-    if (transition === "begin-implementation" || isQaFailureTransition(transition)) {
+    if (transition === "refine-into-tasks" || transition === "need-more-tasks") {
+        return [
+            "list_tasks",
+            "get_task",
+            "get_file_context",
+            "create_task",
+            "update_task",
+            "update_task_status",
+        ];
+    }
+    if (transition === "begin-implementation") {
         return ["update_task_status", "get_file_context", "update_context"];
     }
+    if (isQaFailureTransition(transition)) {
+        return ["update_task_status", "get_file_context"];
+    }
     if (isQaRunTransition(transition)) {
-        return ["update_context", "update_task_status", "get_file_context"];
+        return ["update_context", "get_file_context"];
     }
     if (transition === "close-invalid-task") {
         return ["update_task_status"];
@@ -591,9 +625,21 @@ const buildTransitionMcpPlaybook = (workflowTransition?: string | null): string 
         return [
             "MCP transition playbook:",
             "- Call list_tasks once to fetch active candidates.",
-            "- Expect list output summarizing count and task lines with ids.",
+            "- Expect list output in the form `Found <n> tasks:` followed by JSON task records.",
             "- Call update_task_priority only for selected tasks with changed priority.",
             "- Expect update output: `Task priority updated successfully: {...}`.",
+            "- If the read succeeds but no eligible items exist, return `none` output and stop without extra reads.",
+        ].join("\n");
+    }
+    if (transition === "refine-into-tasks" || transition === "need-more-tasks") {
+        return [
+            "MCP transition playbook:",
+            "- Call list_tasks/get_task to inspect the selected story and its child tasks first.",
+            "- Use get_file_context for key code paths when available so implementation tickets can cite concrete files and interactions.",
+            "- If the story acceptance criteria are already fully covered and all child tasks are done/invalid, call update_task_status to mark the story `done` and create zero tasks.",
+            "- Otherwise create only the missing tasks, then use update_task to merge dependencies.",
+            "- Expect update_task_status output: `Task status updated successfully: {...}`.",
+            "- Expect create/update outputs containing `... successfully: {...}` JSON payloads.",
         ].join("\n");
     }
     if (
@@ -604,8 +650,6 @@ const buildTransitionMcpPlaybook = (workflowTransition?: string | null): string 
         || transition === "retry-product-research"
         || transition === "research-new-features"
         || transition === "do-ux-research"
-        || transition === "refine-into-tasks"
-        || transition === "need-more-tasks"
     ) {
         return [
             "MCP transition playbook:",
@@ -619,8 +663,10 @@ const buildTransitionMcpPlaybook = (workflowTransition?: string | null): string 
         return [
             "MCP transition playbook:",
             "- Call update_task_status to set `in-progress` at start.",
+            "- Start from the provided failure packet; validate root cause before broad code edits.",
             "- When inspecting/editing an important file, call get_file_context with filePath, operation, taskId, reason, relatedFiles, todos.",
             "- Expect get_file_context output with context JSON and `headerUpdated: true|false`.",
+            "- Re-run the minimal failing scope first before wider regression checks.",
             "- Keep task status in-progress until QA confirms tests passing.",
         ].join("\n");
     }
@@ -629,7 +675,7 @@ const buildTransitionMcpPlaybook = (workflowTransition?: string | null): string 
             "MCP transition playbook:",
             "- Run the stage-specific quality command, then call update_context with testStatus/testReport.",
             "- Expect update_context output: `Context updated: {...}`.",
-            "- If checks pass, continue QA flow; if checks fail, keep task status `in-progress`.",
+            "- Do not call update_task_status in QA run transitions; workflow controls lifecycle state.",
         ].join("\n");
     }
     if (transition === "close-invalid-task") {
@@ -678,33 +724,52 @@ const buildMcpToolingSection = (
             ...operationMappings.map((mapping) => `- ${mapping}`),
         ].join("\n")
         : "Base operation -> exact tool mapping: unavailable.";
-    const callFormat = [
-        "MCP tool calling SOP:",
-        "- The ACP-exposed tool list is authoritative for this turn.",
-        "- Treat that list as available context; do not claim the tool list is inaccessible when tools are visible.",
-        "- First, inspect the ACP-exposed tool list for this turn and resolve exact names.",
-        "- Map each required base tool name to the exact runtime tool name (often `functions.mcp__<server>__<tool>`, e.g. `functions.mcp__task-manager__list_tasks`).",
-        "- Do not call bare base names (like `list_tasks`) unless that exact bare name is visible.",
-        "- If a mapped exact tool name is visible, MCP is available for that operation.",
-        "- Never report `list_tasks`/`get_task` missing when `functions.mcp__task-manager__list_tasks`/`functions.mcp__task-manager__get_task` are visible.",
-        "- For task transitions, do not use MCP resource-discovery calls (`codex/list_mcp_resources`, `*/read_mcp_resource`) as substitutes for task-manager operation tools.",
-        "- Call tools only when needed to satisfy this transition.",
-        "- Use exactly the tool name exposed in this ACP turn.",
-        "- Provide a JSON object as arguments; avoid markdown wrappers or pseudo-code.",
-        "- Only report a tool as missing when the specific required name is absent from the visible ACP tool list.",
-        `Transition-required base operations: ${requiredBaseTools.join(", ")}`,
-        availableToolLine,
-        exactToolLine,
-        operationMappingSection,
-        "",
-        "Common tool output expectations:",
-        "- list_tasks/list_contexts: summary text plus JSON-like record lists.",
-        "- get_task/get_context/get_file_context: full record payloads (id, fields, timestamps).",
-        "- create_task/create_context: created record payload with generated id.",
-        "- update_* / replace_context: updated record payload reflecting applied changes.",
-        "",
-        buildTransitionMcpPlaybook(workflowTransition),
-    ];
+    const isOpencodeRuntime = profile.runtimeName === "opencode";
+    const callFormat = isOpencodeRuntime
+        ? [
+            "MCP tool calling SOP (Opencode runtime):",
+            "- The ACP-exposed tool list is authoritative; use the bare tool names provided.",
+            "- Do not attempt to call functions.mcp__* names; they are not exposed in command transport.",
+            "- Only use the visible tool names (e.g., task-manager_list_tasks) with JSON arguments.",
+            "- Limit tool calls to those required for the transition.",
+            `Transition-required base operations: ${requiredBaseTools.join(", ")}`,
+            availableToolLine,
+            exactToolLine,
+            "Common tool output expectations:",
+            "- list_tasks/list_contexts: summary text plus JSON-like record lists.",
+            "- get_task/get_context/get_file_context: full record payloads (id, fields, timestamps).",
+            "- create_task/create_context: created record payload with generated id.",
+            "- update_* / replace_context: updated record payload reflecting applied changes.",
+            "",
+            buildTransitionMcpPlaybook(workflowTransition),
+        ]
+        : [
+            "MCP tool calling SOP:",
+            "- The ACP-exposed tool list is authoritative for this turn.",
+            "- Treat that list as available context; do not claim the tool list is inaccessible when tools are visible.",
+            "- First, inspect the ACP-exposed tool list for this turn and resolve exact names.",
+            "- Map each required base tool name to the exact runtime tool name (often `functions.mcp__<server>__<tool>`, e.g. `functions.mcp__task-manager__list_tasks`).",
+            "- Do not call bare base names (like `list_tasks`) unless that exact bare name is visible.",
+            "- If a mapped exact tool name is visible, MCP is available for that operation.",
+            "- Never report `list_tasks`/`get_task` missing when `functions.mcp__task-manager__list_tasks`/`functions.mcp__task-manager__get_task` are visible.",
+            "- For task transitions, do not use MCP resource-discovery calls (`codex/list_mcp_resources`, `*/read_mcp_resource`) as substitutes for task-manager operation tools.",
+            "- Call tools only when needed to satisfy this transition.",
+            "- Use exactly the tool name exposed in this ACP turn.",
+            "- Provide a JSON object as arguments; avoid markdown wrappers or pseudo-code.",
+            "- Only report a tool as missing when the specific required name is absent from the visible ACP tool list.",
+            `Transition-required base operations: ${requiredBaseTools.join(", ")}`,
+            availableToolLine,
+            exactToolLine,
+            operationMappingSection,
+            "",
+            "Common tool output expectations:",
+            "- list_tasks/list_contexts: summary text plus JSON-like record lists.",
+            "- get_task/get_context/get_file_context: full record payloads (id, fields, timestamps).",
+            "- create_task/create_context: created record payload with generated id.",
+            "- update_* / replace_context: updated record payload reflecting applied changes.",
+            "",
+            buildTransitionMcpPlaybook(workflowTransition),
+        ];
     return callFormat.join("\n");
 };
 
@@ -716,7 +781,9 @@ const buildProfilePrompt = async (
     workflowTransition?: string | null,
     executionContext?: Record<string, unknown>,
 ): Promise<string> => {
-    const promptFiles = selectPromptFiles(profile, task);
+    const transition = (workflowTransition ?? "").trim().toLowerCase();
+    const isFailureTransition = isQaFailureTransition(transition);
+    const promptFiles = selectPromptFiles(profile, task, workflowTransition);
     const promptBlocks = await loadPromptBlocks(root, promptFiles);
     const workflowHint =
         workflowState?.promptHint && workflowState.profile === profile.name
@@ -750,6 +817,18 @@ const buildProfilePrompt = async (
         prefetchedTestReport.length > 0
             ? ["Test report (from workflow context):", prefetchedTestReport].join("\n")
             : "";
+    const prefetchedFailurePacket =
+        executionContext && typeof executionContext.prefetchedFailurePacket === "string"
+            ? executionContext.prefetchedFailurePacket.trim()
+            : "";
+    const prefetchedFailurePacketSection =
+        prefetchedFailurePacket.length > 0
+            ? [
+                "High-priority QA failure packet:",
+                "Treat this as the primary remediation input for this transition.",
+                prefetchedFailurePacket,
+            ].join("\n")
+            : "";
     const prefetchedMechanicalTestResults =
         executionContext && typeof executionContext.prefetchedMechanicalTestResults === "string"
             ? executionContext.prefetchedMechanicalTestResults.trim()
@@ -763,7 +842,7 @@ const buildProfilePrompt = async (
             ].join("\n")
             : "";
     const promptSection =
-        promptBlocks.length > 0
+        !isFailureTransition && promptBlocks.length > 0
             ? ["Reference prompts:", ...promptBlocks].join("\n")
             : "";
     const projectRules = buildProjectRules(profile.name);
@@ -776,6 +855,27 @@ const buildProfilePrompt = async (
     const summaryInstruction = shouldRequireDefaultSummary(workflowTransition)
         ? "At the end of your response, include `Summary:` with 1-2 sentences describing what you completed."
         : "";
+    const remediationPriorityDirective = isFailureTransition
+        ? [
+            "Root-cause remediation directive:",
+            "- Prioritize fixing the concrete failing checks in the failure packet before unrelated improvements.",
+            "- Prefer minimal, targeted changes until the failing scope is green.",
+            "- If evidence conflicts, resolve it with the smallest deterministic repro run.",
+        ].join("\n")
+        : "";
+    const profileTaskPrompt = profile.getTaskPrompt({
+        task,
+        workflow: workflowState
+            ? {
+                    state: workflowState.name,
+                    profile: workflowState.profile,
+                    promptHint: workflowState.promptHint,
+                    transition: workflowTransition ?? undefined,
+                }
+            : undefined,
+        workflowTransition: workflowTransition ?? undefined,
+        ...executionContext,
+    });
     const resolutionGuardrails = isCodingProfile(profile.name)
         ? [
             "If you discover the task is already implemented, say so and propose a better-scoped follow-up.",
@@ -787,8 +887,10 @@ const buildProfilePrompt = async (
         profile.systemPrompt.trim(),
         "",
         transitionSopSection,
+        remediationPriorityDirective,
         mcpToolingSection,
         workflowHint,
+        prefetchedFailurePacketSection,
         prefetchedTaskSection,
         prefetchedTestReportSection,
         prefetchedMechanicalTestResultsSection,
@@ -798,19 +900,7 @@ const buildProfilePrompt = async (
         resolutionGuardrails,
         summaryInstruction,
         "",
-        profile.getTaskPrompt({
-            task,
-            workflow: workflowState
-                ? {
-                        state: workflowState.name,
-                        profile: workflowState.profile,
-                        promptHint: workflowState.promptHint,
-                        transition: workflowTransition ?? undefined,
-                    }
-                : undefined,
-            workflowTransition: workflowTransition ?? undefined,
-            ...executionContext,
-        }),
+        profileTaskPrompt,
     ];
     return instructions.filter((line) => line.length > 0).join("\n");
 };
@@ -878,18 +968,75 @@ type MappedMcpToolCall = {
     tool: string;
 };
 
-const parseMappedMcpToolCallFromTitle = (title: string): MappedMcpToolCall | null => {
-    const match = title.match(/^\s*Tool:\s*([^/\s]+)\/([^\s]+)\s*$/i);
-    if (!match) {
-        return null;
+const normalizeMcpServerName = (value: string): string => {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "task_manager") {
+        return "task-manager";
     }
-    const server = (match[1] ?? "").trim().toLowerCase();
-    const tool = (match[2] ?? "").trim();
-    if (server.length === 0 || tool.length === 0) {
-        return null;
-    }
-    return { server, tool };
+    return normalized;
 };
+
+const parseMappedMcpToolCallFromTitle = (title: string): MappedMcpToolCall | null => {
+    const trimmed = title.trim();
+    if (trimmed.length === 0) {
+        return null;
+    }
+    const candidates = [
+        trimmed,
+        trimmed.replace(/^Tool:\s*/i, "").trim(),
+    ].filter((candidate, index, list) => candidate.length > 0 && list.indexOf(candidate) === index);
+    for (const candidate of candidates) {
+        const cleaned = candidate
+            .replace(/^`+|`+$/g, "")
+            .replace(/[,:;)\]]+$/, "")
+            .trim();
+        if (cleaned.length === 0) {
+            continue;
+        }
+
+        const codexMcpFormatted = cleaned.match(
+            /^(?:functions\.)?mcp__([a-z0-9_-]+)__([a-z0-9_-]+)$/i,
+        );
+        if (codexMcpFormatted) {
+            const server = normalizeMcpServerName(codexMcpFormatted[1] ?? "");
+            const tool = (codexMcpFormatted[2] ?? "").trim();
+            if (server.length > 0 && tool.length > 0) {
+                return { server, tool };
+            }
+        }
+
+        const slashFormatted = cleaned.match(/^([a-z0-9_-]+)\/([a-z0-9_-]+)$/i);
+        if (slashFormatted) {
+            const server = normalizeMcpServerName(slashFormatted[1] ?? "");
+            const tool = (slashFormatted[2] ?? "").trim();
+            if (server.length > 0 && tool.length > 0) {
+                return { server, tool };
+            }
+        }
+
+        const taskManagerUnderscore = cleaned.match(/^(task[-_]manager)_([a-z0-9_-]+)$/i);
+        if (taskManagerUnderscore) {
+            const server = normalizeMcpServerName(taskManagerUnderscore[1] ?? "");
+            const tool = (taskManagerUnderscore[2] ?? "").trim();
+            if (server.length > 0 && tool.length > 0) {
+                return { server, tool };
+            }
+        }
+
+        const opencodeFormatted = cleaned.match(/^([a-z0-9_-]+)_([a-z0-9_-]+)$/i);
+        if (opencodeFormatted) {
+            const server = normalizeMcpServerName(opencodeFormatted[1] ?? "");
+            const tool = (opencodeFormatted[2] ?? "").trim();
+            if (server.length > 0 && tool.length > 0) {
+                return { server, tool };
+            }
+        }
+    }
+    return null;
+};
+
+const extractMcpToolCallFromName = (name: string): MappedMcpToolCall | null =>
+    parseMappedMcpToolCallFromTitle(name);
 
 const extractMappedMcpToolCallsFromTitles = (titles: string[]): MappedMcpToolCall[] =>
     titles
@@ -1096,19 +1243,31 @@ const executePrompt = async (
             };
         };
 
-        const taskManagerToolNames = (session.taskClient.mcpTools ?? []).filter((name) =>
-            name.includes("mcp__task-manager__"),
-        );
+        const parsedMcpTools = (session.taskClient.mcpTools ?? [])
+            .map((name) => ({
+                name,
+                mapped: extractMcpToolCallFromName(name),
+            }))
+            .filter(
+                (entry): entry is { name: string; mapped: MappedMcpToolCall } =>
+                    entry.mapped !== null,
+            );
+        const taskManagerToolNames = parsedMcpTools
+            .filter((entry) => entry.mapped.server === "task-manager")
+            .map((entry) => entry.name);
         const hasTaskManagerTools = taskManagerToolNames.length > 0;
         const requiredBaseToolsForTransition = resolveTransitionRequiredBaseTools(
             turnContext?.workflowTransition,
         );
-        const exactTaskManagerNames = taskManagerToolNames
-            .filter((name) => name.startsWith("functions.mcp__task-manager__"));
+        const exactTaskManagerNames = taskManagerToolNames;
         const exactRequiredTaskManagerNames = uniqueStrings(
-            requiredBaseToolsForTransition.flatMap((baseTool) =>
-                exactTaskManagerNames.filter((name) => name.endsWith(`__${baseTool}`)),
-            ),
+            parsedMcpTools
+                .filter(
+                    (entry) =>
+                        entry.mapped.server === "task-manager"
+                        && requiredBaseToolsForTransition.includes(entry.mapped.tool),
+                )
+                .map((entry) => entry.name),
         );
         const extractTurnTaskManagerTools = (
             currentTurn: {
@@ -1126,112 +1285,47 @@ const executePrompt = async (
             const calledTaskManagerTools = extractTurnTaskManagerTools(currentTurn);
             return calledTaskManagerTools.some((tool) => requiredBaseToolsForTransition.includes(tool));
         };
-        const usedOnlyMcpResourceDiscovery = (
-            currentTurn: {
-                toolCallTitles: string[];
-            },
-        ): boolean => {
-            const mappedCalls = extractMappedMcpToolCallsFromTitles(currentTurn.toolCallTitles);
-            if (mappedCalls.length === 0) {
-                return false;
-            }
-            const discoveryTools = new Set([
-                "list_mcp_resources",
-                "read_mcp_resource",
-                "list_mcp_resource_templates",
-                "get_mcp_resource_template",
-            ]);
-            return mappedCalls.every((call) => discoveryTools.has(call.tool));
-        };
-        const looksLikeFalseMissingMcp = (output: string, error: string): boolean => {
-            const combined = `${output}\n${error}`.toLowerCase();
-            const mentionsMissing = /(missing|required|unavailable|cannot|can't|unable|not available)/i.test(
-                combined,
-            );
-            const mentionsMissingToolList = /(tool list|turnbox).*?(missing|unavailable|cannot|inaccessible)/i.test(
-                combined,
-            );
-            const mentionsMcpOrTasks = /(mcp|tool|list_tasks|get_task|task-manager)/i.test(combined);
-            return (mentionsMissing && mentionsMcpOrTasks && hasTaskManagerTools) || (mentionsMissingToolList && hasTaskManagerTools);
-        };
-
-        let turn = await runTurn(prompt);
-        if (looksLikeFalseMissingMcp(turn.completion.output, turn.completion.error)) {
-            const exactNames = exactTaskManagerNames.slice(0, 60);
-            const correctivePrompt = [
-                "Correction:",
-                "MCP task-manager tools and the ACP tool list are available in this turn.",
-                "Do not report missing tools or inaccessible tool list when exact MCP names are visible.",
-                "For this transition, do not call MCP resource-discovery tools (`codex/list_mcp_resources`, `*/read_mcp_resource`).",
-                "Use exact tool names from this list:",
-                exactNames.length > 0 ? exactNames.join(", ") : "(no exact names captured)",
-                "Now continue and complete the task using those exact tool names.",
-            ].join("\n");
-            console.warn("[ACP] Retrying turn due to likely false MCP-missing diagnosis");
-            turn = await runTurn(correctivePrompt);
-        }
+        const turn = await runTurn(prompt);
         const requiresMcpExecution = transitionRequiresMcpExecution(
             turnContext?.workflowTransition,
         );
-        const shouldRetryForMissingMcpCalls =
+        const missingRequiredTaskManagerCall =
             requiresMcpExecution
             && hasTaskManagerTools
             && !hasRequiredTaskManagerToolCall(turn)
             && (turn.mcpToolCallCount > 0 || turn.nonMcpToolCallCount > 0);
-        if (shouldRetryForMissingMcpCalls) {
-            const requiredOperationList = requiredBaseToolsForTransition.join(", ");
-            const retryPrompt = [
-                "Correction:",
-                "This transition requires task-manager operation MCP calls.",
-                "Your previous attempt did not call a required task-manager operation tool.",
-                "Do not use shell/execute tools for this transition.",
-                "Do not call MCP resource-discovery tools (`codex/list_mcp_resources`, `*/read_mcp_resource`) for this transition.",
-                `Call at least one required operation now: ${requiredOperationList}.`,
-                "Use the exact MCP tool names from this list:",
-                exactRequiredTaskManagerNames.length > 0
-                    ? exactRequiredTaskManagerNames.join(", ")
-                    : (exactTaskManagerNames.slice(0, 40).join(", ") || "(no exact task-manager names captured)"),
-                "Complete the transition now using MCP task-manager tools only.",
-            ].join("\n");
-            console.warn(
-                `[ACP] Retrying turn because MCP-required transition had no required task-manager operation calls (mcp=${turn.mcpToolCallCount}, nonMCP=${turn.nonMcpToolCallCount}, titles=${turn.toolCallTitles.join(", ")})`,
-            );
-            turn = await runTurn(retryPrompt);
-        }
-        const shouldForceRequiredTaskManagerToolCall =
+        const missingRequiredTaskManagerCallWithoutRetry =
             requiresMcpExecution
             && hasTaskManagerTools
             && !hasRequiredTaskManagerToolCall(turn)
-            && usedOnlyMcpResourceDiscovery(turn);
-        if (shouldForceRequiredTaskManagerToolCall) {
-            const forcePrompt = [
-                "Mandatory correction:",
-                "Your previous attempt used only MCP resource-discovery calls.",
-                "For this transition, you must call a task-manager operation tool now.",
-                "Do not use `codex/list_mcp_resources` or `task-manager/read_mcp_resource`.",
-                `Required operations: ${requiredBaseToolsForTransition.join(", ")}`,
-                "Call one required operation tool immediately, then finish the transition.",
-                "Exact required tool names:",
-                exactRequiredTaskManagerNames.length > 0
-                    ? exactRequiredTaskManagerNames.join(", ")
-                    : (exactTaskManagerNames.slice(0, 40).join(", ") || "(no exact task-manager names captured)"),
-            ].join("\n");
-            console.warn("[ACP] Forcing an additional retry because only MCP resource-discovery calls were used");
-            turn = await runTurn(forcePrompt);
-        }
-        const missingRequiredTaskManagerCallAfterRetries =
-            requiresMcpExecution
-            && hasTaskManagerTools
-            && !hasRequiredTaskManagerToolCall(turn);
-        if (missingRequiredTaskManagerCallAfterRetries) {
+            && (missingRequiredTaskManagerCall || turn.mcpToolCallCount === 0);
+        if (missingRequiredTaskManagerCallWithoutRetry) {
             const observedMappedCalls = uniqueStrings(
                 extractMappedMcpToolCallsFromTitles(turn.toolCallTitles).map(
                     (entry) => `${entry.server}/${entry.tool}`,
                 ),
             );
+            const combined = `${turn.completion.output}\n${turn.completion.error}`.toLowerCase();
+            const likelyFalseMissingMcpDiagnosis =
+                hasTaskManagerTools
+                && (
+                    (
+                        /(missing|required|unavailable|cannot|can't|unable|not available)/i.test(
+                            combined,
+                        )
+                        && /(mcp|tool|list_tasks|get_task|task-manager)/i.test(combined)
+                    )
+                    || /(tool list|turnbox).*?(missing|unavailable|cannot|inaccessible)/i.test(
+                        combined,
+                    )
+                );
+            const requiredToolNamesSummary =
+                exactRequiredTaskManagerNames.length > 0
+                    ? exactRequiredTaskManagerNames.join(", ")
+                    : (exactTaskManagerNames.slice(0, 40).join(", ") || "none");
             return {
                 output: turn.completion.output,
-                error: `MCP-required transition completed without a required task-manager operation call. Required operations: ${requiredBaseToolsForTransition.join(", ")}. Observed tool calls: ${observedMappedCalls.join(", ") || "none"}.`,
+                error: `MCP-required transition completed without a required task-manager operation call. Auto-retry is disabled; allowing workflow-level retry. Required operations: ${requiredBaseToolsForTransition.join(", ")}. Required exact tool names: ${requiredToolNamesSummary}. Observed tool calls: ${observedMappedCalls.join(", ") || "none"}.${likelyFalseMissingMcpDiagnosis ? " Likely false MCP-missing diagnosis detected in model output." : ""}`,
                 modelName: turn.reportedModelName,
             };
         }
@@ -1448,13 +1542,21 @@ export const createWorkflowAgentRunner = (
             };
         }
 
+        const promptExecutionContext =
+            typeof isDecider === "boolean"
+                ? {
+                    ...(executionContext ?? {}),
+                    isDecider,
+                }
+                : executionContext;
+
         const prompt = await buildProfilePrompt(
             workspaceRoot,
             profile,
             task,
             workflowState,
             workflowTransition,
-            executionContext,
+            promptExecutionContext,
         );
         const startTime = Date.now();
         profileManager.startTaskProcessing(profile.name);

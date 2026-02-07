@@ -1,6 +1,13 @@
 import http from "node:http";
-import path from "node:path";
 import { nodeHTTPRequestHandler } from "@trpc/server/adapters/node-http";
+import {
+    createHttpMicroserviceRuntime,
+    MicroserviceTrait,
+    resolveEnvironmentLevelDbPath,
+    resolveTrpcProcedurePath,
+    writeJsonNotFound,
+    writeJsonResponse,
+} from "@isomorphiq/core-microservice";
 import {
     ConfigManager,
     resolveEnvironmentFromHeaders,
@@ -29,17 +36,15 @@ const configManager = ConfigManager.getInstance();
 const environmentConfig = configManager.getEnvironmentConfig();
 const environmentNames = Array.from(new Set(environmentConfig.available));
 
-const resolveBasePath = (): string => {
-    const basePath = configManager.getDatabaseConfig().path;
-    return path.isAbsolute(basePath) ? basePath : path.join(process.cwd(), basePath);
-};
-
 const createEnvironmentService = async (environment: string): Promise<NotificationsService> => {
-    const basePath = resolveBasePath();
-    const envPath = path.join(basePath, environment);
-    const notificationsPath = path.join(envPath, "notifications");
-    const outboxPath = path.join(notificationsPath, "outbox");
-    const preferencesPath = path.join(notificationsPath, "preferences");
+    const outboxPath = resolveEnvironmentLevelDbPath(
+        environment,
+        ["notifications", "outbox"],
+    );
+    const preferencesPath = resolveEnvironmentLevelDbPath(
+        environment,
+        ["notifications", "preferences"],
+    );
     const service = new NotificationsService({
         outboxPath,
         preferencesPath,
@@ -102,45 +107,34 @@ export async function startNotificationsServiceServer(): Promise<http.Server> {
     const server = http.createServer(async (req, res) => {
         const url = req.url ?? "/";
         const parsed = new URL(url, `http://${req.headers.host ?? "localhost"}`);
+        const path = parsed.pathname;
 
-        if (req.method === "GET" && parsed.pathname === "/health") {
+        if ((req.method ?? "GET") === "GET" && path === "/health") {
+            const health = await MicroserviceTrait.health(microservice.runtime as any);
             const service = resolveService(resolveEnvironment(req));
             const outbox = await service.listOutbox({ limit: 200 });
             const pending = outbox.filter((entry) => entry.status === "pending").length;
             const sent = outbox.filter((entry) => entry.status === "sent").length;
             const failed = outbox.filter((entry) => entry.status === "failed").length;
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(
-                JSON.stringify({
-                    status: "ok",
-                    service: "notifications-service",
-                    queue: {
-                        pending,
-                        sent,
-                        failed,
-                    },
-                }),
-            );
+            writeJsonResponse(res, 200, {
+                ...health,
+                queue: {
+                    pending,
+                    sent,
+                    failed,
+                },
+            });
             return;
         }
 
-        if (!parsed.pathname.startsWith("/trpc")) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Not found" }));
+        if (!path.startsWith("/trpc")) {
+            writeJsonNotFound(res);
             return;
         }
 
-        const basePath = "/trpc";
-        const procedurePath =
-            parsed.pathname === basePath
-                ? ""
-                : parsed.pathname.startsWith(`${basePath}/`)
-                    ? parsed.pathname.slice(basePath.length + 1)
-                    : parsed.pathname.slice(1);
-
+        const procedurePath = resolveTrpcProcedurePath(path, "/trpc");
         if (!procedurePath) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Procedure path missing" }));
+            writeJsonResponse(res, 404, { error: "Procedure path missing" });
             return;
         }
 
@@ -153,18 +147,28 @@ export async function startNotificationsServiceServer(): Promise<http.Server> {
         });
     });
 
-    return await new Promise((resolve, reject) => {
-        server.listen(resolvedPort, host, () => {
-            console.log(
-                `[NOTIFICATIONS] Notifications service listening on http://${host}:${resolvedPort}/trpc`,
-            );
-            resolve(server);
-        });
-        server.on("error", (error) => {
-            console.error("[NOTIFICATIONS] Failed to start notifications service:", error);
-            reject(error);
-        });
+    const microservice = createHttpMicroserviceRuntime({
+        id: "notifications-service",
+        name: "notifications-service",
+        kind: "trpc",
+        host,
+        port: resolvedPort,
+        server,
+        hooks: {
+            metadata: () => {
+                const service = resolveService(environmentConfig.default);
+                return {
+                    queueSizeHint: service ? "available" : "unknown",
+                };
+            },
+        },
     });
+
+    await MicroserviceTrait.start(microservice.runtime as any);
+    console.log(
+        `[NOTIFICATIONS] Notifications service listening on http://${host}:${resolvedPort}/trpc`,
+    );
+    return microservice.server;
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {

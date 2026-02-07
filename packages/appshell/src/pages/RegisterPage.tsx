@@ -37,14 +37,14 @@ export function RegisterPage() {
 				</p>
 				<div style={{ marginBottom: "12px" }}>
 					<Link
-						to="/"
+						to="/overview"
 						style={{
 							color: "#38bdf8",
 							textDecoration: "none",
 							fontWeight: 600,
 						}}
 					>
-						← Back to dashboard
+						← Back to overview
 					</Link>
 				</div>
 				{registrationDisabled ? (

@@ -17,10 +17,18 @@
         "start": "node --experimental-strip-types src/init.ts",
         "start:watch": "SUPERVISOR_WATCH=1 node --experimental-strip-types src/init.ts",
         "ps": "node --experimental-strip-types src/ps.ts",
+        "reset_workers": "node --experimental-strip-types src/reset-workers.ts",
         "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts"
     },
     "dependencies": {
-        "@isomorphiq/worker": "workspace:*",
+        "@isomorphiq/context": "workspace:*",
+        "@isomorphiq/core-supervision": "workspace:*",
+        "@isomorphiq/persistence-level": "workspace:*",
+        "@isomorphiq/tasks": "workspace:*",
+        "@isomorphiq/worker-manager": "workspace:*",
+        "@tsimpl/core": "0.1.1",
+        "@tsimpl/runtime": "0.1.1",
+        "@tsimpl/validation": "0.1.1",
         "ink": "^4.3.0",
         "react": "^18.3.1"
     },

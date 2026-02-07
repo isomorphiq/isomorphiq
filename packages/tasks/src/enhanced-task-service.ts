@@ -65,6 +65,16 @@ export class EnhancedTaskService {
         });
     }
 
+    private claimRequiresSatisfiedDependencies(task: TaskEntity): boolean {
+        const normalizedType = (task.type ?? "").toLowerCase().trim();
+        return (
+            normalizedType === "implementation"
+            || normalizedType === "task"
+            || normalizedType === "testing"
+            || normalizedType === "integration"
+        );
+    }
+
 	getRepository(): TaskRepository {
 		return this.taskRepository;
 	}
@@ -213,6 +223,10 @@ export class EnhancedTaskService {
 
 		return { success: true, data: result.data };
 	}
+
+    async getTaskByBranch(branch: string): Promise<Result<TaskEntity | null>> {
+        return await this.taskRepository.findByBranch(branch);
+    }
 
 	async getAllTasks(): Promise<Result<TaskEntity[]>> {
 		return await this.taskRepository.findAll();
@@ -391,7 +405,7 @@ export class EnhancedTaskService {
 		return updateResult;
 	}
 
-    async claimTaskForWorker(
+async claimTaskForWorker(
         taskId: string,
         workerId: string,
     ): Promise<Result<TaskEntity | null>> {
@@ -409,10 +423,15 @@ export class EnhancedTaskService {
                 return { success: true, data: null };
             }
 
-            if (currentTask.status === "in-progress") {
+            if (currentTask.status !== "todo" && currentTask.status !== "in-progress") {
                 return { success: true, data: null };
             }
-            if (currentTask.status !== "todo") {
+
+            if (
+                currentTask.status === "in-progress"
+                && currentTask.assignedTo
+                && currentTask.assignedTo !== workerId
+            ) {
                 return { success: true, data: null };
             }
 
@@ -422,7 +441,10 @@ export class EnhancedTaskService {
             }
             const taskMap = new Map(allTasksResult.data.map((task) => [task.id, task]));
             const latestTask = taskMap.get(taskId) ?? currentTask;
-            if (!this.areDependenciesSatisfied(latestTask, taskMap)) {
+            if (
+                this.claimRequiresSatisfiedDependencies(latestTask)
+                && !this.areDependenciesSatisfied(latestTask, taskMap)
+            ) {
                 return { success: true, data: null };
             }
 
@@ -431,7 +453,7 @@ export class EnhancedTaskService {
                 {
                     id: taskId,
                     status: "in-progress",
-                    assignedTo: latestTask.assignedTo ?? workerId,
+                    assignedTo: workerId,
                 },
                 workerId,
             );

@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-5b7cffbb-fbcd-4404-a8e2-22a2df58f0d4"
+
 import { randomUUID } from "node:crypto";
 
 export type WidgetId = string;

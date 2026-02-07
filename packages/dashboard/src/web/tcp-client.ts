@@ -55,6 +55,31 @@ const resolveDefaultPort = (): number => {
 
 const resolveDefaultHost = (): string => process.env.DAEMON_HOST ?? "localhost";
 
+const resolveGatewayBaseUrl = (): string => {
+    const direct =
+        process.env.GATEWAY_URL
+        ?? process.env.WORKER_GATEWAY_URL
+        ?? process.env.ISOMORPHIQ_GATEWAY_URL;
+    if (direct && direct.trim().length > 0) {
+        return direct.trim().replace(/\/+$/, "");
+    }
+    const host = process.env.GATEWAY_HOST ?? "127.0.0.1";
+    const envPort = Number(process.env.GATEWAY_PORT);
+    const port = Number.isFinite(envPort) && envPort > 0 ? envPort : 3003;
+    return `http://${host}:${String(port)}`;
+};
+
+const resolveWorkerManagerBaseUrl = (): string => {
+    const direct = process.env.WORKER_MANAGER_URL;
+    if (direct && direct.trim().length > 0) {
+        return direct.trim().replace(/\/+$/, "");
+    }
+    const host = process.env.WORKER_MANAGER_HOST ?? "127.0.0.1";
+    const envPort = Number(process.env.WORKER_MANAGER_HTTP_PORT ?? process.env.WORKER_MANAGER_PORT);
+    const port = Number.isFinite(envPort) && envPort > 0 ? envPort : 3012;
+    return `http://${host}:${String(port)}`;
+};
+
 const resolveDefaultEnvironment = (): string => {
 	const configured =
 		process.env.ISOMORPHIQ_ENVIRONMENT ?? process.env.ISOMORPHIQ_TEST_ENVIRONMENT;
@@ -69,69 +94,349 @@ const resolveDefaultEnvironment = (): string => {
  * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class DaemonTcpClient {
-	private port: number;
-	private host: string;
-	private connect: typeof createConnection;
-	private wsConnection: WebSocket | null = null;
-	private environment: string;
+    private port: number;
+    private host: string;
+    private connect: typeof createConnection;
+    private wsConnection: WebSocket | null = null;
+    private environment: string;
+    private gatewayBaseUrl: string;
+    private workerManagerBaseUrl: string;
 
 	constructor(
 		port: number = resolveDefaultPort(),
 		host: string = resolveDefaultHost(),
 		environment: string = resolveDefaultEnvironment(),
-	) {
-		this.port = port;
-		this.host = host;
-		this.connect = createConnection;
-		this.environment = environment;
-	}
+    ) {
+        this.port = port;
+        this.host = host;
+        this.connect = createConnection;
+        this.environment = environment;
+        this.gatewayBaseUrl = resolveGatewayBaseUrl();
+        this.workerManagerBaseUrl = resolveWorkerManagerBaseUrl();
+    }
 
-	async sendCommand<T = unknown, R = unknown>(
-		command: string,
-		data: T,
-		environment: string = this.environment,
-	): Promise<Result<R>> {
-		return new Promise((resolve, reject) => {
-			const client = this.connect({ port: this.port, host: this.host }, () => {
-				const message = `${JSON.stringify({ command, data, environment })}\n`;
-				client.write(message);
-			});
+    async sendCommand<T = unknown, R = unknown>(
+        command: string,
+        data: T,
+        environment: string = this.environment,
+    ): Promise<Result<R>> {
+        try {
+            return await this.sendCommandOverTcp<T, R>(command, data, environment);
+        } catch (error) {
+            const fallbackResult = await this.sendCommandViaHttpFallback<T, R>(command, data, environment);
+            if (fallbackResult) {
+                return fallbackResult;
+            }
+            throw error;
+        }
+    }
 
-			let response = "";
-			client.on("data", (data) => {
-				response += data.toString();
-				try {
-					const result = JSON.parse(response.trim());
-					client.end();
-					resolve(result);
-				} catch (_e) {
-					// Wait for more data
-				}
-			});
+    private async sendCommandOverTcp<T = unknown, R = unknown>(
+        command: string,
+        data: T,
+        environment: string,
+    ): Promise<Result<R>> {
+        return new Promise((resolve, reject) => {
+            const client = this.connect({ port: this.port, host: this.host }, () => {
+                const message = `${JSON.stringify({ command, data, environment })}\n`;
+                client.write(message);
+            });
 
-			client.on("error", (err) => {
-				reject(new Error(`Connection error: ${err.message}`));
-			});
+            let response = "";
+            const timeout = setTimeout(() => {
+                client.destroy();
+                reject(new Error("Request timeout"));
+            }, 10000);
+            client.on("data", (data) => {
+                response += data.toString();
+                try {
+                    const result = JSON.parse(response.trim());
+                    clearTimeout(timeout);
+                    client.end();
+                    resolve(result);
+                } catch (_e) {
+                    // Wait for more data
+                }
+            });
 
-			client.on("close", () => {
-				if (!response) {
-					reject(new Error("Connection closed without response"));
-				}
-			});
+            client.on("error", (err) => {
+                clearTimeout(timeout);
+                reject(new Error(`Connection error: ${err.message}`));
+            });
 
-			setTimeout(() => {
-				client.destroy();
-				reject(new Error("Request timeout"));
-			}, 10000);
-		});
-	}
+            client.on("close", () => {
+                clearTimeout(timeout);
+                if (!response) {
+                    reject(new Error("Connection closed without response"));
+                }
+            });
+        });
+    }
 
-	async createTask(taskData: {
-		title: string;
-		description: string;
-		priority?: string;
-		dependencies?: string[];
-		createdBy?: string;
+    private buildEnvironmentHeaders(environment: string): Record<string, string> {
+        return {
+            "Content-Type": "application/json",
+            "Environment": environment,
+        };
+    }
+
+    private asRecord(value: unknown): Record<string, unknown> {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+            return {};
+        }
+        return Object.fromEntries(Object.entries(value));
+    }
+
+    private async sendGatewayRequest(
+        input: string,
+        init: RequestInit,
+    ): Promise<{ ok: boolean; status: number; body: unknown }> {
+        const response = await fetch(input, init);
+        const text = await response.text();
+        if (!text || text.trim().length === 0) {
+            return { ok: response.ok, status: response.status, body: {} };
+        }
+        try {
+            return { ok: response.ok, status: response.status, body: JSON.parse(text) as unknown };
+        } catch {
+            return { ok: response.ok, status: response.status, body: text };
+        }
+    }
+
+    private toErrorResult<R>(message: string): Result<R> {
+        return {
+            success: false,
+            error: new Error(message),
+        };
+    }
+
+    private async sendCommandViaHttpFallback<T = unknown, R = unknown>(
+        command: string,
+        data: T,
+        environment: string,
+    ): Promise<Result<R> | null> {
+        const payload = this.asRecord(data);
+        const headers = this.buildEnvironmentHeaders(environment);
+
+        try {
+            if (command === "list_tasks") {
+                const response = await this.sendGatewayRequest(
+                    `${this.gatewayBaseUrl}/api/tasks`,
+                    {
+                        method: "GET",
+                        headers,
+                    },
+                );
+                if (!response.ok || !Array.isArray(response.body)) {
+                    return this.toErrorResult<R>(`Gateway tasks list failed (${String(response.status)})`);
+                }
+                return { success: true, data: response.body as R };
+            }
+
+            if (command === "create_task") {
+                const response = await this.sendGatewayRequest(
+                    `${this.gatewayBaseUrl}/api/tasks`,
+                    {
+                        method: "POST",
+                        headers,
+                        body: JSON.stringify(data),
+                    },
+                );
+                const bodyRecord = this.asRecord(response.body);
+                if (!response.ok || bodyRecord.success !== true) {
+                    const reason = typeof bodyRecord.error === "string"
+                        ? bodyRecord.error
+                        : `Gateway task create failed (${String(response.status)})`;
+                    return this.toErrorResult<R>(reason);
+                }
+                return { success: true, data: bodyRecord.data as R };
+            }
+
+            if (command === "update_task_status") {
+                const taskId = typeof payload.id === "string" ? payload.id : "";
+                const status = payload.status;
+                if (taskId.length === 0 || typeof status !== "string") {
+                    return this.toErrorResult<R>("update_task_status requires id and status");
+                }
+                const response = await this.sendGatewayRequest(
+                    `${this.gatewayBaseUrl}/api/tasks/${encodeURIComponent(taskId)}/status`,
+                    {
+                        method: "PUT",
+                        headers,
+                        body: JSON.stringify({ status }),
+                    },
+                );
+                const bodyRecord = this.asRecord(response.body);
+                if (!response.ok || bodyRecord.success !== true) {
+                    const reason = typeof bodyRecord.error === "string"
+                        ? bodyRecord.error
+                        : `Gateway task status update failed (${String(response.status)})`;
+                    return this.toErrorResult<R>(reason);
+                }
+                return { success: true, data: bodyRecord.data as R };
+            }
+
+            if (command === "update_task_priority") {
+                const taskId = typeof payload.id === "string" ? payload.id : "";
+                const priority = payload.priority;
+                if (taskId.length === 0 || typeof priority !== "string") {
+                    return this.toErrorResult<R>("update_task_priority requires id and priority");
+                }
+                const response = await this.sendGatewayRequest(
+                    `${this.gatewayBaseUrl}/api/tasks/${encodeURIComponent(taskId)}/priority`,
+                    {
+                        method: "PUT",
+                        headers,
+                        body: JSON.stringify({ priority }),
+                    },
+                );
+                const bodyRecord = this.asRecord(response.body);
+                if (!response.ok || bodyRecord.success !== true) {
+                    const reason = typeof bodyRecord.error === "string"
+                        ? bodyRecord.error
+                        : `Gateway task priority update failed (${String(response.status)})`;
+                    return this.toErrorResult<R>(reason);
+                }
+                return { success: true, data: bodyRecord.data as R };
+            }
+
+            if (command === "delete_task") {
+                const taskId = typeof payload.id === "string" ? payload.id : "";
+                if (taskId.length === 0) {
+                    return this.toErrorResult<R>("delete_task requires id");
+                }
+                const response = await this.sendGatewayRequest(
+                    `${this.gatewayBaseUrl}/api/tasks/${encodeURIComponent(taskId)}`,
+                    {
+                        method: "DELETE",
+                        headers,
+                    },
+                );
+                const bodyRecord = this.asRecord(response.body);
+                if (!response.ok || bodyRecord.success !== true) {
+                    const reason = typeof bodyRecord.error === "string"
+                        ? bodyRecord.error
+                        : `Gateway task delete failed (${String(response.status)})`;
+                    return this.toErrorResult<R>(reason);
+                }
+                return { success: true, data: true as R };
+            }
+
+            if (command === "get_daemon_status") {
+                const response = await this.sendGatewayRequest(
+                    `${this.workerManagerBaseUrl}/workers`,
+                    {
+                        method: "GET",
+                        headers,
+                    },
+                );
+                const bodyRecord = this.asRecord(response.body);
+                const workers = Array.isArray(bodyRecord.workers) ? bodyRecord.workers : [];
+                const running = workers.filter((worker) =>
+                    worker
+                    && typeof worker === "object"
+                    && this.asRecord(worker).status === "running"
+                );
+                if (!response.ok) {
+                    return this.toErrorResult<R>(`Worker-manager status failed (${String(response.status)})`);
+                }
+                return {
+                    success: true,
+                    data: {
+                        paused: running.length === 0,
+                        workers: workers.length,
+                        runningWorkers: running.length,
+                    } as R,
+                };
+            }
+
+            if (command === "pause_daemon" || command === "resume_daemon") {
+                const desiredCount = command === "pause_daemon"
+                    ? 0
+                    : (() => {
+                        const raw = Number(process.env.ISOMORPHIQ_WORKER_COUNT ?? process.env.WORKER_COUNT);
+                        return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1;
+                    })();
+                const response = await this.sendGatewayRequest(
+                    `${this.workerManagerBaseUrl}/workers/reconcile`,
+                    {
+                        method: "POST",
+                        headers,
+                        body: JSON.stringify({ desiredCount }),
+                    },
+                );
+                const bodyRecord = this.asRecord(response.body);
+                if (!response.ok || bodyRecord.ok !== true) {
+                    return this.toErrorResult<R>(
+                        `Worker-manager reconcile failed (${String(response.status)})`,
+                    );
+                }
+                return {
+                    success: true,
+                    data: {
+                        desiredCount,
+                        workers: bodyRecord.workers,
+                    } as R,
+                };
+            }
+
+            if (command === "restart") {
+                const desiredCountRaw = Number(process.env.ISOMORPHIQ_WORKER_COUNT ?? process.env.WORKER_COUNT);
+                const desiredCount = Number.isFinite(desiredCountRaw) && desiredCountRaw > 0
+                    ? Math.floor(desiredCountRaw)
+                    : 1;
+                const pauseResponse = await this.sendGatewayRequest(
+                    `${this.workerManagerBaseUrl}/workers/reconcile`,
+                    {
+                        method: "POST",
+                        headers,
+                        body: JSON.stringify({ desiredCount: 0 }),
+                    },
+                );
+                const pauseBody = this.asRecord(pauseResponse.body);
+                if (!pauseResponse.ok || pauseBody.ok !== true) {
+                    return this.toErrorResult<R>(
+                        `Worker-manager restart (stop) failed (${String(pauseResponse.status)})`,
+                    );
+                }
+                const resumeResponse = await this.sendGatewayRequest(
+                    `${this.workerManagerBaseUrl}/workers/reconcile`,
+                    {
+                        method: "POST",
+                        headers,
+                        body: JSON.stringify({ desiredCount }),
+                    },
+                );
+                const resumeBody = this.asRecord(resumeResponse.body);
+                if (!resumeResponse.ok || resumeBody.ok !== true) {
+                    return this.toErrorResult<R>(
+                        `Worker-manager restart (start) failed (${String(resumeResponse.status)})`,
+                    );
+                }
+                return {
+                    success: true,
+                    data: {
+                        message: "Worker pool restarted",
+                        desiredCount,
+                    } as R,
+                };
+            }
+        } catch (error) {
+            return this.toErrorResult<R>(
+                error instanceof Error ? error.message : "HTTP fallback failed",
+            );
+        }
+
+        return null;
+    }
+
+    async createTask(taskData: {
+        title: string;
+        description: string;
+        prd?: string;
+        priority?: string;
+        dependencies?: string[];
+        createdBy?: string;
 		assignedTo?: string;
 		collaborators?: string[];
 		watchers?: string[];
@@ -193,23 +498,37 @@ export class DaemonTcpClient {
 		return this.sendCommand("restart", {});
 	}
 
-	async checkConnection(): Promise<boolean> {
-		return new Promise((resolve) => {
-			const client = this.connect({ port: this.port, host: this.host }, () => {
-				client.end();
-				resolve(true);
-			});
+async checkConnection(): Promise<boolean> {
+         const tcpConnected = await new Promise<boolean>((resolve) => {
+             const client = this.connect({ port: this.port, host: this.host });
+             
+             client.on("connect", () => {
+                 client.end();
+                 resolve(true);
+ 			});
 
 			client.on("error", () => {
 				resolve(false);
 			});
 
 			setTimeout(() => {
-				client.destroy();
-				resolve(false);
-			}, 2000);
-		});
-	}
+                client.destroy();
+                resolve(false);
+            }, 2000);
+        });
+        if (tcpConnected) {
+            return true;
+        }
+        try {
+            const response = await fetch(`${this.gatewayBaseUrl}/api/health`, {
+                method: "GET",
+                headers: this.buildEnvironmentHeaders(this.environment),
+            });
+            return response.ok;
+        } catch {
+            return false;
+        }
+    }
 
 	// Task monitoring methods
 	async createMonitoringSession(filters?: TaskFilter): Promise<Result<TaskMonitoringSession>> {

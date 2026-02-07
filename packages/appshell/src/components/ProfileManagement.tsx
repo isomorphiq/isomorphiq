@@ -1,4 +1,4 @@
-import { useAtomValue } from "jotai";
+import { useAtom } from "jotai";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { authAtom } from "../authAtoms.ts";
@@ -103,6 +103,14 @@ const emptyForm: ProfileConfigForm = {
     taskPromptPrefix: "",
 };
 
+const OPENCODE_MODEL_OPTIONS = [
+    "lmstudio/nvidia/nemotron-3-nano",
+    "lmstudio/openai/gpt-oss-20b",
+    "lmstudio/qwen/qwen3-coder-next",
+    "lmstudio/qwen/qwen3-vl-4b",
+    "lmstudio/qwen3-4b-gemini-triplex-high-reasoning-thinking-heretic-uncensored",
+];
+
 const toFormFromOverrides = (snapshot: ProfileConfigurationSnapshot): ProfileConfigForm => {
     const runtimeOverride = snapshot.overrides.runtimeName;
     return {
@@ -166,7 +174,7 @@ const toUserProfileListItems = (
     }));
 
 export function ProfileManagement() {
-    const auth = useAtomValue(authAtom);
+    const [auth, setAuth] = useAtom(authAtom);
     const navigate = useNavigate();
     const { profileName: routeProfileName } = useParams<{ profileName?: string }>();
     const [profiles, setProfiles] = useState<ProfileData[]>([]);
@@ -189,18 +197,58 @@ export function ProfileManagement() {
         [navigate],
     );
 
+    const clearAuthAndRedirectToLogin = useCallback(() => {
+        if (typeof window !== "undefined") {
+            localStorage.removeItem("authToken");
+            localStorage.removeItem("user");
+        }
+        setAuth({
+            user: null,
+            token: null,
+            isAuthenticated: false,
+            isLoading: false,
+        });
+        navigate("/login", { replace: true });
+    }, [navigate, setAuth]);
+
+    const buildAuthHeaders = useCallback((baseHeaders?: HeadersInit): Headers => {
+        const headers = new Headers(baseHeaders ?? {});
+        const token =
+            auth.token
+            ?? (typeof window !== "undefined" ? localStorage.getItem("authToken") : null);
+        if (token && token.trim().length > 0) {
+            headers.set("Authorization", `Bearer ${token}`);
+        }
+        return headers;
+    }, [auth.token]);
+
+    const authenticatedFetch = useCallback(
+        async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+            const response = await fetch(input, {
+                ...init,
+                headers: buildAuthHeaders(init?.headers),
+            });
+            if (response.status === 401) {
+                clearAuthAndRedirectToLogin();
+                throw new Error("Authentication required. Please sign in again.");
+            }
+            return response;
+        },
+        [buildAuthHeaders, clearAuthAndRedirectToLogin],
+    );
+
     const fetchProfiles = useCallback(async () => {
-        const response = await fetch("/api/profiles/with-states");
+        const response = await authenticatedFetch("/api/profiles/with-states");
         if (!response.ok) {
             throw new Error(`Failed to fetch profiles (${response.status})`);
         }
         const data = (await response.json()) as ProfileData[];
         setProfiles(data);
         return data;
-    }, []);
+    }, [authenticatedFetch]);
 
     const fetchConfigs = useCallback(async () => {
-        const response = await fetch("/api/profiles/configs");
+        const response = await authenticatedFetch("/api/profiles/configs");
         if (!response.ok) {
             throw new Error(`Failed to fetch profile configs (${response.status})`);
         }
@@ -214,10 +262,10 @@ export function ProfileManagement() {
         );
         setConfigsByName(nextMap);
         return nextMap;
-    }, []);
+    }, [authenticatedFetch]);
 
     const fetchSingleConfig = useCallback(async (profileName: string) => {
-        const response = await fetch(`/api/profiles/${encodeURIComponent(profileName)}/config`);
+        const response = await authenticatedFetch(`/api/profiles/${encodeURIComponent(profileName)}/config`);
         if (!response.ok) {
             throw new Error(`Failed to fetch profile config (${response.status})`);
         }
@@ -227,7 +275,7 @@ export function ProfileManagement() {
             [snapshot.name]: snapshot,
         }));
         return snapshot;
-    }, []);
+    }, [authenticatedFetch]);
 
     const fetchUserProfiles = useCallback(async () => {
         if (!auth.token) {
@@ -235,11 +283,8 @@ export function ProfileManagement() {
             return [];
         }
         setIsLoadingUsers(true);
-        const headers = {
-            Authorization: `Bearer ${auth.token}`,
-        };
         try {
-            const usersResponse = await fetch("/api/users", { headers });
+            const usersResponse = await authenticatedFetch("/api/users");
             if (usersResponse.ok) {
                 const payload = (await usersResponse.json()) as { users?: AuthApiUser[] };
                 const users = payload.users ?? [];
@@ -248,7 +293,7 @@ export function ProfileManagement() {
                 return nextItems;
             }
 
-            const meResponse = await fetch("/api/auth/me", { headers });
+            const meResponse = await authenticatedFetch("/api/auth/me");
             if (!meResponse.ok) {
                 setUserProfiles([]);
                 return [];
@@ -265,7 +310,7 @@ export function ProfileManagement() {
         } finally {
             setIsLoadingUsers(false);
         }
-    }, [auth.token, auth.user?.id]);
+    }, [auth.token, auth.user?.id, authenticatedFetch]);
 
     const loadInitialData = useCallback(async () => {
         setIsLoading(true);
@@ -361,6 +406,22 @@ export function ProfileManagement() {
     );
 
     const selectedConfig = selectedProfileName ? configsByName[selectedProfileName] : undefined;
+    const resolvedRuntimeForModelOptions = useMemo(
+        () =>
+            form.runtimeName
+            || selectedConfig?.effective.runtimeName
+            || selectedProfile?.profile.runtimeName
+            || selectedConfig?.defaults.runtimeName
+            || "",
+        [form.runtimeName, selectedConfig, selectedProfile?.profile.runtimeName],
+    );
+    const modelOptions = useMemo(
+        () =>
+            resolvedRuntimeForModelOptions === "opencode"
+                ? OPENCODE_MODEL_OPTIONS
+                : [],
+        [resolvedRuntimeForModelOptions],
+    );
 
     const formMatchesSelectedConfig = useMemo(() => {
         if (!selectedConfig) {
@@ -417,9 +478,9 @@ export function ProfileManagement() {
     const toggleProfileStatus = async (profileName: string, isActive: boolean) => {
         setMessage(null);
         try {
-            const response = await fetch(`/api/profiles/${encodeURIComponent(profileName)}/status`, {
+            const response = await authenticatedFetch(`/api/profiles/${encodeURIComponent(profileName)}/status`, {
                 method: "PUT",
-                headers: { "Content-Type": "application/json" },
+                headers: buildAuthHeaders({ "Content-Type": "application/json" }),
                 body: JSON.stringify({ isActive }),
             });
             if (!response.ok) {
@@ -461,11 +522,11 @@ export function ProfileManagement() {
         setIsSaving(true);
         setMessage(null);
         try {
-            const response = await fetch(
+            const response = await authenticatedFetch(
                 `/api/profiles/${encodeURIComponent(selectedProfileName)}/config`,
                 {
                     method: "PUT",
-                    headers: { "Content-Type": "application/json" },
+                    headers: buildAuthHeaders({ "Content-Type": "application/json" }),
                     body: JSON.stringify({
                         runtimeName: form.runtimeName || null,
                         modelName: normalizeOptionalText(form.modelName),
@@ -502,11 +563,11 @@ export function ProfileManagement() {
         setIsSaving(true);
         setMessage(null);
         try {
-            const response = await fetch(
+            const response = await authenticatedFetch(
                 `/api/profiles/${encodeURIComponent(selectedProfileName)}/config`,
                 {
                     method: "PUT",
-                    headers: { "Content-Type": "application/json" },
+                    headers: buildAuthHeaders({ "Content-Type": "application/json" }),
                     body: JSON.stringify({
                         runtimeName: null,
                         modelName: null,
@@ -811,9 +872,19 @@ export function ProfileManagement() {
                                     style={{ display: "grid", gap: "6px", fontSize: "12px", color: "#cbd5e1" }}
                                 >
                                     Model Override
+                                    {resolvedRuntimeForModelOptions === "opencode" ? (
+                                        <span style={{ fontSize: "11px", color: "#94a3b8" }}>
+                                            Select an available opencode model or type a custom model name.
+                                        </span>
+                                    ) : (
+                                        <span style={{ fontSize: "11px", color: "#94a3b8" }}>
+                                            Type any model name (runtime-specific suggestions appear for opencode).
+                                        </span>
+                                    )}
                                     <input
                                         id="profile-model"
                                         type="text"
+                                        list="profile-model-options"
                                         value={form.modelName}
                                         onChange={(event) => updateForm("modelName", event.target.value)}
                                         disabled={isSaving}
@@ -827,6 +898,11 @@ export function ProfileManagement() {
                                             fontSize: "12px",
                                         }}
                                     />
+                                    <datalist id="profile-model-options">
+                                        {modelOptions.map((modelName) => (
+                                            <option key={modelName} value={modelName} />
+                                        ))}
+                                    </datalist>
                                 </label>
 
                                 <label

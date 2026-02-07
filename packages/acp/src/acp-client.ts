@@ -49,7 +49,37 @@ export class TaskClient implements AcpClientInterface {
     public canReadFiles = true;
     public canWriteFiles = true;
     public workspaceRoot = process.cwd();
-    public onConfigOptions?: (options: Array<Record<string, unknown>>) => void;
+	public onConfigOptions?: (options: Array<Record<string, unknown>>) => void;
+
+	private isTitleLikelyMcpToolCall(title: string): boolean {
+        const trimmed = title.trim();
+        if (trimmed.length === 0) {
+            return false;
+        }
+        const candidates = [
+            trimmed,
+            trimmed.replace(/^Tool:\s*/i, "").trim(),
+        ].filter((candidate, index, list) => candidate.length > 0 && list.indexOf(candidate) === index);
+        return candidates.some((candidate) => {
+            const cleaned = candidate
+                .replace(/^`+|`+$/g, "")
+                .replace(/[,:;)\]]+$/, "")
+                .trim();
+            if (/^(?:functions\.)?mcp__[a-z0-9_-]+__[a-z0-9_-]+$/i.test(cleaned)) {
+                return true;
+            }
+            if (/^[a-z0-9_-]+\/[a-z0-9_-]+$/i.test(cleaned)) {
+                return true;
+            }
+            if (/^task[-_]manager_[a-z0-9_-]+$/i.test(cleaned)) {
+                return true;
+            }
+            if (/^[a-z0-9_-]+_[a-z0-9_-]+$/i.test(cleaned)) {
+                return true;
+            }
+            return false;
+        });
+    }
 
 	private async emitSessionUpdate(update: Record<string, unknown>): Promise<void> {
 		const streamPath = process.env.ACP_SESSION_UPDATE_PATH;
@@ -111,7 +141,7 @@ export class TaskClient implements AcpClientInterface {
 		}
 
 		switch (updateType) {
-			case "tool_call":
+		case "tool_call":
                 {
                     const title =
                         typeof update.title === "string" ? update.title : "unknown-tool";
@@ -121,7 +151,9 @@ export class TaskClient implements AcpClientInterface {
                         && typeof rawInput === "object"
                         && typeof (rawInput as Record<string, unknown>).server === "string"
                         && typeof (rawInput as Record<string, unknown>).tool === "string";
-                    if (isMcpToolCall) {
+                    const resolvedIsMcpToolCall =
+                        isMcpToolCall || this.isTitleLikelyMcpToolCall(title);
+                    if (resolvedIsMcpToolCall) {
                         this.turnMcpToolCallCount += 1;
                     } else {
                         this.turnNonMcpToolCallCount += 1;

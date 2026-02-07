@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-83b3619a-f0fc-4024-b3fe-170f3aeb49b9"
+
 // Dashboard widget placement and persistence utilities.
 // Functional, immutable transformations with a pluggable storage adapter.
 

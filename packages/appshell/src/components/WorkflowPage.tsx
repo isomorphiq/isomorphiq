@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-b620541c-2d8b-4f24-ad31-548d17397c2f"
+
 import * as d3 from "d3";
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -609,8 +611,8 @@ export function WorkflowPage() {
 					alignItems: "center",
 				}}
 			>
-				<Link to="/" style={{ color: "#334155", textDecoration: "none" }}>
-					← Back to Dashboard
+				<Link to="/overview" style={{ color: "#334155", textDecoration: "none" }}>
+					← Back to overview
 				</Link>
 			</nav>
 			<SectionCard

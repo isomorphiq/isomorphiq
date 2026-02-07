@@ -16,6 +16,15 @@ import {
 } from "./types.ts";
 
 export { TaskPrioritySchema };
+const GIT_BRANCH_PATTERN = /^[a-z0-9]+(?:[._/-][a-z0-9]+)*$/;
+const FEATURE_PRD_MIN_WORDS = 2800;
+const MAX_PRD_CHARACTERS = 250000;
+
+const countWords = (value: string): number =>
+    value
+        .trim()
+        .split(/\s+/)
+        .filter((word) => word.length > 0).length;
 
 export const TaskEntitySchema = TaskSchema;
 export const TaskEntityStruct = struct.name("TaskEntity")<
@@ -96,6 +105,35 @@ export const TaskDomainRules = {
         return { success: true, data: undefined };
     },
 
+    validatePrd(prd: string, minWords = 0): Result<void> {
+        if (!prd || prd.trim().length === 0) {
+            return {
+                success: false,
+                error: new ValidationError("PRD is required", "prd"),
+            };
+        }
+        if (prd.length > MAX_PRD_CHARACTERS) {
+            return {
+                success: false,
+                error: new ValidationError(
+                    `PRD must be less than ${MAX_PRD_CHARACTERS} characters`,
+                    "prd",
+                ),
+            };
+        }
+        const words = countWords(prd);
+        if (minWords > 0 && words < minWords) {
+            return {
+                success: false,
+                error: new ValidationError(
+                    `Feature PRD must be at least ${minWords} words (roughly 7-8 A4 pages)`,
+                    "prd",
+                ),
+            };
+        }
+        return { success: true, data: undefined };
+    },
+
     validatePriority(priority: TaskPriority): Result<void> {
         const validPriorities: TaskPriority[] = ["low", "medium", "high"];
         if (!validPriorities.includes(priority)) {
@@ -128,12 +166,43 @@ export const TaskDomainRules = {
         return { success: true, data: undefined };
     },
 
+    validateBranch(branch: string): Result<void> {
+        if (!branch || branch.trim().length === 0) {
+            return {
+                success: false,
+                error: new ValidationError("Branch cannot be empty", "branch"),
+            };
+        }
+        if (branch.length > 120) {
+            return {
+                success: false,
+                error: new ValidationError("Branch must be 120 characters or less", "branch"),
+            };
+        }
+        if (!GIT_BRANCH_PATTERN.test(branch)) {
+            return {
+                success: false,
+                error: new ValidationError("Branch contains invalid characters", "branch"),
+            };
+        }
+        return { success: true, data: undefined };
+    },
+
     validateCreateInput(input: CreateTaskInputWithPriority): Result<void> {
         const titleResult = TaskDomainRules.validateTitle(input.title);
         if (!titleResult.success) return titleResult;
 
         const descriptionResult = TaskDomainRules.validateDescription(input.description);
         if (!descriptionResult.success) return descriptionResult;
+
+        const taskType = input.type || "task";
+        if (typeof input.prd === "string") {
+            const prdResult = TaskDomainRules.validatePrd(
+                input.prd,
+                taskType === "feature" ? FEATURE_PRD_MIN_WORDS : 0,
+            );
+            if (!prdResult.success) return prdResult;
+        }
 
         const priorityResult = TaskDomainRules.validatePriority(input.priority || "medium");
         if (!priorityResult.success) return priorityResult;
@@ -155,9 +224,19 @@ export const TaskDomainRules = {
             if (!descriptionResult.success) return descriptionResult;
         }
 
+        if (input.prd !== undefined) {
+            const prdResult = TaskDomainRules.validatePrd(input.prd);
+            if (!prdResult.success) return prdResult;
+        }
+
         if (input.status !== undefined) {
             const statusResult = TaskDomainRules.validateStatus(input.status);
             if (!statusResult.success) return statusResult;
+        }
+
+        if (input.branch !== undefined) {
+            const branchResult = TaskDomainRules.validateBranch(input.branch);
+            if (!branchResult.success) return branchResult;
         }
 
         return { success: true, data: undefined };
@@ -269,20 +348,59 @@ export const TaskDomainRules = {
 };
 
 export const TaskFactory = {
+    buildImplementationBranchName(taskId: string, title: string): string {
+        const idSegment = taskId
+            .replace(/^task-/i, "")
+            .toLowerCase()
+            .replace(/[^a-z0-9-]+/g, "-")
+            .replace(/-+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 32);
+        const titleSegment = title
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/-+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 48);
+        const fallbackTitle = titleSegment.length > 0 ? titleSegment : "implementation";
+        const fallbackId = idSegment.length > 0 ? idSegment : "task";
+        const candidate = `implementation/${fallbackId}-${fallbackTitle}`;
+        const normalizedBranch = candidate
+            .replace(/\/+/g, "/")
+            .replace(/\/-+/g, "/")
+            .replace(/-+\//g, "/")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 120);
+        const validation = TaskDomainRules.validateBranch(normalizedBranch);
+        if (validation.success) {
+            return normalizedBranch;
+        }
+        return `implementation/${fallbackId}`;
+    },
+
     create(input: CreateTaskInputWithPriority, createdBy: string): Result<TaskEntity> {
         const validation = TaskDomainRules.validateCreateInput(input);
         if (!validation.success) {
             return { success: false, error: validation.error };
         }
 
+        const taskId = `task-${randomUUID()}`;
+        const taskType = input.type || "task";
+        const branchName =
+            taskType === "implementation"
+                ? TaskFactory.buildImplementationBranchName(taskId, input.title)
+                : undefined;
         const now = new Date();
         const task: TaskEntity = {
-            id: `task-${randomUUID()}`,
+            id: taskId,
             title: input.title,
             description: input.description,
+            prd: input.prd,
             status: "todo",
             priority: input.priority || "medium",
-            type: input.type || "task",
+            type: taskType,
+            ...(branchName ? { branch: branchName } : {}),
             dependencies: input.dependencies || [],
             createdBy,
             assignedTo: input.assignedTo,

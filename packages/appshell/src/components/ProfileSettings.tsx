@@ -1,27 +1,49 @@
+// FILE_CONTEXT: "context-66a9af24-3932-4960-bc87-e53c30671def"
+
 import { useAtom } from "jotai";
 import { useState } from "react";
 import { authAtom } from "../authAtoms.ts";
+
+const resolvePreferencesDeviceId = (): string => {
+    if (typeof window === "undefined") {
+        return "device-unknown";
+    }
+    const storageKey = "userPreferences.device.v1";
+    try {
+        const stored = window.localStorage.getItem(storageKey);
+        if (stored && stored.trim().length > 0) {
+            return stored;
+        }
+        const created = "device-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        window.localStorage.setItem(storageKey, created);
+        return created;
+    } catch (_error) {
+        return "device-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    }
+};
 
 export function ProfileSettings() {
 	const [auth, setAuth] = useAtom(authAtom);
 	const [isLoading, setIsLoading] = useState(false);
 	const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
-	const [formData, setFormData] = useState({
-		firstName: auth.user?.profile?.firstName || "",
-		lastName: auth.user?.profile?.lastName || "",
-		bio: auth.user?.profile?.bio || "",
-		timezone: auth.user?.profile?.timezone || "UTC",
-		language: auth.user?.profile?.language || "en",
-		theme: auth.user?.preferences?.theme || "auto",
-		emailNotifications: auth.user?.preferences?.notifications?.email ?? true,
-		pushNotifications: auth.user?.preferences?.notifications?.push ?? true,
-		taskAssignedNotifications: auth.user?.preferences?.notifications?.taskAssigned ?? true,
-		taskCompletedNotifications: auth.user?.preferences?.notifications?.taskCompleted ?? false,
-		taskOverdueNotifications: auth.user?.preferences?.notifications?.taskOverdue ?? true,
-		defaultView: auth.user?.preferences?.dashboard?.defaultView || "list",
-		itemsPerPage: auth.user?.preferences?.dashboard?.itemsPerPage || 25,
-		showCompleted: auth.user?.preferences?.dashboard?.showCompleted ?? false,
-	});
+    const [formData, setFormData] = useState({
+        firstName: auth.user?.profile?.firstName || "",
+        lastName: auth.user?.profile?.lastName || "",
+        bio: auth.user?.profile?.bio || "",
+        timezone: auth.user?.profile?.timezone || "UTC",
+        language: auth.user?.profile?.language || "en",
+        theme: auth.user?.preferences?.theme || "auto",
+        emailNotifications: auth.user?.preferences?.notifications?.email ?? true,
+        pushNotifications: auth.user?.preferences?.notifications?.push ?? true,
+        taskAssignedNotifications: auth.user?.preferences?.notifications?.taskAssigned ?? true,
+        taskCompletedNotifications: auth.user?.preferences?.notifications?.taskCompleted ?? false,
+        taskOverdueNotifications: auth.user?.preferences?.notifications?.taskOverdue ?? true,
+        defaultView: auth.user?.preferences?.dashboard?.defaultView || "overview",
+        refreshRate: auth.user?.preferences?.dashboard?.refreshRate || "30s",
+        layoutDensity: auth.user?.preferences?.dashboard?.layoutDensity || "comfortable",
+        itemsPerPage: auth.user?.preferences?.dashboard?.itemsPerPage || 25,
+        showCompleted: auth.user?.preferences?.dashboard?.showCompleted ?? false,
+    });
 
 	const handleChange = (
 		e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>,
@@ -41,6 +63,11 @@ export function ProfileSettings() {
 		setMessage(null);
 
 		try {
+        const preferencesSync = {
+            updatedAt: Date.now(),
+            deviceId: resolvePreferencesDeviceId(),
+            source: "appshell.profileSettings",
+        };
 			const response = await fetch("/api/users/me/profile", {
 				method: "PUT",
 				headers: {
@@ -64,12 +91,15 @@ export function ProfileSettings() {
 							taskCompleted: formData.taskCompletedNotifications,
 							taskOverdue: formData.taskOverdueNotifications,
 						},
-						dashboard: {
-							defaultView: formData.defaultView,
-							itemsPerPage: formData.itemsPerPage,
-							showCompleted: formData.showCompleted,
-						},
+                        dashboard: {
+                            defaultView: formData.defaultView,
+                            refreshRate: formData.refreshRate,
+                            layoutDensity: formData.layoutDensity,
+                            itemsPerPage: formData.itemsPerPage,
+                            showCompleted: formData.showCompleted,
+                        },
 					},
+                    preferencesSync,
 				}),
 			});
 
@@ -429,75 +459,152 @@ export function ProfileSettings() {
 					>
 						Dashboard Settings
 					</h3>
-					<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
-						<div>
-							<label
-								htmlFor="defaultView"
-								style={{
-									display: "block",
-									marginBottom: "0.5rem",
-									color: "#9ca3af",
-									fontSize: "0.875rem",
-									fontWeight: "500",
-								}}
-							>
-								Default View
-							</label>
-							<select
-								id="defaultView"
-								name="defaultView"
-								value={formData.defaultView}
-								onChange={handleChange}
-								disabled={isLoading}
-								style={{
-									width: "100%",
-									padding: "0.75rem",
-									background: "#374151",
-									border: "1px solid #4b5563",
-									borderRadius: "6px",
-									color: "#f3f4f6",
-									fontSize: "0.875rem",
-								}}
-							>
-								<option value="list">List</option>
-								<option value="kanban">Kanban</option>
-								<option value="calendar">Calendar</option>
-							</select>
-						</div>
-						<div>
-							<label
-								htmlFor="itemsPerPage"
-								style={{
-									display: "block",
-									marginBottom: "0.5rem",
-									color: "#9ca3af",
-									fontSize: "0.875rem",
-									fontWeight: "500",
-								}}
-							>
-								Items Per Page
-							</label>
-							<input
-								type="number"
-								id="itemsPerPage"
-								name="itemsPerPage"
-								min="5"
-								max="100"
-								value={formData.itemsPerPage}
-								onChange={handleChange}
-								disabled={isLoading}
-								style={{
-									width: "100%",
-									padding: "0.75rem",
-									background: "#374151",
-									border: "1px solid #4b5563",
-									borderRadius: "6px",
-									color: "#f3f4f6",
-									fontSize: "0.875rem",
-								}}
-							/>
-						</div>
-					</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                        <div>
+                            <label
+                                htmlFor="defaultView"
+                                style={{
+                                    display: "block",
+                                    marginBottom: "0.5rem",
+                                    color: "#9ca3af",
+                                    fontSize: "0.875rem",
+                                    fontWeight: "500",
+                                }}
+                            >
+                                Default View
+                            </label>
+                            <select
+                                id="defaultView"
+                                name="defaultView"
+                                value={formData.defaultView}
+                                onChange={handleChange}
+                                disabled={isLoading}
+                                style={{
+                                    width: "100%",
+                                    padding: "0.75rem",
+                                    background: "#374151",
+                                    border: "1px solid #4b5563",
+                                    borderRadius: "6px",
+                                    color: "#f3f4f6",
+                                    fontSize: "0.875rem",
+                                }}
+                            >
+                                <option value="overview">Overview</option>
+                                <option value="widgets">Widgets</option>
+                                <option value="queue">Queue</option>
+                                <option value="tasks">Tasks</option>
+                                <option value="create">Create</option>
+                                <option value="history">History</option>
+                                <option value="health">Health</option>
+                                <option value="logs">Logs</option>
+                                <option value="list">List</option>
+                                <option value="kanban">Kanban</option>
+                                <option value="calendar">Calendar</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label
+                                htmlFor="refreshRate"
+                                style={{
+                                    display: "block",
+                                    marginBottom: "0.5rem",
+                                    color: "#9ca3af",
+                                    fontSize: "0.875rem",
+                                    fontWeight: "500",
+                                }}
+                            >
+                                Auto-refresh
+                            </label>
+                            <select
+                                id="refreshRate"
+                                name="refreshRate"
+                                value={formData.refreshRate}
+                                onChange={handleChange}
+                                disabled={isLoading}
+                                style={{
+                                    width: "100%",
+                                    padding: "0.75rem",
+                                    background: "#374151",
+                                    border: "1px solid #4b5563",
+                                    borderRadius: "6px",
+                                    color: "#f3f4f6",
+                                    fontSize: "0.875rem",
+                                }}
+                            >
+                                <option value="off">Off</option>
+                                <option value="30s">Every 30 seconds</option>
+                                <option value="1m">Every minute</option>
+                                <option value="5m">Every 5 minutes</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label
+                                htmlFor="layoutDensity"
+                                style={{
+                                    display: "block",
+                                    marginBottom: "0.5rem",
+                                    color: "#9ca3af",
+                                    fontSize: "0.875rem",
+                                    fontWeight: "500",
+                                }}
+                            >
+                                Widget Layout Density
+                            </label>
+                            <select
+                                id="layoutDensity"
+                                name="layoutDensity"
+                                value={formData.layoutDensity}
+                                onChange={handleChange}
+                                disabled={isLoading}
+                                style={{
+                                    width: "100%",
+                                    padding: "0.75rem",
+                                    background: "#374151",
+                                    border: "1px solid #4b5563",
+                                    borderRadius: "6px",
+                                    color: "#f3f4f6",
+                                    fontSize: "0.875rem",
+                                }}
+                            >
+                                <option value="compact">Compact</option>
+                                <option value="comfortable">Comfortable</option>
+                                <option value="spacious">Spacious</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label
+                                htmlFor="itemsPerPage"
+                                style={{
+                                    display: "block",
+                                    marginBottom: "0.5rem",
+                                    color: "#9ca3af",
+                                    fontSize: "0.875rem",
+                                    fontWeight: "500",
+                                }}
+                            >
+                                Items Per Page
+                            </label>
+                            <input
+                                type="number"
+                                id="itemsPerPage"
+                                name="itemsPerPage"
+                                min="5"
+                                max="100"
+                                value={formData.itemsPerPage}
+                                onChange={handleChange}
+                                disabled={isLoading}
+                                style={{
+                                    width: "100%",
+                                    padding: "0.75rem",
+                                    background: "#374151",
+                                    border: "1px solid #4b5563",
+                                    borderRadius: "6px",
+                                    color: "#f3f4f6",
+                                    fontSize: "0.875rem",
+                                }}
+                            />
+                        </div>
+                    </div>
 					<div style={{ marginTop: "1rem" }}>
 						<div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
 							<input

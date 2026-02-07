@@ -1,8 +1,16 @@
 import http from "node:http";
-import path from "node:path";
 import { WebSocketServer } from "ws";
 import { applyWSSHandler } from "@trpc/server/adapters/ws";
 import { nodeHTTPRequestHandler } from "@trpc/server/adapters/node-http";
+import {
+    createHttpMicroserviceRuntime,
+    MicroserviceTrait,
+    resolveEnvironmentLevelDbPath,
+    resolveTrpcProcedurePath,
+    tryHandleMicroserviceHealthRequest,
+    writeJsonNotFound,
+    writeJsonResponse,
+} from "@isomorphiq/core-microservice";
 import { ConfigManager, resolveEnvironmentFromHeaders, resolveEnvironmentValue } from "@isomorphiq/core";
 import { EnhancedTaskService } from "./enhanced-task-service.ts";
 import { LevelDbTaskRepository } from "./persistence/leveldb-task-repository.ts";
@@ -41,15 +49,9 @@ const configManager = ConfigManager.getInstance();
 const environmentConfig = configManager.getEnvironmentConfig();
 const environmentNames = Array.from(new Set(environmentConfig.available));
 
-const resolveBasePath = (): string => {
-    const basePath = configManager.getDatabaseConfig().path;
-    return path.isAbsolute(basePath) ? basePath : path.join(process.cwd(), basePath);
-};
-
 const createEnvironmentServices = async (environment: string): Promise<EnvironmentServices> => {
-    const basePath = resolveBasePath();
-    const envPath = path.join(basePath, environment);
-    const taskRepository = new LevelDbTaskRepository(path.join(envPath, "tasks"));
+    const taskPath = resolveEnvironmentLevelDbPath(environment, ["tasks"]);
+    const taskRepository = new LevelDbTaskRepository(taskPath);
     const taskService = new EnhancedTaskService(taskRepository);
     const taskEventBus = new TaskEventBus();
 
@@ -123,33 +125,25 @@ export async function startTaskServiceServer(): Promise<http.Server> {
     const server = http.createServer(async (req, res) => {
         const url = req.url ?? "/";
         const parsed = new URL(url, `http://${req.headers.host ?? "localhost"}`);
+        const path = parsed.pathname;
 
-        if (req.method === "GET" && parsed.pathname === "/health") {
-            res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(
-                JSON.stringify({
-                    status: "ok",
-                    service: "tasks-service",
-                }),
-            );
+        const healthHandled = await tryHandleMicroserviceHealthRequest(
+            req,
+            res,
+            path,
+            async () => await MicroserviceTrait.health(microservice.runtime as any),
+        );
+        if (healthHandled) {
             return;
         }
 
-        if (!parsed.pathname.startsWith("/trpc")) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Not found" }));
+        if (!path.startsWith("/trpc")) {
+            writeJsonNotFound(res);
             return;
         }
-        const basePath = "/trpc";
-        const path =
-            parsed.pathname === basePath
-                ? ""
-                : parsed.pathname.startsWith(`${basePath}/`)
-                    ? parsed.pathname.slice(basePath.length + 1)
-                    : parsed.pathname.slice(1);
-        if (!path) {
-            res.writeHead(404, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Procedure path missing" }));
+        const procedurePath = resolveTrpcProcedurePath(path, "/trpc");
+        if (!procedurePath) {
+            writeJsonResponse(res, 404, { error: "Procedure path missing" });
             return;
         }
         await nodeHTTPRequestHandler({
@@ -157,8 +151,17 @@ export async function startTaskServiceServer(): Promise<http.Server> {
             res,
             router: taskServiceRouter,
             createContext,
-            path,
+            path: procedurePath,
         });
+    });
+
+    const microservice = createHttpMicroserviceRuntime({
+        id: "tasks-service",
+        name: "tasks-service",
+        kind: "trpc",
+        host,
+        port: resolvedPort,
+        server,
     });
 
     const wss = new WebSocketServer({ noServer: true });
@@ -179,16 +182,9 @@ export async function startTaskServiceServer(): Promise<http.Server> {
         });
     });
 
-    return await new Promise((resolve, reject) => {
-        server.listen(resolvedPort, host, () => {
-            console.log(`[TASKS] Task service listening on http://${host}:${resolvedPort}/trpc`);
-            resolve(server);
-        });
-        server.on("error", (error) => {
-            console.error("[TASKS] Failed to start task service:", error);
-            reject(error);
-        });
-    });
+    await MicroserviceTrait.start(microservice.runtime as any);
+    console.log(`[TASKS] Task service listening on http://${host}:${resolvedPort}/trpc`);
+    return microservice.server;
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {

@@ -19,6 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import type { WebSocketManager } from "@isomorphiq/realtime";
+import { LevelKeyValueAdapter } from "@isomorphiq/persistence-level";
 import { DaemonTcpClient } from "./tcp-client.ts";
 import type { Task as CoreTask, TaskServiceApi } from "@isomorphiq/tasks";
 import { DashboardAnalyticsService } from "../services/dashboard-analytics-service.ts";
@@ -87,6 +88,10 @@ type EnvironmentServices = {
 type WidgetSize = "small" | "medium" | "large";
 type WidgetSizeState = Record<string, WidgetSize>;
 type WidgetLayoutState = Record<string, string[]>;
+type WidgetLayoutRecord = {
+    version: number;
+    layout: WidgetLayoutState;
+};
 type WidgetVisibilityState = string[];
 type WidgetVisibilityUpdate =
     | { hiddenWidgetIds: WidgetVisibilityState }
@@ -96,12 +101,22 @@ type DashboardWidgetState = {
     hiddenWidgetIds: WidgetVisibilityState | null;
     widgetSizes: WidgetSizeState | null;
 };
+type ViewportBreakpoint = "mobile" | "tablet" | "desktop";
+type ViewportState = {
+    width: number;
+    breakpoint: ViewportBreakpoint;
+    gridColumns: number;
+};
 type JsonParseResult = { success: true; data: unknown } | { success: false; error: Error };
+const WIDGET_LAYOUT_RECORD_VERSION = 1;
 const WIDGET_CONTAINER_ORDER = ["overview-metrics", "queue-metrics", "health-grid"];
 
 const isJsonParseError = (result: JsonParseResult): result is { success: false; error: Error } => {
     return result.success === false;
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    value !== null && typeof value === "object" && !Array.isArray(value);
 
 export interface DashboardMetrics {
 	daemon: {
@@ -191,6 +206,52 @@ interface ClientConnection {
  * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class DashboardServer {
+	// Add widget to dashboard with validation and persistence
+	public async addWidgetToDashboard(
+		widgetId: string,
+		options?: { container?: string; size?: WidgetSize; position?: { x: number; y: number } },
+	): Promise<{ success: true; layout: WidgetLayoutState } | { success: false; error: string }> {
+		try {
+			await this.ensureWidgetLayoutPreferencesLoaded();
+
+			const currentLayout = this.getWidgetLayoutForEnvironment(this.defaultEnvironment);
+			const widgetSize = options?.size ?? "medium";
+			const containerId = options?.container ?? WIDGET_CONTAINER_ORDER[0];
+			const position = options?.position ?? { x: 0, y: 0 };
+
+			if (!WIDGET_CONTAINER_ORDER.includes(containerId)) {
+				return { success: false, error: `Invalid container: ${containerId}` };
+			}
+
+			if (widgetSize !== "small" && widgetSize !== "medium" && widgetSize !== "large") {
+				return { success: false, error: `Invalid size: ${widgetSize}` };
+			}
+
+			const newWidgetInstanceId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+				? crypto.randomUUID()
+				: `widget_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
+
+			const newWidgetPlacement = {
+				id: newWidgetInstanceId,
+				widgetId,
+				x: position.x,
+				y: position.y,
+				w: widgetSize === "small" ? 3 : widgetSize === "medium" ? 6 : 9,
+				h: 4,
+			};
+
+			const nextLayout = this.updateWidgetLayoutForEnvironment(
+				this.defaultEnvironment,
+				{ [containerId]: [...(currentLayout[containerId] ?? []), newWidgetPlacement.id] },
+			);
+
+			return { success: true, layout: nextLayout };
+		} catch (error) {
+			console.error("[DASHBOARD] Failed to add widget:", error);
+			return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+		}
+	}
+
 	private environmentServices: Map<string, EnvironmentServices>;
 	private resolveEnvironment: (headers: IncomingHttpHeaders) => string;
 	private defaultEnvironment: string;
@@ -204,24 +265,86 @@ export class DashboardServer {
     private widgetSizeLoadPromise: Promise<void> | null = null;
     private widgetSizePersistPromise: Promise<void> = Promise.resolve();
     private widgetLayoutPreferencesByEnvironment: Map<string, WidgetLayoutState> = new Map();
-    private widgetLayoutStoragePath: string = path.join(process.cwd(), "db", "dashboard-widget-layout.json");
-    private widgetLayoutLoadPromise: Promise<void> | null = null;
-    private widgetLayoutPersistPromise: Promise<void> = Promise.resolve();
+    private widgetLayoutLegacyStoragePath: string = path.join(process.cwd(), "db", "dashboard-widget-layout.json");
+    private widgetLayoutStorePath: string = path.join(process.cwd(), "db", "dashboard-widget-layout");
+private widgetLayoutStore: LevelKeyValueAdapter<string, WidgetLayoutRecord>;
+private widgetLayoutStoreOpenPromise: Promise<void> | null = null;
+private widgetLayoutLoadPromise: Promise<void> | null = null;
+private widgetLayoutPersistPromise: Promise<void> = Promise.resolve();
+private widgetLayoutStoreKeyPrefix = "layout:";
+private viewportState: ViewportState;
+private resizeDebounceTimer: NodeJS.Timeout | null = null;
+private viewportChangeListeners: Set<(state: ViewportState) => void> = new Set();
     private widgetVisibilityPreferencesByEnvironment: Map<string, WidgetVisibilityState> = new Map();
     private widgetVisibilityStoragePath: string = path.join(process.cwd(), "db", "dashboard-widget-visibility.json");
     private widgetVisibilityLoadPromise: Promise<void> | null = null;
     private widgetVisibilityPersistPromise: Promise<void> = Promise.resolve();
 
-	constructor(
-		environmentServices: Map<string, EnvironmentServices>,
-		resolveEnvironment: (headers: IncomingHttpHeaders) => string,
-		defaultEnvironment: string,
-	) {
-		this.environmentServices = environmentServices;
-		this.resolveEnvironment = resolveEnvironment;
-		this.defaultEnvironment = defaultEnvironment;
-		this.tcpClient = new DaemonTcpClient();
-	}
+    private redistributeWidgetPositions(newState: ViewportState): WidgetLayoutState {
+        const currentLayout = this.getWidgetLayoutForEnvironment(this.defaultEnvironment);
+        const containerIds = Object.keys(currentLayout);
+        if (containerIds.length === 0) return currentLayout;
+
+        const maxColumnWidth = newState.gridColumns;
+        const redistributedLayout: WidgetLayoutState = {};
+
+        containerIds.forEach((containerId) => {
+            const widgetIds = currentLayout[containerId];
+            if (!Array.isArray(widgetIds)) return;
+
+            const widgetCount = widgetIds.length;
+            const optimalWidgetsPerRow = Math.floor(maxColumnWidth / 3);
+            const rowsNeeded = Math.ceil(widgetCount / optimalWidgetsPerRow);
+
+            redistributedLayout[containerId] = [];
+
+            for (let row = 0; row < rowsNeeded; row += 1) {
+                const startIdx = row * optimalWidgetsPerRow;
+                const endIdx = Math.min(startIdx + optimalWidgetsPerRow, widgetCount);
+                const rowWidgetIds = widgetIds.slice(startIdx, endIdx);
+
+                redistributedLayout[containerId] = [...redistributedLayout[containerId], ...rowWidgetIds];
+            }
+        });
+
+        return redistributedLayout;
+    }
+
+    private onViewportChange(newState: ViewportState): void {
+        console.log("[DASHBOARD]Viewport change detected: breakpoint={newState.breakpoint}, columns={newState.gridColumns}");
+        const newLayout = this.redistributeWidgetPositions(newState);
+        if (Object.keys(newLayout).length > 0 && JSON.stringify(newLayout) !== JSON.stringify(this.getWidgetLayoutForEnvironment(this.defaultEnvironment))) {
+            this.updateWidgetLayoutForEnvironment(this.defaultEnvironment, newLayout);
+            this.broadcastViewportStateToClients(newState, this.defaultEnvironment);
+        }
+    }
+
+    private broadcastViewportStateToClients(state: ViewportState, environment?: string): void {
+        const message = JSON.stringify({
+            type: "viewport_state_update",
+            data: state
+        });
+        this.activeConnections.forEach((connection) => {
+            if (environment && connection.environment !== environment) return;
+            if (connection.ws.readyState === 1) {
+                connection.ws.send(message);
+            }
+        });
+    }
+
+constructor(
+environmentServices: Map<string, EnvironmentServices>,
+resolveEnvironment: (headers: IncomingHttpHeaders) => string,
+defaultEnvironment: string,
+) {
+this.environmentServices = environmentServices;
+this.resolveEnvironment = resolveEnvironment;
+this.defaultEnvironment = defaultEnvironment;
+this.tcpClient = new DaemonTcpClient();
+this.widgetLayoutStore = new LevelKeyValueAdapter<string, WidgetLayoutRecord>(this.widgetLayoutStorePath);
+this.viewportState = this.computeViewportState();
+this.registerResizeListener();
+}
 
 	private getEnvironmentServices(environment?: string): EnvironmentServices {
 		if (environment && this.environmentServices.has(environment)) {
@@ -359,6 +482,75 @@ export class DashboardServer {
         return this.dedupeWidgetLayoutEntries(orderedEntries);
     }
 
+    private widgetLayoutStoreKeyForEnvironment(environment: string): string {
+        return `${this.widgetLayoutStoreKeyPrefix}${environment}`;
+    }
+
+    private async ensureWidgetLayoutStoreOpen(): Promise<void> {
+        if (this.widgetLayoutStoreOpenPromise) {
+            return this.widgetLayoutStoreOpenPromise;
+        }
+        this.widgetLayoutStoreOpenPromise = this.widgetLayoutStore.open().catch((error) => {
+            this.widgetLayoutStoreOpenPromise = null;
+            throw error;
+        });
+        return this.widgetLayoutStoreOpenPromise;
+    }
+
+    private normalizeWidgetLayoutRecord(value: unknown): WidgetLayoutRecord | null {
+        if (!isRecord(value)) {
+            return null;
+        }
+        if (!Object.prototype.hasOwnProperty.call(value, "version")
+            || !Object.prototype.hasOwnProperty.call(value, "layout")) {
+            return null;
+        }
+        if (value.version !== WIDGET_LAYOUT_RECORD_VERSION) {
+            return null;
+        }
+        return {
+            version: WIDGET_LAYOUT_RECORD_VERSION,
+            layout: this.normalizeWidgetLayoutState(value.layout),
+        };
+    }
+
+    private buildWidgetLayoutRecord(layout: WidgetLayoutState): WidgetLayoutRecord {
+        return {
+            version: WIDGET_LAYOUT_RECORD_VERSION,
+            layout: this.normalizeWidgetLayoutState(layout),
+        };
+    }
+
+    private async loadLegacyWidgetLayoutSnapshot(): Promise<Record<string, WidgetLayoutState> | null> {
+        try {
+            const raw = await fs.readFile(this.widgetLayoutLegacyStoragePath, "utf-8");
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== "object") {
+                return null;
+            }
+            const snapshot = Object.entries(parsed).reduce<Record<string, WidgetLayoutState>>(
+                (acc, [environment, layout]) => {
+                    if (!environment) {
+                        return acc;
+                    }
+                    const normalizedLayout = this.normalizeWidgetLayoutState(layout);
+                    if (Object.keys(normalizedLayout).length === 0) {
+                        return acc;
+                    }
+                    return { ...acc, [environment]: normalizedLayout };
+                },
+                {},
+            );
+            return Object.keys(snapshot).length > 0 ? snapshot : null;
+        } catch (error) {
+            if (error instanceof Error && error.message.includes("ENOENT")) {
+                return null;
+            }
+            console.error("[DASHBOARD] Failed to load legacy widget layout preferences:", error);
+            return null;
+        }
+    }
+
     private dedupeWidgetLayoutEntries(entries: Array<[string, string[]]>): WidgetLayoutState {
         return entries.reduce<{ layout: WidgetLayoutState; seen: Set<string> }>(
             (state, [containerId, widgetIds]) => {
@@ -386,6 +578,76 @@ export class DashboardServer {
             },
             { layout: {}, seen: new Set<string>() },
         ).layout;
+    }
+
+    private detectViewportBreakpoint(width: number): ViewportBreakpoint {
+        if (width < 768) return "mobile";
+        if (width < 1024) return "tablet";
+        return "desktop";
+    }
+
+    private updateGridColumnsForBreakpoint(breakpoint: ViewportBreakpoint): number {
+        switch (breakpoint) {
+            case "mobile": return 4;
+            case "tablet": return 8;
+            case "desktop": return 12;
+        }
+    }
+
+    private computeViewportState(): ViewportState {
+        const width = globalThis.innerWidth ?? 0;
+        const breakpoint = this.detectViewportBreakpoint(width);
+        const gridColumns = this.updateGridColumnsForBreakpoint(breakpoint);
+        return { width, breakpoint, gridColumns };
+    }
+
+    private updateViewportState(newState: ViewportState): void {
+        if (this.viewportState.breakpoint === newState.breakpoint && this.viewportState.gridColumns === newState.gridColumns) {
+            return;
+        }
+        const oldState = this.viewportState;
+        this.viewportState = newState;
+        this.viewportChangeListeners.forEach((listener) => listener(newState));
+        console.log("[DASHBOARD] Viewport change: breakpoint={oldState.breakpoint}→{newState.breakpoint}, columns={oldState.gridColumns}→{newState.gridColumns}");
+    }
+
+    private debouncedViewportUpdate(): void {
+        if (this.resizeDebounceTimer) {
+            clearTimeout(this.resizeDebounceTimer);
+        }
+        this.resizeDebounceTimer = setTimeout(() => {
+            const newState = this.computeViewportState();
+            this.updateViewportState(newState);
+            this.resizeDebounceTimer = null;
+        }, 500);
+    }
+
+    private registerResizeListener(): void {
+        if (typeof globalThis === "undefined" || typeof globalThis.addEventListener !== "function") {
+            return;
+        }
+        globalThis.addEventListener("resize", () => this.debouncedViewportUpdate());
+        console.log("[DASHBOARD] Resize listener registered with 500ms debounce");
+    }
+
+    private unregisterResizeListener(): void {
+        if (typeof globalThis === "undefined" || typeof globalThis.removeEventListener !== "function") {
+            return;
+        }
+        globalThis.removeEventListener("resize", () => this.debouncedViewportUpdate());
+        console.log("[DASHBOARD] Resize listener unregistered");
+    }
+
+    public registerViewportChangeListener(listener: (state: ViewportState) => void): void {
+        this.viewportChangeListeners.add(listener);
+    }
+
+    public unregisterViewportChangeListener(listener: (state: ViewportState) => void): void {
+        this.viewportChangeListeners.delete(listener);
+    }
+
+    public getViewportState(): ViewportState {
+        return this.viewportState;
     }
 
     private getLayoutContainerOrder(layout: WidgetLayoutState): string[] {
@@ -474,23 +736,48 @@ export class DashboardServer {
 
         this.widgetLayoutLoadPromise = (async () => {
             try {
-                const raw = await fs.readFile(this.widgetLayoutStoragePath, "utf-8");
-                const parsed = JSON.parse(raw);
-                if (!parsed || typeof parsed !== "object") {
-                    return;
-                }
-                const nextMap = Object.entries(parsed).reduce((acc, [environment, layout]) => {
-                    if (!environment) {
-                        return acc;
+                await this.ensureWidgetLayoutStoreOpen();
+                const prefix = this.widgetLayoutStoreKeyPrefix;
+                const iterator = this.widgetLayoutStore.iterator({
+                    gte: prefix,
+                    lt: `${prefix}\uFFFF`,
+                });
+                let entries: Array<[string, WidgetLayoutState]> = [];
+                try {
+                    for await (const [key, value] of iterator) {
+                        if (typeof key !== "string" || !key.startsWith(prefix)) {
+                            continue;
+                        }
+                        const environment = key.slice(prefix.length);
+                        if (!environment) {
+                            continue;
+                        }
+                        const record = this.normalizeWidgetLayoutRecord(value);
+                        if (!record) {
+                            continue;
+                        }
+                        entries = entries.concat([[environment, record.layout]]);
                     }
-                    const normalizedLayout = this.normalizeWidgetLayoutState(layout);
-                    return new Map([...acc, [environment, normalizedLayout]]);
-                }, new Map<string, WidgetLayoutState>());
-                this.widgetLayoutPreferencesByEnvironment = nextMap;
-            } catch (error) {
-                if (error instanceof Error && error.message.includes("ENOENT")) {
-                    return;
+                } finally {
+                    await iterator.close();
                 }
+                if (entries.length === 0) {
+                    const legacySnapshot = await this.loadLegacyWidgetLayoutSnapshot();
+                    if (legacySnapshot) {
+                        const legacyMap = Object.entries(legacySnapshot).reduce(
+                            (acc, [environment, layout]) => new Map([...acc, [environment, layout]]),
+                            new Map<string, WidgetLayoutState>(),
+                        );
+                        this.widgetLayoutPreferencesByEnvironment = legacyMap;
+                        await this.persistWidgetLayoutPreferences(legacySnapshot);
+                        return;
+                    }
+                }
+                this.widgetLayoutPreferencesByEnvironment = entries.reduce(
+                    (acc, [environment, layout]) => new Map([...acc, [environment, layout]]),
+                    new Map<string, WidgetLayoutState>(),
+                );
+            } catch (error) {
                 console.error("[DASHBOARD] Failed to load widget layout preferences:", error);
             }
         })();
@@ -598,8 +885,23 @@ export class DashboardServer {
     }
 
     private async persistWidgetLayoutPreferences(snapshot: Record<string, WidgetLayoutState>): Promise<void> {
-        await fs.mkdir(path.dirname(this.widgetLayoutStoragePath), { recursive: true });
-        await fs.writeFile(this.widgetLayoutStoragePath, JSON.stringify(snapshot, null, 2), "utf-8");
+        await this.ensureWidgetLayoutStoreOpen();
+        const entries = Object.entries(snapshot).filter(([environment]) => environment);
+        if (entries.length === 0) {
+            return;
+        }
+        const operations = entries.map(([environment, layout]) => ({
+            type: "put" as const,
+            key: this.widgetLayoutStoreKeyForEnvironment(environment),
+            value: this.buildWidgetLayoutRecord(layout),
+        }));
+        if (typeof this.widgetLayoutStore.batch === "function") {
+            await this.widgetLayoutStore.batch(operations);
+            return;
+        }
+        for (const operation of operations) {
+            await this.widgetLayoutStore.put(operation.key, operation.value);
+        }
     }
 
     private async persistWidgetVisibilityPreferences(snapshot: Record<string, WidgetVisibilityState>): Promise<void> {
@@ -1564,7 +1866,7 @@ export class DashboardServer {
             return \`
                 <div class="audit-event">
                     <div class="event-header">
-                        <span class="event-icon">\${eventIcon}</span>
+                        <span class="event-icon" aria-hidden="true">\${eventIcon}</span>
                         <span class="event-type">\${event.eventType}</span>
                         <span class="event-time">\${eventTime.toLocaleString()}</span>
                     </div>
@@ -2247,23 +2549,46 @@ export class DashboardServer {
 			}
 
 			const tasks = tasksResult.data as any[];
-			
+
+            const resolveEventType = (task: any): string => {
+                if (!task || typeof task !== "object") {
+                    return "task_status_changed";
+                }
+                const createdAt = task.createdAt ? new Date(task.createdAt).getTime() : Number.NaN;
+                const updatedAt = task.updatedAt ? new Date(task.updatedAt).getTime() : Number.NaN;
+                if (Number.isFinite(createdAt) && Number.isFinite(updatedAt) && createdAt === updatedAt) {
+                    return "task_created";
+                }
+                if (task.status === "done") {
+                    return "task_completed";
+                }
+                if (task.status === "failed") {
+                    return "task_failed";
+                }
+                return "task_status_changed";
+            };
+
 			// Create activity log entries from recent task changes
 			const logs = tasks
 				.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
 				.slice(0, limit)
-				.map(task => ({
+				.map(task => {
+                    const eventType = resolveEventType(task);
+                    return {
 					id: `log_${task.id}_${Date.now()}`,
 					timestamp: task.updatedAt,
 					level: task.status === "failed" ? "error" : task.status === "done" ? "success" : "info",
 					message: `Task "${task.title}" ${task.status.replace('-', ' ')}`,
+                    eventType,
 					data: {
 						taskId: task.id,
 						taskTitle: task.title,
 						status: task.status,
-						priority: task.priority
-					}
-				}));
+						priority: task.priority,
+                        eventType,
+					},
+				};
+                });
 
 			res.writeHead(200, { "Content-Type": "application/json" });
 			res.end(JSON.stringify(logs));
@@ -2462,6 +2787,30 @@ export class DashboardServer {
             --priority-high-color: #ef4444;
             --priority-medium-color: #f59e0b;
             --priority-low-color: #10b981;
+            --widget-drag-accent: rgba(59, 130, 246, 0.6);
+            --widget-drag-accent-strong: rgba(59, 130, 246, 0.9);
+            --widget-drag-accent-soft: rgba(59, 130, 246, 0.16);
+            --widget-drag-hover-duration: 320ms;
+            --widget-drag-drop-duration: 360ms;
+            --widget-drag-ghost-duration: 360ms;
+            --widget-drag-ghost-scale: 0.9;
+            --widget-drag-ghost-opacity: 0.5;
+            --widget-drag-ghost-opacity-peak: 0.55;
+            --widget-drag-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+            --widget-drag-muted-opacity: 0.82;
+            --widget-drag-active-opacity: 0.18;
+            --widget-drag-line-color: rgba(59, 130, 246, 0.75);
+            --widget-drag-line-glow: rgba(59, 130, 246, 0.28);
+            --widget-snap-grid-size: 36px;
+            --widget-snap-grid-color: rgba(59, 130, 246, 0.2);
+            --widget-drag-handle-bg: rgba(255, 255, 255, 0.85);
+            --widget-drag-handle-border: rgba(148, 163, 184, 0.55);
+            --widget-drag-handle-dot: rgba(30, 64, 175, 0.75);
+            --focus-ring-color: #1d4ed8;
+            --focus-ring-shadow: rgba(191, 219, 254, 0.85);
+            --focus-ring-width: 3px;
+            --focus-ring-offset: 2px;
+            --text-muted-color: #4b5563;
         }
         
         /* Base styles */
@@ -2470,6 +2819,31 @@ export class DashboardServer {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             color: #1f2937;
+        }
+
+        .skip-link {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            padding: 10px 14px;
+            border-radius: 8px;
+            background: #111827;
+            color: #f9fafb;
+            text-decoration: none;
+            transform: translateY(-200%);
+            transition: transform 0.2s ease;
+            z-index: 1000;
+        }
+
+        .skip-link:focus-visible {
+            transform: translateY(0);
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: 2px;
+        }
+
+        body.widget-dragging,
+        body.widget-dragging * {
+            cursor: grabbing;
         }
         
         .container { 
@@ -2500,8 +2874,60 @@ export class DashboardServer {
             align-items: center;
             gap: 20px;
             font-size: 0.9rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
             flex-wrap: wrap;
+        }
+
+        .layout-save-indicator {
+            margin-left: auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: #047857;
+            background: rgba(16, 185, 129, 0.12);
+            border: 1px solid rgba(16, 185, 129, 0.28);
+            opacity: 0;
+            transform: translateY(4px);
+            transition: opacity 180ms var(--widget-drag-ease), transform 180ms var(--widget-drag-ease);
+            pointer-events: none;
+        }
+
+        .layout-save-indicator.is-visible {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+
+        .layout-save-indicator.is-error {
+            color: #b91c1c;
+            background: rgba(248, 113, 113, 0.12);
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        .layout-save-icon {
+            font-size: 0.9rem;
+            line-height: 1;
+        }
+
+        .layout-save-retry {
+            border: none;
+            background: transparent;
+            color: inherit;
+            font-size: 0.78rem;
+            font-weight: 600;
+            text-decoration: underline;
+            cursor: pointer;
+            padding: 0;
+        }
+
+        .layout-save-retry:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: 2px;
+            border-radius: 6px;
         }
         
         .health-indicator { 
@@ -2526,19 +2952,45 @@ export class DashboardServer {
             position: absolute;
             top: 24px;
             right: 24px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
             font-size: 0.85rem; 
-            color: #6b7280;
+            color: var(--text-muted-color);
             background: rgba(255,255,255,0.9);
-            padding: 4px 8px;
+            padding: 6px 10px;
             border-radius: 4px;
+        }
+
+        .auto-refresh label {
+            font-weight: 600;
+            color: #4b5563;
+        }
+
+        .auto-refresh select {
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 4px 8px;
+            background: #ffffff;
+            color: #374151;
+            font-size: 0.85rem;
         }
         
         /* Metrics Grid */
-        .metrics { 
-            display: grid; 
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); 
-            gap: 20px; 
-            margin-bottom: 24px; 
+        .dashboard-grid {
+            --dashboard-grid-columns: auto-fit;
+            --dashboard-grid-min-width: 280px;
+            --dashboard-grid-gap: 20px;
+            display: grid;
+            grid-template-columns: repeat(var(--dashboard-grid-columns), minmax(var(--dashboard-grid-min-width), 1fr));
+            gap: var(--dashboard-grid-gap);
+            grid-auto-flow: row;
+        }
+
+        .metrics {
+            --dashboard-grid-min-width: 280px;
+            --dashboard-grid-gap: 20px;
+            margin-bottom: 24px;
         }
         
         .metric-card { 
@@ -2561,8 +3013,9 @@ export class DashboardServer {
         }
 
         .metric-card.clickable:focus-visible {
-            outline: 2px solid rgba(59, 130, 246, 0.5);
-            outline-offset: 2px;
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
         }
 
         .metric-card::before {
@@ -2592,11 +3045,12 @@ export class DashboardServer {
             font-size: 0.95rem;
             font-weight: 600;
             color: #111827;
+            margin: 0;
         }
 
         .priority-breakdown-subtitle {
             font-size: 0.75rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
             margin-top: 4px;
         }
 
@@ -2642,8 +3096,9 @@ export class DashboardServer {
         }
 
         .priority-breakdown-row.clickable:focus-visible {
-            outline: 2px solid rgba(59, 130, 246, 0.35);
-            outline-offset: 2px;
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
         }
 
         .priority-breakdown-label {
@@ -2679,7 +3134,7 @@ export class DashboardServer {
 
         .priority-breakdown-percent {
             font-size: 0.75rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
             font-weight: 500;
         }
 
@@ -2720,11 +3175,12 @@ export class DashboardServer {
             font-size: 0.95rem;
             font-weight: 600;
             color: #111827;
+            margin: 0;
         }
 
         .status-breakdown-subtitle {
             font-size: 0.75rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
             margin-top: 4px;
         }
 
@@ -2740,7 +3196,7 @@ export class DashboardServer {
             border-radius: 10px;
             border: 1px dashed #e5e7eb;
             padding: 12px 14px;
-            color: #6b7280;
+            color: var(--text-muted-color);
             font-size: 0.9rem;
         }
 
@@ -2763,8 +3219,9 @@ export class DashboardServer {
         }
 
         .status-breakdown-row.clickable:focus-visible {
-            outline: 2px solid rgba(59, 130, 246, 0.35);
-            outline-offset: 2px;
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
         }
 
         .status-breakdown-row:first-child {
@@ -2825,11 +3282,12 @@ export class DashboardServer {
             font-size: 0.95rem;
             font-weight: 600;
             color: #111827;
+            margin: 0;
         }
 
         .activity-widget-subtitle {
             font-size: 0.75rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
             margin-top: 4px;
         }
 
@@ -2852,8 +3310,9 @@ export class DashboardServer {
         }
 
         .activity-widget-action:focus-visible {
-            outline: 2px solid rgba(59, 130, 246, 0.45);
-            outline-offset: 2px;
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
         }
 
         .activity-widget-list {
@@ -2877,7 +3336,7 @@ export class DashboardServer {
             background: #f9fafb;
             border-radius: 10px;
             border: 1px dashed #e5e7eb;
-            color: #6b7280;
+            color: var(--text-muted-color);
         }
 
         .activity-widget-item {
@@ -2905,8 +3364,9 @@ export class DashboardServer {
         }
 
         .activity-widget-item:focus-visible {
-            outline: 2px solid rgba(59, 130, 246, 0.4);
-            outline-offset: 2px;
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
         }
 
         .activity-widget-item-main {
@@ -2929,39 +3389,253 @@ export class DashboardServer {
 
         .activity-widget-time {
             font-size: 0.75rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
             white-space: nowrap;
             margin-top: 2px;
         }
 
-        @media (max-width: 900px) {
-            .activity-widget {
+        .my-tasks-widget {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            grid-column: span 2;
+        }
+
+        .my-tasks-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .my-tasks-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #111827;
+            margin: 0;
+        }
+
+        .my-tasks-subtitle {
+            font-size: 0.75rem;
+            color: var(--text-muted-color);
+            margin-top: 4px;
+        }
+
+        .my-tasks-action {
+            border: 1px solid #e5e7eb;
+            background: #f9fafb;
+            color: #374151;
+            border-radius: 999px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 6px 12px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .my-tasks-action:hover {
+            border-color: #cbd5f5;
+            background: #eef2ff;
+        }
+
+        .my-tasks-action:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
+        }
+
+        .my-tasks-list {
+            display: grid;
+            gap: 10px;
+            max-height: 320px;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        .my-tasks-list .loading,
+        .my-tasks-empty {
+            padding: 16px;
+            font-size: 0.9rem;
+            text-align: left;
+            background: #f9fafb;
+            border-radius: 10px;
+            border: 1px dashed #e5e7eb;
+            color: var(--text-muted-color);
+        }
+
+        .my-task-item {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 12px;
+            background: #f8fafc;
+            color: inherit;
+            text-align: left;
+            transition: background 0.2s, border-color 0.2s, transform 0.2s;
+        }
+
+        .my-task-item:hover {
+            background: #eef2ff;
+            border-color: rgba(99, 102, 241, 0.35);
+            transform: translateY(-1px);
+        }
+
+        .my-task-title {
+            font-weight: 600;
+            color: #111827;
+            font-size: 0.95rem;
+        }
+
+        .my-task-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 10px;
+            font-size: 0.75rem;
+            color: var(--text-muted-color);
+            align-items: center;
+        }
+
+        .my-task-meta .status,
+        .my-task-meta .priority {
+            font-size: 0.65rem;
+            padding: 2px 8px;
+        }
+
+        .my-task-assignee,
+        .my-task-updated {
+            font-weight: 500;
+        }
+
+        .my-task-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .my-task-action-btn {
+            border: 1px solid transparent;
+            border-radius: 999px;
+            padding: 6px 10px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            cursor: pointer;
+            background: #f3f4f6;
+            color: #374151;
+            transition: background 0.2s, border-color 0.2s, transform 0.2s;
+        }
+
+        .my-task-action-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .my-task-action-btn:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
+        }
+
+        .my-task-action-btn.complete {
+            background: #dcfce7;
+            color: #065f46;
+            border-color: #86efac;
+        }
+
+        .my-task-action-btn.complete:hover {
+            background: #bbf7d0;
+        }
+
+        .my-task-action-btn.priority {
+            background: #fef3c7;
+            color: #92400e;
+            border-color: #fde68a;
+        }
+
+        .my-task-action-btn.priority:hover {
+            background: #fde68a;
+        }
+
+        .my-task-action-btn.view {
+            background: #dbeafe;
+            color: #1e40af;
+            border-color: #93c5fd;
+        }
+
+        .my-task-action-btn.view:hover {
+            background: #bfdbfe;
+        }
+
+        .my-task-action-btn.is-disabled,
+        .my-task-action-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+            transform: none;
+        }
+
+        @media (max-width: 767px) {
+            .activity-widget,
+            .my-tasks-widget {
                 grid-column: span 1;
             }
         }
 
+        .dashboard-grid.dashboard-grid-single .activity-widget,
+        .dashboard-grid.dashboard-grid-single .my-tasks-widget {
+            grid-column: span 1;
+        }
+
         .widget-container {
-            transition: background 0.2s, outline 0.2s;
+            transition: background var(--widget-drag-hover-duration) var(--widget-drag-ease),
+                outline var(--widget-drag-hover-duration) var(--widget-drag-ease),
+                box-shadow var(--widget-drag-hover-duration) var(--widget-drag-ease);
         }
 
         .widget-container.drag-active {
-            outline: 2px dashed rgba(59, 130, 246, 0.35);
+            outline: 2px dashed var(--widget-drag-accent);
             outline-offset: 4px;
-            background: rgba(59, 130, 246, 0.03);
+            background-color: rgba(59, 130, 246, 0.04);
+            background-image:
+                linear-gradient(90deg, var(--widget-snap-grid-color) 1px, transparent 1px),
+                linear-gradient(180deg, var(--widget-snap-grid-color) 1px, transparent 1px);
+            background-size: var(--widget-snap-grid-size) var(--widget-snap-grid-size);
+            box-shadow: 0 10px 24px rgba(59, 130, 246, 0.12);
         }
 
         .widget-container.drag-hover {
-            outline-color: rgba(59, 130, 246, 0.6);
-            background: rgba(59, 130, 246, 0.08);
+            outline-color: var(--widget-drag-accent-strong);
+            background-color: rgba(59, 130, 246, 0.12);
+            background-image:
+                linear-gradient(90deg, var(--widget-snap-grid-color) 1px, transparent 1px),
+                linear-gradient(180deg, var(--widget-snap-grid-color) 1px, transparent 1px);
+            background-size: var(--widget-snap-grid-size) var(--widget-snap-grid-size);
+            box-shadow: 0 16px 32px rgba(59, 130, 246, 0.18);
+        }
+
+        .widget-container.drag-dropping {
+            outline: 2px solid var(--widget-drag-accent);
+            outline-offset: 4px;
+            background-color: rgba(59, 130, 246, 0.06);
+            animation: widget-drop-flash var(--widget-drag-drop-duration) var(--widget-drag-ease);
         }
 
         .widget-container.drag-active .widget-card {
-            transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+            transition: transform var(--widget-drag-hover-duration) var(--widget-drag-ease),
+                box-shadow var(--widget-drag-hover-duration) var(--widget-drag-ease),
+                opacity var(--widget-drag-hover-duration) var(--widget-drag-ease);
+        }
+
+        .widget-container.drag-active .widget-card:not(.dragging):not(.widget-drop-indicator) {
+            opacity: var(--widget-drag-muted-opacity);
         }
 
         .widget-card {
             cursor: grab;
             user-select: none;
+            position: relative;
             --widget-padding: 24px;
             --widget-metric-value-size: 2.5rem;
             --widget-metric-label-size: 0.875rem;
@@ -2972,6 +3646,69 @@ export class DashboardServer {
             --widget-controls-font: 0.7rem;
             --widget-controls-padding-y: 2px;
             --widget-controls-padding-x: 6px;
+        }
+
+        .widget-notification-indicator {
+            position: absolute;
+            top: calc(var(--widget-padding) / 2);
+            right: calc(var(--widget-padding) / 2);
+            background: #f97316;
+            color: #ffffff;
+            font-size: 0.65rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            padding: 2px 8px;
+            border-radius: 999px;
+            opacity: 0;
+            transform: translateY(-4px) scale(0.92);
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            pointer-events: none;
+            z-index: 3;
+            box-shadow: 0 6px 12px rgba(249, 115, 22, 0.25);
+        }
+
+        .widget-notification-indicator.is-active {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+
+        .widget-drag-handle {
+            position: absolute;
+            top: calc(var(--widget-padding) / 2);
+            left: calc(var(--widget-padding) / 2);
+            width: 26px;
+            height: 26px;
+            border-radius: 8px;
+            background: var(--widget-drag-handle-bg);
+            border: 1px solid var(--widget-drag-handle-border);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transform: translateY(-4px) scale(0.98);
+            transition: opacity var(--widget-drag-hover-duration) var(--widget-drag-ease),
+                transform var(--widget-drag-hover-duration) var(--widget-drag-ease);
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        .widget-drag-handle::before {
+            content: "";
+            width: 14px;
+            height: 14px;
+            background-image: radial-gradient(circle, var(--widget-drag-handle-dot) 1.2px, transparent 1.4px);
+            background-size: 6px 6px;
+        }
+
+        .widget-card:hover .widget-drag-handle,
+        .widget-card:focus-within .widget-drag-handle {
+            opacity: 0.9;
+            transform: translateY(0) scale(1);
+        }
+
+        .widget-card.dragging .widget-drag-handle {
+            opacity: 0.25;
+            transform: translateY(0) scale(1);
         }
 
         .widget-size-small {
@@ -3013,22 +3750,29 @@ export class DashboardServer {
             --widget-controls-padding-x: 8px;
         }
 
-        .widget-card:focus {
-            outline: 2px solid rgba(59, 130, 246, 0.7);
-            outline-offset: 2px;
+        .widget-card:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
         }
 
         .widget-card.dragging {
-            opacity: 0.25;
-            transform: scale(0.98);
-            box-shadow: none;
+            opacity: var(--widget-drag-active-opacity);
+            transform: scale(0.97) rotate(-0.3deg);
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
             cursor: grabbing;
-            filter: grayscale(0.2);
+            filter: grayscale(0.3);
         }
 
         .widget-card.drag-over {
-            outline: 2px solid rgba(59, 130, 246, 0.6);
+            outline: 2px solid var(--widget-drag-accent-strong);
             outline-offset: 2px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(255, 255, 255, 0.98));
+            box-shadow: 0 10px 22px rgba(59, 130, 246, 0.18);
+        }
+
+        .widget-card.dropping {
+            animation: widget-drop-snap var(--widget-drag-drop-duration) var(--widget-drag-ease);
         }
 
         .widget-drop-indicator {
@@ -3038,25 +3782,78 @@ export class DashboardServer {
             width: 100%;
             max-width: 100%;
             min-height: 120px;
-            border: 2px dashed rgba(59, 130, 246, 0.5);
+            border: 2px dashed var(--widget-drag-accent);
             border-radius: 12px;
-            background: rgba(59, 130, 246, 0.08);
+            background-color: var(--widget-drag-accent-soft);
+            background-image:
+                linear-gradient(90deg, rgba(59, 130, 246, 0.2) 1px, transparent 1px),
+                linear-gradient(180deg, rgba(59, 130, 246, 0.2) 1px, transparent 1px);
+            background-size: calc(var(--widget-snap-grid-size) * 0.8) calc(var(--widget-snap-grid-size) * 0.8);
             pointer-events: none;
             position: relative;
             overflow: hidden;
             box-sizing: border-box;
+            opacity: 0.7;
+            transition: transform var(--widget-drag-hover-duration) var(--widget-drag-ease),
+                border-color var(--widget-drag-hover-duration) var(--widget-drag-ease),
+                background var(--widget-drag-hover-duration) var(--widget-drag-ease),
+                box-shadow var(--widget-drag-hover-duration) var(--widget-drag-ease),
+                opacity var(--widget-drag-hover-duration) var(--widget-drag-ease);
+        }
+
+        .widget-drop-indicator::after {
+            content: "";
+            position: absolute;
+            left: 16px;
+            right: 16px;
+            height: 2px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, transparent, var(--widget-drag-line-color), transparent);
+            opacity: 0;
+            transform: scaleX(0.7);
+            transition: opacity var(--widget-drag-hover-duration) var(--widget-drag-ease),
+                transform var(--widget-drag-hover-duration) var(--widget-drag-ease);
+        }
+
+        .widget-drop-indicator.is-active {
+            border-style: solid;
+            border-color: var(--widget-drag-accent-strong);
+            opacity: 1;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 24px var(--widget-drag-line-glow);
+            animation: widget-drop-pulse 1.1s ease-in-out infinite;
+        }
+
+        .widget-drop-indicator.drag-over {
+            border-color: var(--widget-drag-accent-strong);
+            background-color: rgba(59, 130, 246, 0.22);
+            box-shadow: 0 16px 32px rgba(59, 130, 246, 0.24);
+            opacity: 1;
+        }
+
+        .widget-drop-indicator.is-active::after {
+            opacity: 1;
+            transform: scaleX(1);
+        }
+
+        .widget-drop-indicator[data-drop-edge="before"]::after {
+            top: 12px;
+        }
+
+        .widget-drop-indicator[data-drop-edge="after"]::after {
+            bottom: 12px;
         }
 
         .widget-drop-ghost {
             width: 100%;
             height: 100%;
             border-radius: 10px;
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(59, 130, 246, 0.04));
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.24), rgba(59, 130, 246, 0.05));
             display: flex;
             align-items: center;
             justify-content: center;
-            color: #2563eb;
-            font-weight: 600;
+            color: #1d4ed8;
+            font-weight: 700;
             font-size: 0.8rem;
             letter-spacing: 0.08em;
             text-transform: uppercase;
@@ -3067,17 +3864,58 @@ export class DashboardServer {
             border-radius: 999px;
             background: rgba(255, 255, 255, 0.9);
             box-shadow: 0 6px 16px rgba(37, 99, 235, 0.2);
+            border: 1px solid rgba(59, 130, 246, 0.25);
         }
 
         .widget-ghost {
             position: absolute;
             top: -9999px;
             left: -9999px;
-            opacity: 0.9;
-            transform: rotate(1deg);
-            box-shadow: 0 12px 30px rgba(0,0,0,0.2);
+            opacity: var(--widget-drag-ghost-opacity);
+            transform: translateZ(0) scale(var(--widget-drag-ghost-scale));
+            transform-origin: center;
+            box-shadow: 0 14px 32px rgba(15, 23, 42, 0.25);
             pointer-events: none;
             z-index: 9999;
+            animation: widget-ghost-float var(--widget-drag-ghost-duration) var(--widget-drag-ease) both;
+        }
+
+        @keyframes widget-drop-pulse {
+            0% { box-shadow: 0 0 0 rgba(59, 130, 246, 0.18); }
+            50% { box-shadow: 0 12px 26px rgba(59, 130, 246, 0.28); }
+            100% { box-shadow: 0 0 0 rgba(59, 130, 246, 0.18); }
+        }
+
+        @keyframes widget-drop-flash {
+            0% { outline-color: rgba(59, 130, 246, 0.7); }
+            60% { outline-color: rgba(59, 130, 246, 0.2); }
+            100% { outline-color: rgba(59, 130, 246, 0); }
+        }
+
+        @keyframes widget-drop-snap {
+            0% { transform: scale(0.98); box-shadow: 0 0 0 rgba(0, 0, 0, 0); }
+            70% { transform: scale(1.01); box-shadow: 0 18px 30px rgba(15, 23, 42, 0.12); }
+            100% { transform: scale(1); box-shadow: 0 10px 18px rgba(15, 23, 42, 0.08); }
+        }
+
+        @keyframes widget-ghost-float {
+            0% {
+                transform: translateZ(0) scale(var(--widget-drag-ghost-scale));
+                opacity: var(--widget-drag-ghost-opacity);
+            }
+            100% {
+                transform: translateY(-1px) scale(var(--widget-drag-ghost-scale));
+                opacity: var(--widget-drag-ghost-opacity-peak);
+            }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .widget-container.drag-dropping,
+            .widget-card.dropping,
+            .widget-drop-indicator.is-active,
+            .widget-ghost {
+                animation: none;
+            }
         }
 
         .widget-size-controls {
@@ -3105,9 +3943,10 @@ export class DashboardServer {
             border-color: #2563eb;
         }
 
-        .widget-size-btn:focus {
-            outline: 2px solid rgba(59, 130, 246, 0.7);
+        .widget-size-btn:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
             outline-offset: 1px;
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
         }
 
         .widget-remove-controls {
@@ -3150,19 +3989,66 @@ export class DashboardServer {
             letter-spacing: 0.06em;
         }
 
+        .widget-move-btn {
+            border: 1px solid rgba(59, 130, 246, 0.35);
+            background: rgba(219, 234, 254, 0.9);
+            color: #1d4ed8;
+            border-radius: 999px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 4px 10px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
         .widget-remove-btn:hover {
             background: #ef4444;
             color: #ffffff;
             border-color: #dc2626;
         }
 
-        .widget-remove-btn:focus {
-            outline: 2px solid rgba(239, 68, 68, 0.7);
-            outline-offset: 2px;
+        .widget-move-btn:hover {
+            background: #2563eb;
+            color: #ffffff;
+            border-color: #1d4ed8;
+        }
+
+        .widget-remove-btn:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
+        }
+
+        .widget-move-btn:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
+        }
+
+        .widget-move-btn:disabled,
+        .widget-move-btn[aria-disabled="true"] {
+            background: rgba(226, 232, 240, 0.9);
+            border-color: rgba(148, 163, 184, 0.5);
+            color: #64748b;
+            cursor: not-allowed;
+            opacity: 0.7;
         }
 
         .widget-hidden {
             display: none;
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
         }
 
         .widget-library {
@@ -3188,13 +4074,115 @@ export class DashboardServer {
         }
 
         .widget-library-header p {
-            color: #6b7280;
+            color: var(--text-muted-color);
             font-size: 0.9rem;
         }
 
         .widget-library-actions {
             display: flex;
             gap: 8px;
+        }
+
+        .widget-library-controls {
+            display: grid;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .widget-library-search {
+            position: relative;
+        }
+
+        .widget-library-search label {
+            display: block;
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted-color);
+            margin-bottom: 6px;
+        }
+
+        .widget-library-search input[type="search"] {
+            width: 100%;
+            border: 1px solid #e5e7eb;
+            border-radius: 999px;
+            padding: 10px 14px;
+            font-size: 0.9rem;
+            background: #ffffff;
+            color: #111827;
+            transition: border-color 0.12s ease, box-shadow 0.12s ease;
+        }
+
+        .widget-library-search input[type="search"]:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            border-color: var(--focus-ring-color);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
+        }
+
+        .widget-library-filter-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .widget-library-filter-btn {
+            border: 1px solid #d1d5db;
+            border-radius: 999px;
+            padding: 6px 12px;
+            font-size: 0.8rem;
+            color: #374151;
+            background: #ffffff;
+            cursor: pointer;
+            transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+        }
+
+        .widget-library-filter-btn:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
+        }
+
+        .widget-library-filter-btn.is-active {
+            border-color: #2563eb;
+            background: #eff6ff;
+            color: #1d4ed8;
+            font-weight: 600;
+        }
+
+        .widget-library-results {
+            font-size: 0.85rem;
+            color: var(--text-muted-color);
+            margin-bottom: 12px;
+        }
+
+        .widget-library-selection-summary {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: #374151;
+        }
+
+        .widget-library-empty {
+            border: 1px dashed #d1d5db;
+            border-radius: 12px;
+            padding: 20px;
+            display: grid;
+            gap: 8px;
+            color: var(--text-muted-color);
+            background: #f9fafb;
+        }
+
+        .widget-limit-message {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid #fcd34d;
+            background: #fef3c7;
+            color: #92400e;
+            font-size: 0.85rem;
         }
 
         .widget-library-section {
@@ -3209,7 +4197,7 @@ export class DashboardServer {
             font-size: 1rem;
             font-weight: 600;
             color: #1f2937;
-            margin-bottom: 12px;
+            margin: 0 0 12px;
         }
 
         .widget-library-sections {
@@ -3243,7 +4231,7 @@ export class DashboardServer {
 
         .dashboard-empty-content p {
             margin: 0;
-            color: #6b7280;
+            color: var(--text-muted-color);
             max-width: 520px;
         }
 
@@ -3259,48 +4247,184 @@ export class DashboardServer {
             }
         }
 
-        .widget-library-list {
+        .widget-library-catalog-grid {
             display: grid;
             gap: 12px;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
         }
 
-        .widget-library-item {
+        .widget-library-card {
             display: flex;
-            align-items: center;
+            flex-direction: column;
+            align-items: stretch;
             justify-content: space-between;
             gap: 12px;
             border: 1px solid #e5e7eb;
             border-radius: 10px;
-            padding: 12px 16px;
+            padding: 12px;
             background: #f9fafb;
+            position: relative;
+            overflow: visible;
+            min-height: 220px;
         }
 
-        .widget-library-item.selected {
+        .widget-library-card.selected {
             border-color: #3b82f6;
             background: #eff6ff;
         }
 
-        .widget-library-item-info {
+        .widget-library-card-preview {
             display: flex;
-            flex-direction: column;
-            gap: 4px;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(14, 116, 144, 0.08));
         }
 
-        .widget-library-item-name {
+        .widget-library-card-badge {
+            width: 42px;
+            height: 42px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.65), rgba(14, 116, 144, 0.75));
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+        }
+
+        .widget-library-card-title {
             font-weight: 600;
             color: #1f2937;
         }
 
-        .widget-library-item-meta {
-            font-size: 0.8rem;
-            color: #6b7280;
+        .widget-library-card-subtitle {
+            font-size: 0.78rem;
+            color: var(--text-muted-color);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
 
-        .widget-library-item-actions {
+        .widget-library-card-body {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 0 4px;
+            flex: 1;
+        }
+
+        .widget-library-card-description {
+            font-size: 0.82rem;
+            color: #4b5563;
+        }
+
+        .widget-library-card-rows {
+            display: grid;
+            gap: 6px;
+        }
+
+        .widget-library-card-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 0.75rem;
+            color: #4b5563;
+        }
+
+        .widget-library-card-row-label {
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-size: 0.7rem;
+            color: var(--text-muted-color);
+        }
+
+        .widget-library-card-row-value {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            justify-content: flex-end;
+        }
+
+        .widget-library-card-tag {
+            padding: 3px 8px;
+            border-radius: 999px;
+            background: rgba(148, 163, 184, 0.2);
+            color: #475569;
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+
+        .widget-library-card-row-metrics {
+            font-weight: 600;
+            color: #1f2937;
+        }
+
+        .widget-library-card-id {
+            font-size: 0.75rem;
+            color: var(--text-muted-color);
+        }
+
+        .widget-library-card-actions {
             display: flex;
             align-items: center;
             gap: 12px;
             flex-wrap: wrap;
+            margin-top: auto;
+        }
+
+        .widget-library-tooltip {
+            position: absolute;
+            left: 12px;
+            right: 12px;
+            top: -8px;
+            transform: translateY(-8px);
+            opacity: 0;
+            pointer-events: none;
+            background: #111827;
+            color: #f9fafb;
+            border-radius: 12px;
+            padding: 12px 14px;
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.25);
+            transition: opacity 0.15s ease, transform 0.15s ease;
+            z-index: 4;
+        }
+
+        .widget-library-card:hover .widget-library-tooltip,
+        .widget-library-card:focus-within .widget-library-tooltip {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .widget-library-tooltip-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .widget-library-tooltip-detail {
+            font-size: 0.75rem;
+            color: rgba(248, 250, 252, 0.8);
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .widget-library-tooltip-status {
+            font-weight: 600;
+        }
+
+        .widget-library-tooltip-preview {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .widget-library-tooltip-badge {
+            width: 34px;
+            height: 34px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.65), rgba(14, 116, 144, 0.75));
         }
 
         .widget-library-toggle {
@@ -3329,6 +4453,69 @@ export class DashboardServer {
             opacity: 0.6;
         }
 
+        .widget-library-toggle input:focus-visible,
+        .widget-library-select input:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
+        }
+
+        .widget-library-notifications {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid #e5e7eb;
+            display: grid;
+            gap: 8px;
+        }
+
+        .widget-library-notifications-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text-muted-color);
+        }
+
+        .widget-library-notifications-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.75rem;
+            color: #111827;
+        }
+
+        .widget-library-notification-select {
+            width: 100%;
+            font-size: 0.75rem;
+            padding: 4px 8px;
+            border-radius: 8px;
+            border: 1px solid #d1d5db;
+            background: #ffffff;
+            color: #111827;
+        }
+
+        .widget-library-notification-types {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px 10px;
+        }
+
+        .widget-library-notification-type {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.72rem;
+            color: #374151;
+        }
+
+        .widget-library-notification-type input:disabled,
+        .widget-library-notification-select:disabled {
+            opacity: 0.6;
+        }
+
         .widget-library-add {
             border: 1px solid #2563eb;
             background: #3b82f6;
@@ -3352,10 +4539,16 @@ export class DashboardServer {
             border-color: #1d4ed8;
         }
 
+        .widget-library-add:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
+        }
+
         .widget-library-add:disabled {
             background: #e5e7eb;
             border-color: #d1d5db;
-            color: #6b7280;
+            color: var(--text-muted-color);
             cursor: not-allowed;
             box-shadow: none;
             transform: none;
@@ -3375,13 +4568,13 @@ export class DashboardServer {
         .metric-value { 
             font-size: var(--widget-metric-value-size); 
             font-weight: 700; 
-            color: #3b82f6; 
+            color: #1d4ed8; 
             line-height: 1;
             margin-bottom: 8px;
         }
         
         .metric-label { 
-            color: #6b7280; 
+            color: var(--text-muted-color); 
             font-size: var(--widget-metric-label-size);
             text-transform: uppercase;
             letter-spacing: 0.05em;
@@ -3482,10 +4675,13 @@ export class DashboardServer {
             transition: border-color 0.2s, box-shadow 0.2s;
         }
         
-        .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        .form-group input:focus-visible,
+        .form-group textarea:focus-visible,
+        .form-group select:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            border-color: var(--focus-ring-color);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
         }
         
         .form-group textarea { 
@@ -3518,34 +4714,58 @@ export class DashboardServer {
             align-items: center;
             gap: 8px;
         }
+
+        .btn:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
+        }
         
         .btn-primary { 
-            background: linear-gradient(135deg, #3b82f6, #1d4ed8); 
+            background: linear-gradient(135deg, #1d4ed8, #1e40af); 
             color: white; 
         }
         
         .btn-primary:hover { 
-            background: linear-gradient(135deg, #1d4ed8, #1e40af); 
+            background: linear-gradient(135deg, #1e40af, #1e3a8a); 
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
         }
         
         .btn-secondary { 
-            background: #6b7280; 
+            background: #4b5563; 
             color: white; 
         }
         
         .btn-secondary:hover { 
-            background: #4b5563; 
+            background: #374151; 
         }
         
         .btn-danger { 
-            background: #ef4444; 
+            background: #dc2626; 
             color: white; 
         }
         
         .btn-danger:hover { 
-            background: #dc2626; 
+            background: #b91c1c; 
+        }
+
+        .btn-warning {
+            background: #b45309;
+            color: white;
+        }
+
+        .btn-warning:hover {
+            background: #92400e;
+        }
+
+        .btn-success {
+            background: #047857;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #065f46;
         }
         
         .btn-sm {
@@ -3588,9 +4808,11 @@ export class DashboardServer {
             transition: border-color 0.2s;
         }
         
-        .filter-group select:focus {
-            outline: none;
-            border-color: #3b82f6;
+        .filter-group select:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            border-color: var(--focus-ring-color);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
         }
 
         .filter-group select.priority-highlight-high {
@@ -3672,7 +4894,7 @@ export class DashboardServer {
             display: flex; 
             gap: 16px; 
             font-size: 0.875rem; 
-            color: #6b7280; 
+            color: var(--text-muted-color); 
             flex-wrap: wrap;
             align-items: center;
         }
@@ -3690,7 +4912,7 @@ export class DashboardServer {
         .status.in-progress { background: #dbeafe; color: #1e40af; }
         .status.done { background: #d1fae5; color: #065f46; }
         .status.failed { background: #fee2e2; color: #991b1b; }
-        .status.cancelled { background: #f3f4f6; color: #6b7280; }
+        .status.cancelled { background: #f3f4f6; color: var(--text-muted-color); }
         
         .priority { 
             padding: 4px 12px; 
@@ -3709,8 +4931,56 @@ export class DashboardServer {
         .loading { 
             text-align: center; 
             padding: 60px 20px; 
-            color: #6b7280;
+            color: var(--text-muted-color);
             font-size: 1.1rem;
+        }
+
+        .dashboard-restore-overlay {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(2px);
+            z-index: 2000;
+            opacity: 1;
+            transition: opacity 180ms ease;
+        }
+
+        .dashboard-restore-overlay.is-hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .dashboard-restore-card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: #0f172a;
+            color: #f8fafc;
+            padding: 16px 20px;
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(15, 23, 42, 0.35);
+            font-weight: 600;
+        }
+
+        .dashboard-restore-spinner {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border: 3px solid rgba(248, 250, 252, 0.35);
+            border-top-color: #38bdf8;
+            animation: dashboard-restore-spin 0.9s linear infinite;
+        }
+
+        @keyframes dashboard-restore-spin {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
         }
         
         .error { 
@@ -3742,6 +5012,68 @@ export class DashboardServer {
             border-left: 4px solid #f59e0b;
             font-weight: 500;
         }
+
+        .toast-container {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 1000;
+            pointer-events: none;
+        }
+
+        .toast {
+            background: rgba(255, 255, 255, 0.92);
+            color: #1f2937;
+            padding: 10px 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            opacity: 0;
+            transform: translateY(8px);
+            transition: opacity 160ms var(--widget-drag-ease), transform 160ms var(--widget-drag-ease);
+        }
+
+        .toast.is-visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .toast-success {
+            border-left: 3px solid #10b981;
+        }
+
+        .toast-warning {
+            border-left: 3px solid #f59e0b;
+            background: rgba(255, 251, 235, 0.95);
+        }
+
+        .toast-error {
+            border-left: 3px solid #ef4444;
+            background: rgba(254, 242, 242, 0.95);
+        }
+
+        .toast-info {
+            border-left: 3px solid #3b82f6;
+            background: rgba(239, 246, 255, 0.95);
+        }
+
+        @media (max-width: 640px) {
+            .toast-container {
+                left: 12px;
+                right: 12px;
+                bottom: 16px;
+            }
+
+            .toast {
+                width: 100%;
+            }
+        }
         
         /* Tabs */
         .tabs {
@@ -3756,7 +5088,7 @@ export class DashboardServer {
             background: none;
             border: none;
             border-bottom: 2px solid transparent;
-            color: #6b7280;
+            color: var(--text-muted-color);
             font-weight: 600;
             cursor: pointer;
             transition: all 0.2s;
@@ -3767,10 +5099,16 @@ export class DashboardServer {
             color: #374151;
             background: #f9fafb;
         }
+
+        .tab:focus-visible {
+            outline: var(--focus-ring-width) solid var(--focus-ring-color);
+            outline-offset: var(--focus-ring-offset);
+            box-shadow: 0 0 0 3px var(--focus-ring-shadow);
+        }
         
         .tab.active {
-            color: #3b82f6;
-            border-bottom-color: #3b82f6;
+            color: #1d4ed8;
+            border-bottom-color: #1d4ed8;
         }
         
         .tab-content {
@@ -3808,10 +5146,32 @@ export class DashboardServer {
             width: 90%;
             max-height: 80vh;
             overflow-y: auto;
-            animation: slideUp 0.3s;
-        }
-        
-        .modal-header {
+animation: slideUp 0.3s;
+         }
+         
+         /* Widget appearing animations */
+         .widget-card.widget-appearing {
+             animation: widgetSlideIn 0.4s ease-out, widgetFadeIn 0.4s ease-out;
+             animation-fill-mode: both;
+         }
+         
+         @keyframes widgetSlideIn {
+             from {
+                 transform: translateY(-20px);
+                 opacity: 0;
+             }
+             to {
+                 transform: translateY(0);
+                 opacity: 1;
+             }
+         }
+         
+         @keyframes widgetFadeIn {
+             from { opacity: 0; }
+             to { opacity: 1; }
+         }
+         
+         .modal-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -3828,7 +5188,7 @@ export class DashboardServer {
             background: none;
             border: none;
             font-size: 1.5rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
             cursor: pointer;
             padding: 0;
             width: 30px;
@@ -3879,7 +5239,10 @@ export class DashboardServer {
             .auto-refresh {
                 position: static;
                 margin-top: 12px;
-                display: block;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                flex-wrap: wrap;
             }
             
             .metrics {
@@ -4024,7 +5387,7 @@ export class DashboardServer {
         .event-time {
             margin-left: auto;
             font-size: 0.75rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
         }
         
         .event-content {
@@ -4038,13 +5401,13 @@ export class DashboardServer {
         
         .event-details {
             font-size: 0.875rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
             margin-bottom: 4px;
         }
         
         .event-changed-by {
             font-size: 0.75rem;
-            color: #9ca3af;
+            color: var(--text-muted-color);
             font-style: italic;
         }
         
@@ -4073,7 +5436,7 @@ export class DashboardServer {
         
         .summary-label {
             font-size: 0.75rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
             text-transform: uppercase;
             letter-spacing: 0.05em;
             margin-bottom: 8px;
@@ -4089,7 +5452,7 @@ export class DashboardServer {
             display: flex;
             justify-content: space-between;
             font-size: 0.875rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
             padding: 12px 0;
             border-top: 1px solid #e5e7eb;
         }
@@ -4110,7 +5473,7 @@ export class DashboardServer {
         
         .stat-label {
             font-size: 0.75rem;
-            color: #6b7280;
+            color: var(--text-muted-color);
             text-transform: uppercase;
             letter-spacing: 0.05em;
             margin-bottom: 8px;
@@ -4146,7 +5509,7 @@ export class DashboardServer {
         
         .event-type-count {
             font-weight: 700;
-            color: #3b82f6;
+            color: #1d4ed8;
             background: #dbeafe;
             padding: 2px 8px;
             border-radius: 12px;
@@ -4177,7 +5540,7 @@ export class DashboardServer {
         
         .event-count {
             font-weight: 600;
-            color: #6b7280;
+            color: var(--text-muted-color);
             font-size: 0.875rem;
         }
 
@@ -4278,7 +5641,7 @@ export class DashboardServer {
         
         .task-detail-label {
             font-weight: 600;
-            color: #6b7280;
+            color: var(--text-muted-color);
             font-size: 0.875rem;
         }
         
@@ -4289,9 +5652,8 @@ export class DashboardServer {
 
         /* Enhanced Health Tab */
         .health-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
+            --dashboard-grid-min-width: 300px;
+            --dashboard-grid-gap: 20px;
             margin-bottom: 24px;
         }
         
@@ -4316,7 +5678,7 @@ export class DashboardServer {
             font-size: var(--widget-health-title-size);
             font-weight: 600;
             color: #1f2937;
-            margin-bottom: 12px;
+            margin: 0 0 12px;
         }
         
         .health-metric {
@@ -4327,7 +5689,7 @@ export class DashboardServer {
         }
         
         .health-metric-label {
-            color: #6b7280;
+            color: var(--text-muted-color);
         }
         
         .health-metric-value {
@@ -4352,14 +5714,30 @@ export class DashboardServer {
         }
     </style>
 </head>
-<body>
+<body data-widget-limit="20">
+    <a class="skip-link" href="#dashboardMain">Skip to main content</a>
+    <div id="dashboardRestoreOverlay" class="dashboard-restore-overlay is-hidden" aria-hidden="true" role="status" aria-live="polite">
+        <div class="dashboard-restore-card">
+            <span class="dashboard-restore-spinner" aria-hidden="true"></span>
+            <span id="dashboardRestoreMessage">Restoring dashboard layout...</span>
+        </div>
+    </div>
+    <div id="widgetMoveAnnouncement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
     <div class="container">
-        <div class="header">
+        <header class="header" role="banner">
             <h1>Task Manager Dashboard</h1>
-            <div class="auto-refresh">Auto-refresh every 5 seconds</div>
+            <div class="auto-refresh">
+                <label for="autoRefreshSelect">Auto-refresh</label>
+                <select id="autoRefreshSelect" aria-label="Auto-refresh interval">
+                    <option value="off">Off</option>
+                    <option value="30s">Every 30 seconds</option>
+                    <option value="1m">Every minute</option>
+                    <option value="5m">Every 5 minutes</option>
+                </select>
+            </div>
             <div class="status-bar">
-                <span class="health-indicator" id="healthIndicator"></span>
-                <span id="healthStatus">Loading...</span>
+                <span class="health-indicator" id="healthIndicator" role="img" aria-label="Daemon health: loading"></span>
+                <span id="healthStatus" role="status" aria-live="polite">Loading...</span>
                 <span>|</span>
                 <span>PID: <strong id="daemonPid">-</strong></span>
                 <span>|</span>
@@ -4368,23 +5746,35 @@ export class DashboardServer {
                 <span>Memory: <strong id="memoryUsage">-</strong></span>
                 <span>|</span>
                 <span>Node: <strong id="nodeVersion">-</strong></span>
+                <div
+                    class="layout-save-indicator"
+                    id="layoutSaveIndicator"
+                    aria-live="polite"
+                    aria-atomic="true"
+                    aria-hidden="true"
+                >
+                    <span class="layout-save-icon" aria-hidden="true">&#10003;</span>
+                    <span class="layout-save-text">Layout saved</span>
+                    <button class="layout-save-retry" type="button" hidden>Retry</button>
+                </div>
             </div>
-        </div>
+        </header>
 
         <!-- Tabs Navigation -->
-        <div class="tabs">
-            <button class="tab active" data-tab="overview">Overview</button>
-            <button class="tab" data-tab="widgets">Widgets</button>
-            <button class="tab" data-tab="queue">Queue Status</button>
-            <button class="tab" data-tab="tasks">Tasks</button>
-            <button class="tab" data-tab="create">Create Task</button>
-            <button class="tab" data-tab="history">Task History</button>
-            <button class="tab" data-tab="health">Health</button>
-            <button class="tab" data-tab="logs">Activity Log</button>
-        </div>
+        <nav class="tabs" role="tablist" aria-label="Dashboard sections">
+            <button class="tab active" data-tab="overview" id="tab-overview" role="tab" aria-controls="overview-tab" aria-selected="true" tabindex="0" type="button">Overview</button>
+            <button class="tab" data-tab="widgets" id="tab-widgets" role="tab" aria-controls="widgets-tab" aria-selected="false" tabindex="-1" type="button">Widgets</button>
+            <button class="tab" data-tab="queue" id="tab-queue" role="tab" aria-controls="queue-tab" aria-selected="false" tabindex="-1" type="button">Queue Status</button>
+            <button class="tab" data-tab="tasks" id="tab-tasks" role="tab" aria-controls="tasks-tab" aria-selected="false" tabindex="-1" type="button">Tasks</button>
+            <button class="tab" data-tab="create" id="tab-create" role="tab" aria-controls="create-tab" aria-selected="false" tabindex="-1" type="button">Create Task</button>
+            <button class="tab" data-tab="history" id="tab-history" role="tab" aria-controls="history-tab" aria-selected="false" tabindex="-1" type="button">Task History</button>
+            <button class="tab" data-tab="health" id="tab-health" role="tab" aria-controls="health-tab" aria-selected="false" tabindex="-1" type="button">Health</button>
+            <button class="tab" data-tab="logs" id="tab-logs" role="tab" aria-controls="logs-tab" aria-selected="false" tabindex="-1" type="button">Activity Log</button>
+        </nav>
 
         <!-- Overview Tab -->
-        <div id="overview-tab" class="tab-content active">
+        <main id="dashboardMain" class="dashboard-main" tabindex="-1">
+        <section id="overview-tab" class="tab-content active" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
             <div id="dashboardEmptyState" class="dashboard-empty-state" hidden>
                 <div class="dashboard-empty-card">
                     <div class="dashboard-empty-content">
@@ -4401,7 +5791,7 @@ export class DashboardServer {
                     </div>
                 </div>
             </div>
-            <div class="metrics" data-widget-container="overview-metrics">
+            <div class="metrics dashboard-grid" data-widget-container="overview-metrics">
                 <div class="metric-card clickable" data-widget-id="overview-total" data-task-nav="tasks" tabindex="0" role="button" aria-label="View all tasks">
                     <div class="metric-value" id="totalTasks">-</div>
                     <div class="metric-label">Total Tasks</div>
@@ -4435,7 +5825,7 @@ export class DashboardServer {
                 <div class="metric-card status-breakdown clickable" data-widget-id="overview-status-breakdown" data-widget-label="Status Breakdown" data-task-nav="tasks" tabindex="0" role="button" aria-label="View tasks by status">
                     <div class="status-breakdown-header">
                         <div>
-                            <div class="status-breakdown-title">Status Breakdown</div>
+                        <h3 class="status-breakdown-title">Status Breakdown</h3>
                             <div class="status-breakdown-subtitle">Totals by workflow stage</div>
                         </div>
                         <div class="status-breakdown-total" id="statusBreakdownTotal" aria-live="polite">-</div>
@@ -4476,7 +5866,7 @@ export class DashboardServer {
                 <div class="metric-card priority-breakdown clickable" data-widget-id="overview-priority-breakdown" data-task-nav="tasks" tabindex="0" role="button" aria-label="View tasks by priority">
                     <div class="priority-breakdown-header">
                         <div>
-                            <div class="priority-breakdown-title">Priority Breakdown</div>
+                            <h3 class="priority-breakdown-title">Priority Breakdown</h3>
                             <div class="priority-breakdown-subtitle">Distribution across task priorities</div>
                         </div>
                         <div class="priority-breakdown-total" id="priorityBreakdownTotal" aria-live="polite">-</div>
@@ -4531,7 +5921,7 @@ export class DashboardServer {
                 <div class="metric-card activity-widget" data-widget-id="overview-recent-activity" data-widget-label="Recent Activity">
                     <div class="activity-widget-header">
                         <div>
-                            <div class="activity-widget-title">Recent Activity</div>
+                            <h3 class="activity-widget-title">Recent Activity</h3>
                             <div class="activity-widget-subtitle">Latest task updates</div>
                         </div>
                         <button class="activity-widget-action" type="button" data-task-nav="tasks" aria-label="View all tasks">
@@ -4542,11 +5932,25 @@ export class DashboardServer {
                         <div class="loading">Loading recent activity...</div>
                     </div>
                 </div>
+                <div class="metric-card my-tasks-widget" data-widget-id="overview-my-tasks" data-widget-label="My Tasks">
+                    <div class="my-tasks-header">
+                        <div>
+                            <h3 class="my-tasks-title">My Tasks</h3>
+                            <div class="my-tasks-subtitle">Top tasks with quick actions</div>
+                        </div>
+                        <button class="my-tasks-action" type="button" data-task-nav="tasks" aria-label="View all tasks">
+                            View all
+                        </button>
+                    </div>
+                    <div id="myTasksList" class="my-tasks-list" aria-live="polite" aria-busy="true">
+                        <div class="loading">Loading tasks...</div>
+                    </div>
+                </div>
             </div>
-        </div>
+        </section>
 
         <!-- Widget Library Tab -->
-        <div id="widgets-tab" class="tab-content">
+        <section id="widgets-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-widgets" tabindex="0" hidden>
             <div class="widget-library">
                 <div class="widget-library-header">
                     <div>
@@ -4555,23 +5959,48 @@ export class DashboardServer {
                     </div>
                     <div class="widget-library-actions">
                         <button class="btn btn-primary btn-sm" id="addSelectedWidgetsBtn" disabled>
-                            <span>➕</span>
+                            <span aria-hidden="true">➕</span>
                             <span id="addSelectedWidgetsLabel">Add Selected</span>
                         </button>
                         <button class="btn btn-secondary btn-sm" id="showAllWidgetsBtn">
-                            <span>✅</span> Show All
+                            <span aria-hidden="true">✅</span> Show All
                         </button>
                         <button class="btn btn-secondary btn-sm" id="hideAllWidgetsBtn">
-                            <span>🙈</span> Hide All
+                            <span aria-hidden="true">🙈</span> Hide All
                         </button>
                     </div>
                 </div>
-                <div id="widgetLibraryList" class="widget-library-sections"></div>
+                <div class="widget-library-controls">
+                    <div class="widget-library-search">
+                        <label for="widgetLibrarySearch">Search widgets</label>
+                        <input
+                            type="search"
+                            id="widgetLibrarySearch"
+                            placeholder="Search widgets, IDs, or categories"
+                            autocomplete="off"
+                        >
+                    </div>
+                    <div
+                        id="widgetLibraryFilterGroup"
+                        class="widget-library-filter-group"
+                        role="group"
+                        aria-label="Filter widgets by category"
+                    ></div>
+                    <div class="widget-library-selection-summary">
+                        <span id="widgetLibrarySelectionSummary">Showing 0 widgets.</span>
+                        <button class="btn btn-secondary btn-sm" id="clearSelectedWidgetsBtn" type="button" disabled>
+                            Clear selection
+                        </button>
+                    </div>
+                </div>
+                <div id="widgetLibraryResults" class="widget-library-results" role="status" aria-live="polite" aria-atomic="true"></div>
+                <div id="widgetLimitMessage" class="widget-limit-message" role="status" aria-live="polite" aria-hidden="true" hidden></div>
+                <div id="widgetLibraryList" class="widget-library-sections widget-library-list widget-library-catalog"></div>
             </div>
-        </div>
+        </section>
 
         <!-- Create Task Tab -->
-        <div id="create-tab" class="tab-content">
+        <section id="create-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-create" tabindex="0" hidden>
             <div class="task-form">
                 <h2>Create New Task</h2>
                 <form id="taskForm">
@@ -4599,19 +6028,19 @@ export class DashboardServer {
                     </div>
                     <div class="form-actions">
                         <button type="submit" class="btn btn-primary">
-                            <span>✨</span> Create Task
+                            <span aria-hidden="true">✨</span> Create Task
                         </button>
                         <button type="reset" class="btn btn-secondary">
-                            <span>🔄</span> Clear Form
+                            <span aria-hidden="true">🔄</span> Clear Form
                         </button>
                     </div>
                 </form>
             </div>
-        </div>
+        </section>
 
         <!-- Queue Status Tab -->
-        <div id="queue-tab" class="tab-content">
-            <div class="metrics" data-widget-container="queue-metrics">
+        <section id="queue-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-queue" tabindex="0" hidden>
+            <div class="metrics dashboard-grid" data-widget-container="queue-metrics">
                 <div class="metric-card clickable" data-widget-id="queue-total" data-task-nav="tasks" data-task-status="todo" tabindex="0" role="button" aria-label="View queued tasks">
                     <div class="metric-value" id="queueTotal">-</div>
                     <div class="metric-label">Total Tasks in Queue</div>
@@ -4635,7 +6064,7 @@ export class DashboardServer {
                     <h2>Queue by Priority</h2>
                     <div class="form-actions">
                         <button class="btn btn-primary btn-sm" onclick="loadQueueStatus()">
-                            <span>🔄</span> Refresh
+                            <span aria-hidden="true">🔄</span> Refresh
                         </button>
                     </div>
                 </div>
@@ -4660,17 +6089,15 @@ export class DashboardServer {
                 <div class="tasks-header">
                     <h2>Failed Tasks</h2>
                     <div class="form-actions">
-                        <button class="btn btn-secondary btn-sm" onclick="retryAllFailed()">
-                            <span>🔄</span> Retry All Failed
-                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="retryAllFailed()">Retry All Failed</button>
                     </div>
                 </div>
                 <div id="failedTasksList" class="loading">Loading failed tasks...</div>
             </div>
-        </div>
+        </section>
 
         <!-- Tasks Tab -->
-        <div id="tasks-tab" class="tab-content">
+        <section id="tasks-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-tasks" tabindex="0" hidden>
             <div class="filters">
                 <div class="filter-group" style="flex: 1; min-width: 200px;">
                     <label for="searchInput">Search:</label>
@@ -4712,46 +6139,46 @@ export class DashboardServer {
                     <h2>Tasks</h2>
                     <div class="form-actions">
                         <button class="btn btn-primary btn-sm" onclick="loadTasks()">
-                            <span>🔄</span> Refresh
+                            <span aria-hidden="true">🔄</span> Refresh
                         </button>
-                        <button class="btn btn-secondary btn-sm" onclick="toggleBulkActions()">
-                            <span>☑️</span> Bulk Actions
+                        <button class="btn btn-secondary btn-sm" id="toggleBulkActionsBtn" aria-controls="bulkActionsPanel" aria-expanded="false" onclick="toggleBulkActions()">
+                            <span aria-hidden="true">☑️</span> Bulk Actions
                         </button>
                     </div>
                 </div>
                 
                 <!-- Bulk Actions Panel -->
-                <div id="bulkActionsPanel" style="display: none; margin-bottom: 20px;">
+                <div id="bulkActionsPanel" style="margin-bottom: 20px;" hidden aria-hidden="true" role="region" aria-label="Bulk actions">
                     <div class="bulk-actions-container">
                         <div class="bulk-actions-info">
-                            <span id="selectedCount">0</span> tasks selected
+                            <span id="selectedCount" aria-live="polite" aria-atomic="true">0</span> tasks selected
                         </div>
                         <div class="bulk-actions-buttons">
                             <button class="btn btn-secondary btn-sm" onclick="selectAllTasks()">
-                                <span>☑️</span> Select All
+                                <span aria-hidden="true">☑️</span> Select All
                             </button>
                             <button class="btn btn-secondary btn-sm" onclick="clearSelection()">
-                                <span>❌</span> Clear Selection
+                                <span aria-hidden="true">❌</span> Clear Selection
                             </button>
                             <div class="action-separator"></div>
-                            <select id="bulkPrioritySelect" class="bulk-select">
+                            <select id="bulkPrioritySelect" class="bulk-select" aria-label="Bulk set priority">
                                 <option value="">Set Priority...</option>
                                 <option value="high">High Priority</option>
                                 <option value="medium">Medium Priority</option>
                                 <option value="low">Low Priority</option>
                             </select>
                             <button class="btn btn-warning btn-sm" onclick="bulkSetPriority()">
-                                <span>⚡</span> Set Priority
+                                <span aria-hidden="true">⚡</span> Set Priority
                             </button>
                             <div class="action-separator"></div>
                             <button class="btn btn-success btn-sm" onclick="bulkResume()">
-                                <span>▶️</span> Resume
+                                <span aria-hidden="true">▶️</span> Resume
                             </button>
                             <button class="btn btn-danger btn-sm" onclick="bulkCancel()">
-                                <span>⏹️</span> Cancel
+                                <span aria-hidden="true">⏹️</span> Cancel
                             </button>
                             <button class="btn btn-danger btn-sm" onclick="bulkDelete()">
-                                <span>🗑️</span> Delete
+                                <span aria-hidden="true">🗑️</span> Delete
                             </button>
                         </div>
                     </div>
@@ -4759,13 +6186,13 @@ export class DashboardServer {
                 
                 <div id="tasksList" class="loading">Loading tasks...</div>
             </div>
-        </div>
+        </section>
 
         <!-- Health Tab -->
-        <div id="health-tab" class="tab-content">
-            <div class="health-grid" data-widget-container="health-grid">
+        <section id="health-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-health" tabindex="0" hidden>
+            <div class="health-grid dashboard-grid" data-widget-container="health-grid">
                 <div class="health-card" data-widget-id="health-system">
-                    <div class="health-title">🏥️ System Health</div>
+                    <h3 class="health-title"><span aria-hidden="true">🏥️</span> System Health</h3>
                     <div class="health-metric">
                         <span class="health-metric-label">Status:</span>
                         <span class="health-metric-value" id="healthStatusDetailed">-</span>
@@ -4785,7 +6212,7 @@ export class DashboardServer {
                 </div>
 
                 <div class="health-card" data-widget-id="health-memory">
-                    <div class="health-title">💾 Memory Usage</div>
+                    <h3 class="health-title"><span aria-hidden="true">💾</span> Memory Usage</h3>
                     <div class="health-metric">
                         <span class="health-metric-label">Used:</span>
                         <span class="health-metric-value" id="memoryUsed">-</span>
@@ -4805,7 +6232,7 @@ export class DashboardServer {
                 </div>
 
                 <div class="health-card" data-widget-id="health-connections">
-                    <div class="health-title">🔌 Connections</div>
+                    <h3 class="health-title"><span aria-hidden="true">🔌</span> Connections</h3>
                     <div class="health-metric">
                         <span class="health-metric-label">TCP:</span>
                         <span class="health-metric-value" id="tcpConnection">-</span>
@@ -4825,7 +6252,7 @@ export class DashboardServer {
                 </div>
 
                 <div class="health-card" data-widget-id="health-system-info">
-                    <div class="health-title">🖥️ System Info</div>
+                    <h3 class="health-title"><span aria-hidden="true">🖥️</span> System Info</h3>
                     <div class="health-metric">
                         <span class="health-metric-label">Platform:</span>
                         <span class="health-metric-value" id="systemPlatform">-</span>
@@ -4845,7 +6272,7 @@ export class DashboardServer {
                 </div>
 
                 <div class="health-card" data-widget-id="health-performance">
-                    <div class="health-title">📊 Task Performance</div>
+                    <h3 class="health-title"><span aria-hidden="true">📊</span> Task Performance</h3>
                     <div class="health-metric">
                         <span class="health-metric-label">Total Tasks:</span>
                         <span class="health-metric-value" id="healthTotalTasks">-</span>
@@ -4865,7 +6292,7 @@ export class DashboardServer {
                 </div>
 
                 <div class="health-card" data-widget-id="health-controls">
-                    <div class="health-title">⚙️ Daemon Controls</div>
+                    <h3 class="health-title"><span aria-hidden="true">⚙️</span> Daemon Controls</h3>
                     <div class="health-metric">
                         <span class="health-metric-label">Processing Status:</span>
                         <span class="health-metric-value" id="daemonProcessingStatus">-</span>
@@ -4874,38 +6301,38 @@ export class DashboardServer {
                         <span class="health-metric-label">Controls:</span>
                         <div style="display: flex; gap: 8px; margin-top: 8px;">
                             <button class="btn btn-warning btn-sm" id="pauseDaemonBtn" onclick="pauseDaemon()">
-                                <span>⏸️</span> Pause
+                                <span aria-hidden="true">⏸️</span> Pause
                             </button>
                             <button class="btn btn-success btn-sm" id="resumeDaemonBtn" onclick="resumeDaemon()" style="display: none;">
-                                <span>▶️</span> Resume
+                                <span aria-hidden="true">▶️</span> Resume
                             </button>
                             <button class="btn btn-danger btn-sm" onclick="restartDaemon()">
-                                <span>🔄</span> Restart
+                                <span aria-hidden="true">🔄</span> Restart
                             </button>
                         </div>
                     </div>
                 </div>
 
                 <div class="health-card" data-widget-id="health-alerts">
-                    <div class="health-title">⚠️ System Alerts</div>
+                    <h3 class="health-title"><span aria-hidden="true">⚠️</span> System Alerts</h3>
                     <div id="healthAlerts" class="health-alerts">
                         <div class="loading">Loading system alerts...</div>
                     </div>
                 </div>
             </div>
-        </div>
+        </section>
 
         <!-- Task History Tab -->
-        <div id="history-tab" class="tab-content">
+        <section id="history-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-history" tabindex="0" hidden>
             <div class="tasks-section">
                 <div class="tasks-header">
                     <h2>Task History & Audit Trail</h2>
                     <div class="form-actions">
                         <button class="btn btn-primary btn-sm" onclick="loadAuditHistory()">
-                            <span>🔄</span> Refresh
+                            <span aria-hidden="true">🔄</span> Refresh
                         </button>
                         <button class="btn btn-secondary btn-sm" onclick="loadAuditStatistics()">
-                            <span>📊</span> Statistics
+                            <span aria-hidden="true">📊</span> Statistics
                         </button>
                     </div>
                 </div>
@@ -4951,10 +6378,10 @@ export class DashboardServer {
                     </div>
                     <div class="filter-group">
                         <button class="btn btn-primary btn-sm" onclick="applyHistoryFilters()">
-                            <span>🔍</span> Apply Filters
+                            <span aria-hidden="true">🔍</span> Apply Filters
                         </button>
                         <button class="btn btn-secondary btn-sm" onclick="clearHistoryFilters()">
-                            <span>🗑️</span> Clear
+                            <span aria-hidden="true">🗑️</span> Clear
                         </button>
                     </div>
                 </div>
@@ -4970,18 +6397,18 @@ export class DashboardServer {
                 <!-- History List -->
                 <div id="auditHistoryList" class="loading">Loading audit history...</div>
             </div>
-        </div>
+        </section>
 
         <!-- Activity Log Tab -->
-        <div id="logs-tab" class="tab-content">
+        <section id="logs-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-logs" tabindex="0" hidden>
             <div class="tasks-section">
                 <div class="tasks-header">
                     <h2>Activity Log</h2>
                     <div class="form-actions">
                         <button class="btn btn-primary btn-sm" onclick="loadLogs()">
-                            <span>🔄</span> Refresh
+                            <span aria-hidden="true">🔄</span> Refresh
                         </button>
-                        <select id="logLimit">
+                        <select id="logLimit" aria-label="Log entries limit">
                             <option value="25">Last 25</option>
                             <option value="50" selected>Last 50</option>
                             <option value="100">Last 100</option>
@@ -4990,15 +6417,16 @@ export class DashboardServer {
                 </div>
                 <div id="logsList" class="loading">Loading activity log...</div>
             </div>
-        </div>
+        </section>
+        </main>
     </div>
 
     <!-- Task Details Modal -->
-    <div id="taskModal" class="modal">
-        <div class="modal-content">
+    <div id="taskModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="taskModalTitle" aria-describedby="modalTaskContent" aria-hidden="true">
+        <div class="modal-content" tabindex="-1">
             <div class="modal-header">
-                <h3 class="modal-title">Task Details</h3>
-                <button class="modal-close" onclick="closeTaskModal()">&times;</button>
+                <h3 class="modal-title" id="taskModalTitle">Task Details</h3>
+                <button class="modal-close" type="button" data-modal-close aria-label="Close task details" onclick="closeTaskModal()">&times;</button>
             </div>
             <div id="modalTaskContent">
                 <!-- Task details will be loaded here -->
@@ -5008,7 +6436,7 @@ export class DashboardServer {
 
     <script id="dashboardWidgetState" type="application/json">${widgetStateJson}</script>
     <script data-dashboard="true">
-        let refreshInterval;
+        let refreshInterval = null;
         let wsConnection;
         let currentTasks = [];
         let previousMetrics = null;
@@ -5027,6 +6455,51 @@ export class DashboardServer {
         const RECENT_ACTIVITY_REFRESH_MS = 30000;
         const RECENT_ACTIVITY_STATUS_VALUES = ["todo", "in-progress", "done", "failed", "cancelled"];
         const RECENT_ACTIVITY_PRIORITY_VALUES = ["high", "medium", "low"];
+        const RECENT_ACTIVITY_WIDGET_ID = "overview-recent-activity";
+        const WIDGET_NOTIFICATION_TYPES = [
+            { id: "task_created", label: "Task created" },
+            { id: "task_status_changed", label: "Status changed" },
+            { id: "task_priority_changed", label: "Priority changed" },
+            { id: "task_completed", label: "Completed" },
+            { id: "task_failed", label: "Failed" },
+            { id: "task_deleted", label: "Deleted" },
+        ];
+        const WIDGET_NOTIFICATION_PRESET_ALL = "all";
+        const WIDGET_NOTIFICATION_PRESET_NONE = "none";
+        const WIDGET_NOTIFICATION_PRESET_CUSTOM = "custom";
+        const WIDGET_NOTIFICATION_PULSE_MS = 2200;
+        const MY_TASKS_WIDGET_LIMIT = 8;
+        const MY_TASKS_STATUS_VALUES = ["todo", "in-progress", "done", "failed", "cancelled"];
+        const MY_TASKS_PRIORITY_VALUES = ["high", "medium", "low"];
+        const MY_TASKS_PRIORITY_RANK = { high: 3, medium: 2, low: 1 };
+        const AUTO_REFRESH_OPTIONS = {
+            off: { label: "Off", intervalMs: 0 },
+            "30s": { label: "Every 30 seconds", intervalMs: 30000 },
+            "1m": { label: "Every minute", intervalMs: 60000 },
+            "5m": { label: "Every 5 minutes", intervalMs: 300000 },
+        };
+        const AUTO_REFRESH_DEFAULT = "30s";
+        const AUTO_REFRESH_STORAGE_KEY = "dashboardAutoRefreshRate.v1";
+        const DASHBOARD_TAB_SEQUENCE = [
+            "overview",
+            "widgets",
+            "queue",
+            "tasks",
+            "create",
+            "history",
+            "health",
+            "logs",
+        ];
+        const DASHBOARD_GRID_BREAKPOINTS = {
+            mobileMax: 767,
+            tabletMax: 1024,
+        };
+        const DASHBOARD_GRID_RANGES = {
+            mobile: { min: 1, max: 1 },
+            tablet: { min: 2, max: 3 },
+            desktop: { min: 3, max: 4 },
+        };
+        let autoRefreshRate = AUTO_REFRESH_DEFAULT;
         const prefersReducedMotion = typeof window !== "undefined" && typeof window.matchMedia === "function"
             ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
             : false;
@@ -5039,38 +6512,161 @@ export class DashboardServer {
         let recentActivityInitialized = false;
         let recentActivityLastFetchedAt = 0;
         let recentActivityRequest = null;
+        let lastFocusedElement = null;
+        const MODAL_FOCUSABLE_SELECTOR =
+            "button, [href], input, select, textarea, [tabindex]:not([tabindex=\"-1\"])";
 
         // Tab Management
         function initTabs() {
-            const tabButtons = document.querySelectorAll('.tab');
-            const tabContents = document.querySelectorAll('.tab-content');
+            const tabButtons = Array.from(document.querySelectorAll(".tab"));
+            const tabContents = Array.from(document.querySelectorAll(".tab-content"));
 
-            tabButtons.forEach(button => {
-                button.addEventListener('click', () => {
-                    const tabName = button.dataset.tab;
-                    
-                    // Update button states
-                    tabButtons.forEach(btn => btn.classList.remove('active'));
-                    button.classList.add('active');
-                    
-                    // Update content visibility
-                    tabContents.forEach(content => {
-                        content.classList.remove('active');
-                        if (content.id === \`\${tabName}-tab\`) {
-                            content.classList.add('active');
-                            
-                            // Load tab-specific content
-                            if (tabName === "overview") loadRecentActivityWidget();
-                            if (tabName === "queue") loadQueueStatus();
-                            if (tabName === "tasks") loadTasks();
-                            if (tabName === "health") loadHealthDetails();
-                            if (tabName === "logs") loadLogs();
-                            if (tabName === "history") loadAuditHistory();
-                            if (tabName === "widgets") renderWidgetLibrary();
-                        }
-                    });
+            const syncTabState = (tabName, options) => {
+                if (!tabName) {
+                    return;
+                }
+                const shouldLoad = options?.load !== false;
+                tabButtons.forEach(button => {
+                    const isActive = button.dataset.tab === tabName;
+                    button.classList.toggle("active", isActive);
+                    button.setAttribute("aria-selected", isActive ? "true" : "false");
+                    button.setAttribute("tabindex", isActive ? "0" : "-1");
+                });
+                tabContents.forEach(content => {
+                    const isActive = content.id === tabName + "-tab";
+                    content.classList.toggle("active", isActive);
+                    if (content instanceof HTMLElement) {
+                        content.hidden = !isActive;
+                    }
+                    content.setAttribute("aria-hidden", isActive ? "false" : "true");
+                });
+                if (!shouldLoad) {
+                    return;
+                }
+                if (tabName === "overview") loadRecentActivityWidget();
+                if (tabName === "queue") loadQueueStatus();
+                if (tabName === "tasks") loadTasks();
+                if (tabName === "health") loadHealthDetails();
+                if (tabName === "logs") loadLogs();
+                if (tabName === "history") loadAuditHistory();
+                if (tabName === "widgets") renderWidgetLibrary();
+                applyResponsiveDashboardGrid();
+            };
+
+            tabButtons.forEach((button, index) => {
+                button.addEventListener("click", () => {
+                    syncTabState(button.dataset.tab, { load: true });
+                });
+                button.addEventListener("keydown", (event) => {
+                    const key = event.key;
+                    if (key !== "ArrowRight" && key !== "ArrowLeft" && key !== "Home" && key !== "End") {
+                        return;
+                    }
+                    event.preventDefault();
+                    if (tabButtons.length === 0) {
+                        return;
+                    }
+                    let nextIndex = index;
+                    if (key === "ArrowRight") {
+                        nextIndex = (index + 1) % tabButtons.length;
+                    } else if (key === "ArrowLeft") {
+                        nextIndex = (index - 1 + tabButtons.length) % tabButtons.length;
+                    } else if (key === "Home") {
+                        nextIndex = 0;
+                    } else if (key === "End") {
+                        nextIndex = tabButtons.length - 1;
+                    }
+                    const nextButton = tabButtons[nextIndex];
+                    nextButton.focus();
+                    nextButton.click();
                 });
             });
+
+            const initialActive = tabButtons.find(button => button.classList.contains("active"));
+            const initialTabName = initialActive?.dataset.tab || tabButtons[0]?.dataset.tab;
+            syncTabState(initialTabName, { load: false });
+        }
+
+        function isEditableTarget(target) {
+            if (!(target instanceof HTMLElement)) {
+                return false;
+            }
+            if (target.isContentEditable) {
+                return true;
+            }
+            const tagName = target.tagName;
+            return tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
+        }
+
+        function getActiveTabName() {
+            const activeButton = document.querySelector(".tab.active");
+            if (activeButton instanceof HTMLElement && activeButton.dataset.tab) {
+                return activeButton.dataset.tab;
+            }
+            const activeContent = document.querySelector(".tab-content.active");
+            if (activeContent instanceof HTMLElement && activeContent.id.endsWith("-tab")) {
+                return activeContent.id.replace("-tab", "");
+            }
+            return null;
+        }
+
+        function activateTab(tabName, options) {
+            const tabButton = document.querySelector("[data-tab=\"" + tabName + "\"]");
+            if (!(tabButton instanceof HTMLElement)) {
+                return false;
+            }
+            tabButton.click();
+            if (options?.focus === true && typeof tabButton.focus === "function") {
+                tabButton.focus({ preventScroll: true });
+            }
+            return true;
+        }
+
+        function focusWidgetLibrarySearch() {
+            activateTab("widgets");
+            const searchInput = document.getElementById("widgetLibrarySearch");
+            if (searchInput instanceof HTMLInputElement) {
+                searchInput.focus({ preventScroll: true });
+                searchInput.select();
+            }
+        }
+
+        function refreshActiveTab() {
+            const activeTab = getActiveTabName();
+            if (!activeTab) {
+                requestMetricsRefresh();
+                return;
+            }
+            if (activeTab === "overview") {
+                requestMetricsRefresh();
+                loadRecentActivityWidget();
+                return;
+            }
+            if (activeTab === "queue") {
+                loadQueueStatus();
+                return;
+            }
+            if (activeTab === "tasks") {
+                loadTasks();
+                return;
+            }
+            if (activeTab === "health") {
+                loadHealthDetails();
+                return;
+            }
+            if (activeTab === "logs") {
+                loadLogs();
+                return;
+            }
+            if (activeTab === "history") {
+                loadAuditHistory();
+                return;
+            }
+            if (activeTab === "widgets") {
+                renderWidgetLibrary();
+                return;
+            }
+            requestMetricsRefresh();
         }
 
         function setTextIfPresent(id, value) {
@@ -5184,6 +6780,60 @@ export class DashboardServer {
             });
         }
 
+        function initMyTasksWidgetActions() {
+            document.addEventListener("click", (event) => {
+                const target = event.target;
+                if (!(target instanceof HTMLElement)) {
+                    return;
+                }
+                if (widgetDragState && widgetDragState.dragging) {
+                    return;
+                }
+                const actionButton = target.closest("[data-my-task-action]");
+                if (!(actionButton instanceof HTMLButtonElement)) {
+                    return;
+                }
+                const action = actionButton.dataset.myTaskAction;
+                const taskId = actionButton.dataset.taskId;
+                if (!action || !taskId) {
+                    return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                if (action === "complete") {
+                    const status = actionButton.dataset.taskStatus;
+                    if (status === "done" || status === "cancelled" || actionButton.disabled) {
+                        return;
+                    }
+                    void updateTaskStatus(taskId, "done");
+                    return;
+                }
+                if (action === "priority") {
+                    const currentPriority = normalizeMyTaskPriority(actionButton.dataset.taskPriority);
+                    const promptValue = prompt(
+                        "Set priority (high, medium, low):",
+                        currentPriority,
+                    );
+                    if (!promptValue) {
+                        return;
+                    }
+                    const nextPriority = promptValue.trim().toLowerCase();
+                    if (!MY_TASKS_PRIORITY_VALUES.includes(nextPriority)) {
+                        showError("Priority must be high, medium, or low.");
+                        return;
+                    }
+                    if (nextPriority === currentPriority) {
+                        return;
+                    }
+                    void updateTaskPriority(taskId, nextPriority);
+                    return;
+                }
+                if (action === "view") {
+                    viewTaskDetails(taskId);
+                }
+            });
+        }
+
         function applyMetricsUpdate(payload) {
             if (!payload || typeof payload !== "object") {
                 return;
@@ -5218,6 +6868,7 @@ export class DashboardServer {
             const healthIndicator = document.getElementById("healthIndicator");
             if (healthIndicator instanceof HTMLElement) {
                 healthIndicator.className = "health-indicator " + healthStatusValue;
+                healthIndicator.setAttribute("aria-label", "Daemon health: " + healthStatusLabel);
             }
             const healthStatus = document.getElementById("healthStatus");
             if (healthStatus instanceof HTMLElement) {
@@ -5254,6 +6905,7 @@ export class DashboardServer {
 
             updatePriorityBreakdownWidget(byPriority);
             updateStatusBreakdownWidget(tasks);
+            renderMyTasksWidget(recentTasks);
 
             setTextIfPresent("healthStatusDetailed", healthStatusValue.toUpperCase());
             setTextIfPresent("tcpConnection", health.tcpConnected ? "Connected" : "Disconnected");
@@ -5353,6 +7005,134 @@ export class DashboardServer {
                 rows.hidden = isEmpty;
                 rows.setAttribute("aria-hidden", isEmpty ? "true" : "false");
             }
+        }
+
+        function normalizeMyTaskStatus(value) {
+            return typeof value === "string" && MY_TASKS_STATUS_VALUES.includes(value)
+                ? value
+                : "todo";
+        }
+
+        function normalizeMyTaskPriority(value) {
+            return typeof value === "string" && MY_TASKS_PRIORITY_VALUES.includes(value)
+                ? value
+                : "medium";
+        }
+
+        function getMyTaskSortTime(task) {
+            const timestamp = task?.updatedAt ?? task?.createdAt;
+            const date = timestamp ? new Date(timestamp) : null;
+            return date instanceof Date && !Number.isNaN(date.getTime()) ? date.getTime() : 0;
+        }
+
+        function buildMyTaskItem(task) {
+            const taskId = typeof task?.id === "string" ? task.id : "";
+            if (!taskId) {
+                return "";
+            }
+            const title = typeof task?.title === "string" && task.title.trim().length > 0
+                ? task.title
+                : "Untitled task";
+            const status = normalizeMyTaskStatus(task?.status);
+            const priority = normalizeMyTaskPriority(task?.priority);
+            const statusLabel = status.replace("-", " ");
+            const assignedTo = typeof task?.assignedTo === "string" && task.assignedTo.trim().length > 0
+                ? task.assignedTo
+                : "Unassigned";
+            const updatedAt = getMyTaskSortTime(task);
+            const updatedLabel = updatedAt > 0 ? formatRelativeTime(new Date(updatedAt)) : "Unknown time";
+            const disableComplete = status === "done" || status === "cancelled";
+            const completeLabel = status === "done"
+                ? "Completed"
+                : status === "cancelled"
+                    ? "Cancelled"
+                    : "Complete";
+            const safeTaskId = escapeHTML(taskId);
+            const safeTitle = escapeHTML(title);
+            const safeStatus = escapeHTML(statusLabel);
+            const safePriority = escapeHTML(priority);
+            const safeAssignee = escapeHTML(assignedTo);
+            const safeUpdated = escapeHTML(updatedLabel);
+            const completeAttributes = disableComplete ? " disabled aria-disabled=\"true\"" : "";
+
+            return (
+                "<div class=\"my-task-item\" data-task-id=\"" +
+                safeTaskId +
+                "\">" +
+                "<div class=\"my-task-main\">" +
+                "<div class=\"my-task-title\">" +
+                safeTitle +
+                "</div>" +
+                "<div class=\"my-task-meta\">" +
+                "<span class=\"status " +
+                escapeHTML(status) +
+                "\">" +
+                safeStatus +
+                "</span>" +
+                "<span class=\"priority " +
+                safePriority +
+                "\">" +
+                safePriority +
+                "</span>" +
+                "<span class=\"my-task-assignee\">Assignee: " +
+                safeAssignee +
+                "</span>" +
+                "<span class=\"my-task-updated\">Updated " +
+                safeUpdated +
+                "</span>" +
+                "</div>" +
+                "</div>" +
+                "<div class=\"my-task-actions\">" +
+                "<button class=\"my-task-action-btn complete\" type=\"button\" data-my-task-action=\"complete\" data-task-id=\"" +
+                safeTaskId +
+                "\" data-task-status=\"" +
+                escapeHTML(status) +
+                "\"" +
+                completeAttributes +
+                ">" +
+                completeLabel +
+                "</button>" +
+                "<button class=\"my-task-action-btn priority\" type=\"button\" data-my-task-action=\"priority\" data-task-id=\"" +
+                safeTaskId +
+                "\" data-task-priority=\"" +
+                safePriority +
+                "\">" +
+                "Priority" +
+                "</button>" +
+                "<button class=\"my-task-action-btn view\" type=\"button\" data-my-task-action=\"view\" data-task-id=\"" +
+                safeTaskId +
+                "\">" +
+                "Details" +
+                "</button>" +
+                "</div>" +
+                "</div>"
+            );
+        }
+
+        function renderMyTasksWidget(tasks) {
+            const list = document.getElementById("myTasksList");
+            if (!(list instanceof HTMLElement)) {
+                return;
+            }
+            const normalized = Array.isArray(tasks)
+                ? tasks.filter(task => task && typeof task.id === "string")
+                : [];
+            const ranked = normalized.slice().sort((a, b) => {
+                const priorityA = MY_TASKS_PRIORITY_RANK[normalizeMyTaskPriority(a?.priority)] ?? 0;
+                const priorityB = MY_TASKS_PRIORITY_RANK[normalizeMyTaskPriority(b?.priority)] ?? 0;
+                if (priorityB !== priorityA) {
+                    return priorityB - priorityA;
+                }
+                return getMyTaskSortTime(b) - getMyTaskSortTime(a);
+            });
+            const topTasks = ranked.slice(0, MY_TASKS_WIDGET_LIMIT);
+            if (topTasks.length === 0) {
+                list.innerHTML = "<div class=\"my-tasks-empty\">No tasks yet. Create one to get started.</div>";
+                list.setAttribute("aria-busy", "false");
+                return;
+            }
+            list.innerHTML = topTasks.map(buildMyTaskItem).filter(Boolean).join("");
+            list.setAttribute("aria-busy", "false");
         }
 
         function updatePriorityBreakdownBar(counts, total) {
@@ -5529,9 +7309,9 @@ export class DashboardServer {
                             <div class="task-meta">
                                 <span class="status \${task.status}">\${task.status.replace('-', ' ')}</span>
                                 <span class="priority \${task.priority}">\${task.priority}</span>
-                                <span>📅 \${createdDate.toLocaleDateString()}</span>
-                                <span>👤 \${task.assignedTo || 'Unassigned'}</span>
-                                <span>🔄 \${formatRelativeTime(updatedDate)}</span>
+                                <span><span aria-hidden="true">📅</span><span class="sr-only">Created: </span> \${createdDate.toLocaleDateString()}</span>
+                                <span><span aria-hidden="true">👤</span><span class="sr-only">Assignee: </span> \${task.assignedTo || "Unassigned"}</span>
+                                <span><span aria-hidden="true">🔄</span><span class="sr-only">Updated: </span> \${formatRelativeTime(updatedDate)}</span>
                             </div>
                         </div>
                         <div class="task-actions">
@@ -5581,6 +7361,28 @@ export class DashboardServer {
             }
         }
 
+        async function updateTaskPriority(taskId, priority) {
+            try {
+                const response = await fetch("/api/tasks/update", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ id: taskId, priority }),
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    showSuccess("Task priority updated successfully!");
+                    await loadTasks();
+                    await requestMetricsRefresh();
+                } else {
+                    showError("Failed to update task priority: " + (result.error || "Unknown error"));
+                }
+            } catch (error) {
+                const message = error instanceof Error ? error.message : "Unknown error";
+                showError("Failed to update task priority: " + message);
+            }
+        }
+
         async function deleteTask(taskId) {
             const task = currentTasks.find(t => t.id === taskId);
             if (!task) return;
@@ -5605,12 +7407,71 @@ export class DashboardServer {
             }
         }
 
+        function getTaskModalElement() {
+            const modal = document.getElementById("taskModal");
+            return modal instanceof HTMLElement ? modal : null;
+        }
+
+        function getTaskModalFocusableElements(modal) {
+            return Array.from(modal.querySelectorAll(MODAL_FOCUSABLE_SELECTOR))
+                .filter(element => element instanceof HTMLElement && !element.hasAttribute("disabled"));
+        }
+
+        function focusTaskModal(modal) {
+            const closeButton = modal.querySelector("[data-modal-close]");
+            if (closeButton instanceof HTMLElement) {
+                closeButton.focus();
+                return;
+            }
+            const content = modal.querySelector(".modal-content");
+            if (content instanceof HTMLElement) {
+                content.focus();
+            }
+        }
+
+        function trapTaskModalFocus(event) {
+            if (event.key !== "Tab") {
+                return;
+            }
+            const modal = getTaskModalElement();
+            if (!modal || !modal.classList.contains("show")) {
+                return;
+            }
+            const focusable = getTaskModalFocusableElements(modal);
+            if (focusable.length === 0) {
+                event.preventDefault();
+                return;
+            }
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            const active = document.activeElement;
+            if (event.shiftKey) {
+                if (active === first || !modal.contains(active)) {
+                    event.preventDefault();
+                    last.focus();
+                }
+                return;
+            }
+            if (active === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        }
+
         function viewTaskDetails(taskId) {
             const task = currentTasks.find(t => t.id === taskId);
             if (!task) return;
             
-            const modal = document.getElementById('taskModal');
-            const content = document.getElementById('modalTaskContent');
+            const modal = getTaskModalElement();
+            const content = document.getElementById("modalTaskContent");
+            const title = document.getElementById("taskModalTitle");
+            if (!modal || !(content instanceof HTMLElement)) {
+                return;
+            }
+            lastFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            if (title instanceof HTMLElement) {
+                title.textContent = "Task Details: " + task.title;
+            }
             
             content.innerHTML = \`
                 <div class="task-details">
@@ -5631,11 +7492,22 @@ export class DashboardServer {
                 </div>
             \`;
             
-            modal.classList.add('show');
+            modal.classList.add("show");
+            modal.setAttribute("aria-hidden", "false");
+            focusTaskModal(modal);
         }
 
         function closeTaskModal() {
-            document.getElementById('taskModal').classList.remove('show');
+            const modal = getTaskModalElement();
+            if (!modal) {
+                return;
+            }
+            modal.classList.remove("show");
+            modal.setAttribute("aria-hidden", "true");
+            if (lastFocusedElement && typeof lastFocusedElement.focus === "function") {
+                lastFocusedElement.focus();
+            }
+            lastFocusedElement = null;
         }
 
         // Bulk Actions Functions
@@ -5643,12 +7515,20 @@ export class DashboardServer {
         let bulkActionsVisible = false;
 
         function toggleBulkActions() {
-            bulkActionsVisible = !bulkActionsVisible;
-            const panel = document.getElementById('bulkActionsPanel');
-            panel.style.display = bulkActionsVisible ? 'block' : 'none';
+            const nextVisible = !bulkActionsVisible;
+            bulkActionsVisible = nextVisible;
+            const panel = document.getElementById("bulkActionsPanel");
+            if (panel instanceof HTMLElement) {
+                panel.hidden = !nextVisible;
+                panel.setAttribute("aria-hidden", nextVisible ? "false" : "true");
+            }
+            const toggleButton = document.getElementById("toggleBulkActionsBtn");
+            if (toggleButton instanceof HTMLElement) {
+                toggleButton.setAttribute("aria-expanded", nextVisible ? "true" : "false");
+            }
             
             // Add checkboxes to tasks if showing bulk actions
-            if (bulkActionsVisible) {
+            if (nextVisible) {
                 addTaskCheckboxes();
             } else {
                 removeTaskCheckboxes();
@@ -5658,130 +7538,192 @@ export class DashboardServer {
         }
 
         function addTaskCheckboxes() {
-            const taskItems = document.querySelectorAll('.task-item');
+            const taskItems = document.querySelectorAll(".task-item");
             taskItems.forEach(item => {
+                if (!(item instanceof HTMLElement)) {
+                    return;
+                }
                 const taskId = item.dataset.taskId;
-                if (!item.querySelector('.task-checkbox')) {
-                    const checkbox = document.createElement('input');
-                    checkbox.type = 'checkbox';
-                    checkbox.className = 'task-checkbox';
+                if (!taskId) {
+                    return;
+                }
+                if (!item.querySelector(".task-checkbox")) {
+                    const checkbox = document.createElement("input");
+                    checkbox.type = "checkbox";
+                    checkbox.className = "task-checkbox";
                     checkbox.dataset.taskId = taskId;
-                    checkbox.addEventListener('change', (e) => {
-                        if (e.target.checked) {
+                    const titleElement = item.querySelector(".task-title");
+                    const taskTitle = titleElement instanceof HTMLElement ? titleElement.textContent?.trim() : "";
+                    const label = taskTitle ? "Select task " + taskTitle : "Select task " + taskId;
+                    checkbox.setAttribute("aria-label", label);
+                    checkbox.setAttribute("title", label);
+                    checkbox.addEventListener("change", (event) => {
+                        const target = event.target;
+                        if (!(target instanceof HTMLInputElement)) {
+                            return;
+                        }
+                        if (target.checked) {
                             selectedTasks.add(taskId);
-                            item.classList.add('selected');
+                            item.classList.add("selected");
                         } else {
                             selectedTasks.delete(taskId);
-                            item.classList.remove('selected');
+                            item.classList.remove("selected");
                         }
                         updateBulkActionsUI();
                     });
                     
                     // Insert checkbox at the beginning of task-header
-                    const header = item.querySelector('.task-header');
-                    header.insertBefore(checkbox, header.firstChild);
+                    const header = item.querySelector(".task-header");
+                    if (header instanceof HTMLElement) {
+                        header.insertBefore(checkbox, header.firstChild);
+                    }
                 }
             });
         }
 
         function removeTaskCheckboxes() {
-            const checkboxes = document.querySelectorAll('.task-checkbox');
-            checkboxes.forEach(cb => cb.remove());
+            const checkboxes = document.querySelectorAll(".task-checkbox");
+            checkboxes.forEach(checkbox => checkbox.remove());
             
-            const taskItems = document.querySelectorAll('.task-item');
-            taskItems.forEach(item => item.classList.remove('selected'));
+            const taskItems = document.querySelectorAll(".task-item");
+            taskItems.forEach(item => {
+                if (item instanceof HTMLElement) {
+                    item.classList.remove("selected");
+                }
+            });
             
             selectedTasks.clear();
         }
 
         function selectAllTasks() {
-            const checkboxes = document.querySelectorAll('.task-checkbox');
-            checkboxes.forEach(cb => {
-                cb.checked = true;
-                const taskId = cb.dataset.taskId;
-                selectedTasks.add(taskId);
-                cb.closest('.task-item').classList.add('selected');
+            const checkboxes = document.querySelectorAll(".task-checkbox");
+            checkboxes.forEach(checkbox => {
+                if (!(checkbox instanceof HTMLInputElement)) {
+                    return;
+                }
+                checkbox.checked = true;
+                const taskId = checkbox.dataset.taskId;
+                if (taskId) {
+                    selectedTasks.add(taskId);
+                }
+                const taskItem = checkbox.closest(".task-item");
+                if (taskItem instanceof HTMLElement) {
+                    taskItem.classList.add("selected");
+                }
             });
             updateBulkActionsUI();
         }
 
         function clearSelection() {
-            const checkboxes = document.querySelectorAll('.task-checkbox');
-            checkboxes.forEach(cb => {
-                cb.checked = false;
-                cb.closest('.task-item').classList.remove('selected');
+            const checkboxes = document.querySelectorAll(".task-checkbox");
+            checkboxes.forEach(checkbox => {
+                if (!(checkbox instanceof HTMLInputElement)) {
+                    return;
+                }
+                checkbox.checked = false;
+                const taskItem = checkbox.closest(".task-item");
+                if (taskItem instanceof HTMLElement) {
+                    taskItem.classList.remove("selected");
+                }
             });
             selectedTasks.clear();
             updateBulkActionsUI();
         }
 
         function updateBulkActionsUI() {
-            document.getElementById('selectedCount').textContent = selectedTasks.size;
+            const selectedCount = document.getElementById("selectedCount");
+            if (selectedCount instanceof HTMLElement) {
+                selectedCount.textContent = String(selectedTasks.size);
+            }
             
             // Enable/disable bulk action buttons based on selection
-            const buttons = document.querySelectorAll('.bulk-actions-buttons button');
-            buttons.forEach(btn => {
-                if (btn.textContent.includes('Select All') || btn.textContent.includes('Clear Selection')) {
+            const buttons = document.querySelectorAll(".bulk-actions-buttons button");
+            buttons.forEach(button => {
+                if (!(button instanceof HTMLButtonElement)) {
+                    return;
+                }
+                const label = button.textContent || "";
+                if (label.includes("Select All") || label.includes("Clear Selection")) {
                     return; // Always enable these
                 }
-                btn.disabled = selectedTasks.size === 0;
+                const isDisabled = selectedTasks.size === 0;
+                button.disabled = isDisabled;
+                button.setAttribute("aria-disabled", isDisabled ? "true" : "false");
             });
+            const bulkPrioritySelect = document.getElementById("bulkPrioritySelect");
+            if (bulkPrioritySelect instanceof HTMLSelectElement) {
+                const isDisabled = selectedTasks.size === 0;
+                bulkPrioritySelect.disabled = isDisabled;
+                bulkPrioritySelect.setAttribute("aria-disabled", isDisabled ? "true" : "false");
+            }
         }
 
         async function bulkSetPriority() {
-            if (selectedTasks.size === 0) return;
+            if (selectedTasks.size === 0) {
+                return;
+            }
             
-            const priority = document.getElementById('bulkPrioritySelect').value;
+            const bulkPrioritySelect = document.getElementById("bulkPrioritySelect");
+            if (!(bulkPrioritySelect instanceof HTMLSelectElement)) {
+                return;
+            }
+            const priority = bulkPrioritySelect.value;
             if (!priority) {
-                showError('Please select a priority level');
+                showError("Please select a priority level");
                 return;
             }
             
-            if (!confirm('Set priority to ' + priority + ' for ' + selectedTasks.size + ' selected tasks?')) {
+            if (!confirm("Set priority to " + priority + " for " + selectedTasks.size + " selected tasks?")) {
                 return;
             }
             
-            await performBulkAction('set_priority', { priority });
+            await performBulkAction("set_priority", { priority });
         }
 
         async function bulkResume() {
-            if (selectedTasks.size === 0) return;
-            
-            if (!confirm('Resume ' + selectedTasks.size + ' selected tasks?')) {
+            if (selectedTasks.size === 0) {
                 return;
             }
             
-            await performBulkAction('resume');
+            if (!confirm("Resume " + selectedTasks.size + " selected tasks?")) {
+                return;
+            }
+            
+            await performBulkAction("resume");
         }
 
         async function bulkCancel() {
-            if (selectedTasks.size === 0) return;
-            
-            if (!confirm('Cancel ' + selectedTasks.size + ' selected tasks?')) {
+            if (selectedTasks.size === 0) {
                 return;
             }
             
-            await performBulkAction('cancel');
+            if (!confirm("Cancel " + selectedTasks.size + " selected tasks?")) {
+                return;
+            }
+            
+            await performBulkAction("cancel");
         }
 
         async function bulkDelete() {
-            if (selectedTasks.size === 0) return;
-            
-            if (!confirm('PERMANENTLY delete ' + selectedTasks.size + ' selected tasks? This action cannot be undone.')) {
+            if (selectedTasks.size === 0) {
                 return;
             }
             
-            await performBulkAction('delete');
+            if (!confirm("PERMANENTLY delete " + selectedTasks.size + " selected tasks? This action cannot be undone.")) {
+                return;
+            }
+            
+            await performBulkAction("delete");
         }
 
         async function performBulkAction(action, data = null) {
             try {
-                showInfo('Performing ' + action + ' on ' + selectedTasks.size + ' tasks...');
+                showInfo("Performing " + action + " on " + selectedTasks.size + " tasks...");
                 
                 const taskIds = Array.from(selectedTasks);
-                const response = await fetch('/api/tasks/bulk-action', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                const response = await fetch("/api/tasks/bulk-action", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         action,
                         taskIds,
@@ -5792,11 +7734,11 @@ export class DashboardServer {
                 const result = await response.json();
                 
                 if (result.successful > 0) {
-                    showSuccess(action + ' completed successfully for ' + result.successful + ' tasks');
+                    showSuccess(action + " completed successfully for " + result.successful + " tasks");
                 }
                 
                 if (result.failed > 0) {
-                    showError(action + ' failed for ' + result.failed + ' tasks');
+                    showError(action + " failed for " + result.failed + " tasks");
                 }
                 
                 // Clear selection and refresh
@@ -5805,7 +7747,8 @@ export class DashboardServer {
                 await requestMetricsRefresh();
                 
             } catch (error) {
-                showError('Failed to perform bulk action: ' + error.message);
+                const message = error instanceof Error ? error.message : "Unknown error";
+                showError("Failed to perform bulk action: " + message);
             }
         }
 
@@ -5943,8 +7886,8 @@ export class DashboardServer {
                             <div class="task-meta">
                                 <span class="status \${task.status}">\${task.status.replace('-', ' ')}</span>
                                 <span class="priority \${priority}">\${priority}</span>
-                                <span>⏱️ \${formatRelativeTime(createdDate)}</span>
-                                <span>🔄 Wait time: \${formatUptime(waitTime / 1000)}</span>
+                                <span><span aria-hidden="true">⏱️</span><span class="sr-only">Queued: </span> \${formatRelativeTime(createdDate)}</span>
+                                <span><span aria-hidden="true">🔄</span><span class="sr-only">Wait time: </span> \${formatUptime(waitTime / 1000)}</span>
                             </div>
                         </div>
                         <div class="task-actions">
@@ -5973,7 +7916,7 @@ export class DashboardServer {
                             <div class="task-meta">
                                 <span class="status \${task.status}">\${task.status}</span>
                                 <span class="priority \${task.priority}">\${task.priority}</span>
-                                <span>🕒 \${new Date(task.updatedAt).toLocaleString()}</span>
+                                <span><span aria-hidden="true">🕒</span><span class="sr-only">Last update: </span> \${new Date(task.updatedAt).toLocaleString()}</span>
                             </div>
                         </div>
                         <div class="task-actions">
@@ -6164,11 +8107,39 @@ export class DashboardServer {
             );
         }
 
+        function shouldShowRecentActivityNotifications() {
+            const preference = getWidgetNotificationPreference(RECENT_ACTIVITY_WIDGET_ID);
+            if (!preference.enabled) {
+                return false;
+            }
+            const normalizedTypes = normalizeWidgetNotificationTypes(preference.types);
+            return WIDGET_NOTIFICATION_TYPES.some(type => normalizedTypes[type.id]);
+        }
+
+        function filterRecentActivityByNotifications(logs) {
+            const preference = getWidgetNotificationPreference(RECENT_ACTIVITY_WIDGET_ID);
+            if (!preference.enabled) {
+                return [];
+            }
+            return logs.filter((log) => {
+                const eventType = log?.eventType || log?.data?.eventType;
+                if (!eventType || typeof eventType !== "string") {
+                    return true;
+                }
+                return isWidgetNotificationTypeEnabled(RECENT_ACTIVITY_WIDGET_ID, eventType);
+            });
+        }
+
         function renderRecentActivityList(list, logs) {
             if (!(list instanceof HTMLElement)) {
                 return;
             }
-            const activity = Array.isArray(logs) ? logs.slice(0, RECENT_ACTIVITY_LIMIT) : [];
+            if (!shouldShowRecentActivityNotifications()) {
+                list.innerHTML = "<div class=\"activity-widget-empty\">Notifications muted for this widget.</div>";
+                return;
+            }
+            const rawActivity = Array.isArray(logs) ? logs.slice(0, RECENT_ACTIVITY_LIMIT) : [];
+            const activity = filterRecentActivityByNotifications(rawActivity);
             if (activity.length === 0) {
                 renderRecentActivityEmpty(list);
                 return;
@@ -6238,8 +8209,8 @@ export class DashboardServer {
                         <div class="task-title">\${log.message}</div>
                         <div class="task-meta">
                             <span class="status \${log.level}">\${log.level}</span>
-                            <span>🕒 \${new Date(log.timestamp).toLocaleString()}</span>
-                            <span>🆔 \${log.data.taskId}</span>
+                            <span><span aria-hidden="true">🕒</span><span class="sr-only">Timestamp: </span> \${new Date(log.timestamp).toLocaleString()}</span>
+                            <span><span aria-hidden="true">🆔</span><span class="sr-only">Task ID: </span> \${log.data.taskId}</span>
                         </div>
                     </div>
                 \`).join('');
@@ -6248,6 +8219,70 @@ export class DashboardServer {
                 console.error('Error loading logs:', error);
                 showError('Failed to load activity log');
             }
+        }
+
+        function ensureWidgetNotificationIndicator(widget) {
+            if (!(widget instanceof HTMLElement)) {
+                return null;
+            }
+            const existing = widget.querySelector(".widget-notification-indicator");
+            if (existing instanceof HTMLElement) {
+                return existing;
+            }
+            const indicator = document.createElement("div");
+            indicator.className = "widget-notification-indicator";
+            indicator.setAttribute("aria-hidden", "true");
+            widget.appendChild(indicator);
+            return indicator;
+        }
+
+        function getNotificationTypeLabel(typeId) {
+            const match = WIDGET_NOTIFICATION_TYPES.find(type => type.id === typeId);
+            return match ? match.label : "Update";
+        }
+
+        function triggerWidgetNotification(widgetId, typeId) {
+            const widget = getWidgetById(widgetId);
+            if (!(widget instanceof HTMLElement)) {
+                return;
+            }
+            const indicator = ensureWidgetNotificationIndicator(widget);
+            if (!(indicator instanceof HTMLElement)) {
+                return;
+            }
+            indicator.textContent = getNotificationTypeLabel(typeId);
+            indicator.classList.add("is-active");
+            const previousTimeout = widgetNotificationTimeouts[widgetId];
+            if (previousTimeout) {
+                clearTimeout(previousTimeout);
+            }
+            const timeoutId = window.setTimeout(() => {
+                indicator.classList.remove("is-active");
+            }, WIDGET_NOTIFICATION_PULSE_MS);
+            widgetNotificationTimeouts = { ...widgetNotificationTimeouts, [widgetId]: timeoutId };
+        }
+
+        function getWidgetNotificationEligibleIds(typeId) {
+            if (!typeId || typeof typeId !== "string") {
+                return [];
+            }
+            const hiddenSet = new Set(loadHiddenWidgetIds());
+            return getAllWidgets()
+                .map(widget => widget.dataset.widgetId)
+                .filter(widgetId => Boolean(widgetId))
+                .filter(widgetId => !hiddenSet.has(widgetId))
+                .filter(widgetId => isWidgetNotificationTypeEnabled(widgetId, typeId));
+        }
+
+        function handleWidgetNotificationEvent(typeId) {
+            const eligibleWidgetIds = getWidgetNotificationEligibleIds(typeId);
+            if (eligibleWidgetIds.length === 0) {
+                return false;
+            }
+            eligibleWidgetIds.forEach(widgetId => {
+                triggerWidgetNotification(widgetId, typeId);
+            });
+            return true;
         }
 
         // WebSocket Connection
@@ -6320,21 +8355,24 @@ export class DashboardServer {
                             await requestMetricsRefresh();
                             await loadRecentActivityWidget({ force: true });
                             
-                            let notificationType = 'info';
-                            let notificationMessage = 'Task ' + message.type.replace('_', ' ');
+                            const shouldNotify = handleWidgetNotificationEvent(message.type);
+                            let notificationType = "info";
+                            let notificationMessage = "Task " + message.type.replace("_", " ");
                             
                             if (message.type === "task_created") {
-                                notificationType = 'success';
-                                notificationMessage = 'New task created: ' + (message.data.title || 'Unknown');
+                                notificationType = "success";
+                                notificationMessage = "New task created: " + (message.data.title || "Unknown");
                             } else if (message.type === "task_status_changed") {
-                                notificationType = 'info';
-                                notificationMessage = 'Task "' + (message.data.task?.title || 'Unknown') + '" status changed to ' + message.data.newStatus;
+                                notificationType = "info";
+                                notificationMessage = "Task \"" + (message.data.task?.title || "Unknown") + "\" status changed to " + message.data.newStatus;
                             } else if (message.type === "task_deleted") {
-                                notificationType = 'warning';
-                                notificationMessage = 'Task deleted';
+                                notificationType = "warning";
+                                notificationMessage = "Task deleted";
                             }
-                            
-                            showNotification(notificationMessage, notificationType);
+
+                            if (shouldNotify) {
+                                showNotification(notificationMessage, notificationType);
+                            }
                         }
                     } catch (error) {
                         console.error("Error processing WebSocket message:", error);
@@ -6416,11 +8454,57 @@ export class DashboardServer {
                 .replace(/'/g, "&#39;");
         }
 
+        function getToastContainer() {
+            const existing = document.getElementById("toastContainer");
+            if (existing instanceof HTMLElement) {
+                return existing;
+            }
+            const container = document.createElement("div");
+            container.id = "toastContainer";
+            container.className = "toast-container";
+            container.setAttribute("role", "status");
+            container.setAttribute("aria-live", "polite");
+            container.setAttribute("aria-atomic", "true");
+            document.body.appendChild(container);
+            return container;
+        }
+
+        function showToast(message, options) {
+            if (!message) {
+                return;
+            }
+            const container = getToastContainer();
+            const toast = document.createElement("div");
+            const type = options?.type || "info";
+            toast.className = "toast toast-" + type;
+            toast.textContent = message;
+            container.appendChild(toast);
+            window.requestAnimationFrame(() => {
+                toast.classList.add("is-visible");
+            });
+            const durationMs = typeof options?.durationMs === "number" ? options.durationMs : 2200;
+            window.setTimeout(() => {
+                toast.classList.remove("is-visible");
+                window.setTimeout(() => {
+                    if (toast.parentNode) {
+                        toast.parentNode.removeChild(toast);
+                    }
+                }, 220);
+            }, durationMs);
+        }
+
         function showMessage(message, type) {
-            const messageDiv = document.createElement('div');
+            const messageDiv = document.createElement("div");
             messageDiv.className = type;
             messageDiv.textContent = message;
-            document.querySelector('.container').insertBefore(messageDiv, document.querySelector('.container').firstChild);
+            messageDiv.setAttribute("role", "status");
+            messageDiv.setAttribute("aria-live", "polite");
+            messageDiv.setAttribute("aria-atomic", "true");
+            const container = document.querySelector(".container");
+            if (!(container instanceof HTMLElement)) {
+                return;
+            }
+            container.insertBefore(messageDiv, container.firstChild);
             
             setTimeout(() => {
                 if (messageDiv.parentNode) {
@@ -6490,55 +8574,247 @@ export class DashboardServer {
         }
 
         // Auto-refresh Management
-        function startAutoRefresh() {
-            refreshInterval = setInterval(async () => {
+        function normalizeAutoRefreshRate(value) {
+            if (value === "off" || value === "30s" || value === "1m" || value === "5m") {
+                return value;
+            }
+            return AUTO_REFRESH_DEFAULT;
+        }
+
+        function getAutoRefreshIntervalMs(rate) {
+            const normalized = normalizeAutoRefreshRate(rate);
+            return AUTO_REFRESH_OPTIONS[normalized].intervalMs;
+        }
+
+        function getAutoRefreshSelect() {
+            const element = document.getElementById("autoRefreshSelect");
+            return element instanceof HTMLSelectElement ? element : null;
+        }
+
+        function readStoredAutoRefreshRate() {
+            if (typeof window === "undefined") {
+                return null;
+            }
+            try {
+                const stored = window.localStorage.getItem(AUTO_REFRESH_STORAGE_KEY);
+                return stored ? normalizeAutoRefreshRate(stored) : null;
+            } catch (_error) {
+                return null;
+            }
+        }
+
+        function storeAutoRefreshRate(rate) {
+            if (typeof window === "undefined") {
+                return;
+            }
+            try {
+                window.localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, rate);
+            } catch (_error) {
+                return;
+            }
+        }
+
+        function stopAutoRefreshInterval() {
+            if (refreshInterval !== null) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+        }
+
+        function applyAutoRefreshRate(nextRate) {
+            const normalized = normalizeAutoRefreshRate(nextRate);
+            autoRefreshRate = normalized;
+            const select = getAutoRefreshSelect();
+            if (select) {
+                select.value = normalized;
+            }
+            stopAutoRefreshInterval();
+            const intervalMs = getAutoRefreshIntervalMs(normalized);
+            if (!intervalMs) {
+                return;
+            }
+            refreshInterval = window.setInterval(async () => {
                 await requestMetricsRefresh();
                 await loadRecentActivityWidget();
                 // Only refresh tab-specific content if that tab is active
-                if (document.getElementById('queue-tab').classList.contains('active')) {
+                if (document.getElementById("queue-tab").classList.contains("active")) {
                     await loadQueueStatus();
                 }
-                if (document.getElementById('tasks-tab').classList.contains('active')) {
+                if (document.getElementById("tasks-tab").classList.contains("active")) {
                     await loadTasks();
                 }
-            }, 5000);
+            }, intervalMs);
+        }
 
-            connectWebSocket();
+        function startAutoRefresh(nextRate) {
+            applyAutoRefreshRate(nextRate ?? autoRefreshRate);
+        }
+
+        async function hydrateAutoRefreshPreferences() {
+            const profileState = await loadUserProfileState({ force: false });
+            const profileRate = profileState?.preferences?.dashboard?.refreshRate;
+            if (!profileRate) {
+                return;
+            }
+            const normalized = normalizeAutoRefreshRate(profileRate);
+            storeAutoRefreshRate(normalized);
+            applyAutoRefreshRate(normalized);
+        }
+
+        async function persistAutoRefreshPreference(nextRate) {
+            const normalized = normalizeAutoRefreshRate(nextRate);
+            storeAutoRefreshRate(normalized);
+            applyAutoRefreshRate(normalized);
+            const token = readAuthToken();
+            if (!token) {
+                return;
+            }
+            const profileState = await loadUserProfileState({ force: false });
+            const basePreferences = resolvePreferencesBase(profileState);
+            const dashboardPreferences =
+                basePreferences.dashboard && typeof basePreferences.dashboard === "object"
+                    ? basePreferences.dashboard
+                    : {};
+            const nextPreferences = {
+                ...basePreferences,
+                dashboard: {
+                    ...dashboardPreferences,
+                    refreshRate: normalized,
+                },
+            };
+            const updatedAt = Date.now();
+            await persistPreferencesUpdate(nextPreferences, {
+                updatedAt,
+                source: "dashboard.autoRefresh",
+            });
+        }
+
+        function initAutoRefreshControls() {
+            const select = getAutoRefreshSelect();
+            if (!select) {
+                return;
+            }
+            select.addEventListener("change", () => {
+                void persistAutoRefreshPreference(select.value);
+            });
         }
 
         function stopAutoRefresh() {
-            if (refreshInterval) {
-                clearInterval(refreshInterval);
-            }
+            stopAutoRefreshInterval();
             if (wsConnection) {
                 wsConnection.close();
             }
         }
 
         const WIDGET_LAYOUT_STORAGE_KEY = "dashboardWidgetLayout.v1";
+        const WIDGET_LAYOUT_SCHEMA_VERSION = 1;
+        const WIDGET_SIZE_SCHEMA_VERSION = 1;
+        const WIDGET_LAYOUT_META_STORAGE_KEY = "dashboardWidgetLayout.meta.v1";
         const WIDGET_SIZE_STORAGE_KEY = "dashboardWidgetSize.v1";
         const WIDGET_VISIBILITY_STORAGE_KEY = "dashboardWidgetVisibility.v1";
+        const WIDGET_LAYOUT_SYNC_CHANNEL = "dashboardWidgetLayout.sync.v1";
+        const WIDGET_LAYOUT_PROFILE_VERSION = 1;
+        const WIDGET_LAYOUT_PROFILE_SYNC_DEBOUNCE_MS = 900;
+        const WIDGET_LAYOUT_PROFILE_REFRESH_MS = 60000;
         const WIDGET_LIBRARY_SELECTION_KEY = "dashboardWidgetLibrarySelection.v1";
         const WIDGET_LIBRARY_PENDING_ADD_KEY = "dashboardWidgetLibraryPendingAdd.v1";
+        const PREFERENCES_SYNC_PENDING_KEY = "userPreferences.pending.v1";
+        const PREFERENCES_SYNC_DEVICE_KEY = "userPreferences.device.v1";
+        const PREFERENCES_SYNC_SOURCE = "dashboard";
         const WIDGET_LIBRARY_ADD_LOADING_MS = 350;
         const WIDGET_LIBRARY_ADD_SUCCESS_MS = 1400;
+        const WIDGET_DRAG_DROP_FEEDBACK_MS = 360;
+        const DEFAULT_WIDGET_GHOST_SCALE = 0.9;
+        const DEFAULT_MAX_VISIBLE_WIDGETS = 20;
+        const MAX_VISIBLE_WIDGETS = (() => {
+            if (typeof document === "undefined") {
+                return DEFAULT_MAX_VISIBLE_WIDGETS;
+            }
+            const rawLimit = document.body && document.body.dataset
+                ? document.body.dataset.widgetLimit
+                : undefined;
+            const parsedLimit = Number.parseInt(rawLimit ?? "", 10);
+            return Number.isFinite(parsedLimit) && parsedLimit > 0
+                ? parsedLimit
+                : DEFAULT_MAX_VISIBLE_WIDGETS;
+        })();
         const WIDGET_LAYOUT_PENDING_SYNC_KEY = "dashboardWidgetLayout.pending.v1";
         const WIDGET_VISIBILITY_PENDING_SYNC_KEY = "dashboardWidgetVisibility.pending.v1";
         const WIDGET_LAYOUT_SYNC_TIMEOUT_MS = 2500;
+        const WIDGET_LAYOUT_AUTOSAVE_DEBOUNCE_MS = 500;
+        const WIDGET_LAYOUT_SAVE_TOAST_DELAY_MS = 250;
+        const WIDGET_LAYOUT_SAVE_TOAST_COOLDOWN_MS = 2400;
+        const WIDGET_LAYOUT_SAVE_FAILURE_TOAST_COOLDOWN_MS = 6000;
+        const WIDGET_LAYOUT_SAVE_RETRY_BASE_MS = 1500;
+        const WIDGET_LAYOUT_SAVE_RETRY_MAX_MS = 12000;
+        const WIDGET_LAYOUT_SAVE_RETRY_JITTER_MS = 400;
+        const WIDGET_LAYOUT_SAVE_MAX_RETRIES = 5;
+        const WIDGET_LAYOUT_SAVE_RECOVERY_TOAST_COOLDOWN_MS = 12000;
         const WIDGET_SIZE_OPTIONS = ["small", "medium", "large"];
         const WIDGET_SIZE_CLASSES = WIDGET_SIZE_OPTIONS.map(size => \`widget-size-\${size}\`);
+        const WIDGET_MOVE_ANNOUNCER_ID = "widgetMoveAnnouncement";
+        const DASHBOARD_RESTORE_MIN_MS = 200;
+        const DASHBOARD_RESTORE_OVERLAY_ID = "dashboardRestoreOverlay";
+        const DASHBOARD_RESTORE_MESSAGE_ID = "dashboardRestoreMessage";
+        const DASHBOARD_RESTORE_MESSAGE_DEFAULT = "Restoring dashboard layout...";
+        const DASHBOARD_RESTORE_MESSAGE_FALLBACK = "Resetting dashboard layout...";
         const WIDGET_CONTAINER_LABELS = {
             "overview-metrics": "Overview",
             "queue-metrics": "Queue Status",
             "health-grid": "Health",
         };
         const WIDGET_CONTAINER_ORDER = ["overview-metrics", "queue-metrics", "health-grid"];
+        const WIDGET_LIBRARY_FILTER_ALL = "all";
+        const WIDGET_LIBRARY_DRAG_HOLD_MS = 180;
+        const WIDGET_LIBRARY_DRAG_MOVE_THRESHOLD = 6;
+        const WIDGET_TOUCH_DRAG_THRESHOLD = 8;
+        const WIDGET_DRAG_HANDLE_SELECTORS = "[data-widget-drag-handle], .widget-drag-handle";
+        const WIDGET_DRAG_HEADER_SELECTORS =
+            ".activity-widget-header, .status-breakdown-header, .priority-breakdown-header, " +
+            ".health-title, .metric-label, .metric-value";
         let widgetDragState = {
             dragging: null,
             placeholder: null,
             container: null,
+            originContainer: null,
+            originNextSibling: null,
+            dropTimeoutId: null,
+            dropTarget: null,
+            dropContainer: null,
+            dragHandleActive: false,
         };
+        let widgetLibraryDragState = {
+            widgetId: null,
+            widget: null,
+            container: null,
+            ghost: null,
+            pointerId: null,
+            holdTimeoutId: null,
+            startX: 0,
+            startY: 0,
+            lastX: 0,
+            lastY: 0,
+            active: false,
+            moved: false,
+        };
+        let widgetTouchDragState = {
+            pointerId: null,
+            widget: null,
+            container: null,
+            ghost: null,
+            startX: 0,
+            startY: 0,
+            lastX: 0,
+            lastY: 0,
+            active: false,
+        };
+        let widgetLibraryDragListenersAttached = false;
+        let widgetTouchDragListenersAttached = false;
         let widgetCatalog = [];
+        let widgetNotificationPreferences = {};
+        let widgetNotificationTimeouts = {};
+        let widgetLibrarySearchQuery = "";
+        let widgetLibraryActiveCategory = WIDGET_LIBRARY_FILTER_ALL;
         let selectedWidgetIds = new Set();
         let widgetLibraryAddState = {};
         let widgetLayoutSyncState = {
@@ -6546,9 +8822,504 @@ export class DashboardServer {
             hasLayout: false,
             hasServerSync: false,
         };
+        let widgetLayoutLastAppliedAt = 0;
+        let widgetLayoutLastAppliedSnapshot = null;
+        let widgetLayoutSaveState = {
+            pendingFeedback: false,
+            lastToastAt: 0,
+            lastFailureToastAt: 0,
+            lastRecoveryToastAt: 0,
+            toastTimeoutId: null,
+            indicatorTimeoutId: null,
+            retryTimeoutId: null,
+            retryCount: 0,
+            recoveryFailed: false,
+        };
+        let widgetLayoutAutosaveState = {
+            timeoutId: null,
+            pendingLayout: {},
+            pendingFullLayout: false,
+        };
+        let widgetLayoutSyncChannel = null;
+        let widgetLayoutSyncTabId = createWidgetLayoutSyncId();
+        let dashboardRestoreState = {
+            status: "idle",
+            startedAt: 0,
+            timeoutId: null,
+        };
+        let widgetLayoutProfileState = {
+            userId: null,
+            preferences: null,
+            lastFetchedAt: 0,
+            isAuthenticated: false,
+        };
+        let widgetLayoutProfileSyncState = {
+            timeoutId: null,
+            pendingLayout: null,
+            pendingUpdatedAt: 0,
+            lastSyncedUpdatedAt: 0,
+        };
         let pendingAddSelectedWidgets = false;
         let widgetLayoutSyncTimeoutId = null;
         let widgetLayoutSyncRequested = false;
+
+        function createWidgetLayoutSyncId() {
+            return "tab-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+        }
+
+        function readAuthToken() {
+            if (typeof window === "undefined") {
+                return null;
+            }
+            const token =
+                window.localStorage.getItem("authToken")
+                ?? window.localStorage.getItem("token")
+                ?? window.sessionStorage.getItem("token");
+            if (!token || typeof token !== "string") {
+                return null;
+            }
+            const trimmed = token.trim();
+            return trimmed.length > 0 ? trimmed : null;
+        }
+
+        function resolvePreferencesSyncDeviceId() {
+            if (typeof window === "undefined") {
+                return "device-unknown";
+            }
+            try {
+                const stored = window.localStorage.getItem(PREFERENCES_SYNC_DEVICE_KEY);
+                if (stored && stored.trim().length > 0) {
+                    return stored;
+                }
+                const created = "device-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+                window.localStorage.setItem(PREFERENCES_SYNC_DEVICE_KEY, created);
+                return created;
+            } catch (_error) {
+                return "device-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+            }
+        }
+
+        function loadPendingPreferencesSync() {
+            if (typeof window === "undefined") {
+                return { hasPending: false, preferences: null, preferencesSync: null };
+            }
+            try {
+                const raw = window.localStorage.getItem(PREFERENCES_SYNC_PENDING_KEY);
+                if (!raw) {
+                    return { hasPending: false, preferences: null, preferencesSync: null };
+                }
+                const parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === "object" && parsed.preferences) {
+                    return {
+                        hasPending: true,
+                        preferences: parsed.preferences,
+                        preferencesSync: parsed.preferencesSync ?? null,
+                    };
+                }
+            } catch (error) {
+                console.warn("Failed to load pending preference sync:", error);
+            }
+            return { hasPending: false, preferences: null, preferencesSync: null };
+        }
+
+        function savePendingPreferencesSync(payload) {
+            if (!payload || typeof payload !== "object") {
+                return false;
+            }
+            return safeLocalStorageSet(
+                PREFERENCES_SYNC_PENDING_KEY,
+                payload,
+                "Failed to persist pending preference sync:",
+            );
+        }
+
+        function clearPendingPreferencesSync() {
+            if (typeof window === "undefined") {
+                return;
+            }
+            window.localStorage.removeItem(PREFERENCES_SYNC_PENDING_KEY);
+        }
+
+        function buildPreferencesSyncMetadata(updatedAt, source) {
+            return {
+                updatedAt,
+                deviceId: resolvePreferencesSyncDeviceId(),
+                source: source || PREFERENCES_SYNC_SOURCE,
+            };
+        }
+
+        function queuePreferencesSync(preferences, preferencesSync) {
+            if (!preferences || typeof preferences !== "object") {
+                return;
+            }
+            savePendingPreferencesSync({
+                preferences,
+                preferencesSync,
+            });
+        }
+
+        function reconcilePendingPreferencesSync(updatedAt) {
+            const pending = loadPendingPreferencesSync();
+            if (!pending.hasPending) {
+                return;
+            }
+            const pendingUpdatedAt =
+                typeof pending.preferencesSync?.updatedAt === "number"
+                    ? pending.preferencesSync.updatedAt
+                    : 0;
+            if (pendingUpdatedAt <= updatedAt) {
+                clearPendingPreferencesSync();
+            }
+        }
+
+        function resolvePreferencesBase(profileState) {
+            const pending = loadPendingPreferencesSync();
+            if (pending.hasPending && pending.preferences && typeof pending.preferences === "object") {
+                return pending.preferences;
+            }
+            return profileState?.preferences && typeof profileState.preferences === "object"
+                ? profileState.preferences
+                : {};
+        }
+
+        function updateProfileStatePreferences(preferences, options) {
+            const nextPreferences = preferences && typeof preferences === "object" ? preferences : {};
+            const isAuthenticated =
+                typeof options?.isAuthenticated === "boolean"
+                    ? options.isAuthenticated
+                    : widgetLayoutProfileState.isAuthenticated;
+            widgetLayoutProfileState = {
+                ...widgetLayoutProfileState,
+                preferences: nextPreferences,
+                lastFetchedAt: Date.now(),
+                isAuthenticated,
+            };
+        }
+
+        async function flushPendingPreferencesSync() {
+            const pending = loadPendingPreferencesSync();
+            if (!pending.hasPending || !pending.preferences) {
+                return;
+            }
+            const token = readAuthToken();
+            if (!token) {
+                return;
+            }
+            if (!isClientOnline()) {
+                return;
+            }
+            try {
+                const response = await fetch("/api/users/me/profile", {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: "Bearer " + token,
+                    },
+                    body: JSON.stringify({
+                        preferences: pending.preferences,
+                        preferencesSync: pending.preferencesSync ?? undefined,
+                    }),
+                });
+                if (!response.ok) {
+                    if (response.status === 401 || response.status === 403) {
+                        widgetLayoutProfileState = {
+                            ...widgetLayoutProfileState,
+                            isAuthenticated: false,
+                        };
+                    }
+                    console.warn("Failed to flush pending preferences:", response.status);
+                    return;
+                }
+                const data = await response.json();
+                const nextPreferences =
+                    data?.user?.preferences && typeof data.user.preferences === "object"
+                        ? data.user.preferences
+                        : pending.preferences;
+                updateProfileStatePreferences(nextPreferences, { isAuthenticated: true });
+                const confirmedUpdatedAt =
+                    typeof pending.preferencesSync?.updatedAt === "number"
+                        ? pending.preferencesSync.updatedAt
+                        : 0;
+                reconcilePendingPreferencesSync(confirmedUpdatedAt);
+            } catch (error) {
+                console.warn("Failed to flush pending preferences:", error);
+            }
+        }
+
+        async function persistPreferencesUpdate(nextPreferences, options) {
+            const updatedAt = typeof options?.updatedAt === "number" ? options.updatedAt : Date.now();
+            const preferencesSync = buildPreferencesSyncMetadata(updatedAt, options?.source);
+            const token = readAuthToken();
+            if (!token) {
+                queuePreferencesSync(nextPreferences, preferencesSync);
+                updateProfileStatePreferences(nextPreferences, {});
+                return false;
+            }
+            try {
+                const response = await fetch("/api/users/me/profile", {
+                    method: "PUT",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: "Bearer " + token,
+                    },
+                    body: JSON.stringify({
+                        preferences: nextPreferences,
+                        preferencesSync,
+                    }),
+                });
+                if (!response.ok) {
+                    if (response.status === 401 || response.status === 403) {
+                        widgetLayoutProfileState = {
+                            ...widgetLayoutProfileState,
+                            isAuthenticated: false,
+                        };
+                        return false;
+                    }
+                    if (!isClientOnline()) {
+                        queuePreferencesSync(nextPreferences, preferencesSync);
+                        updateProfileStatePreferences(nextPreferences, {});
+                    }
+                    console.warn("Failed to update user preferences:", response.status);
+                    return false;
+                }
+                const data = await response.json();
+                const nextFromServer =
+                    data?.user?.preferences && typeof data.user.preferences === "object"
+                        ? data.user.preferences
+                        : nextPreferences;
+                updateProfileStatePreferences(nextFromServer, { isAuthenticated: true });
+                reconcilePendingPreferencesSync(preferencesSync.updatedAt);
+                return true;
+            } catch (error) {
+                console.warn("Failed to update user preferences:", error);
+                queuePreferencesSync(nextPreferences, preferencesSync);
+                updateProfileStatePreferences(nextPreferences, {});
+                return false;
+            }
+        }
+
+        function buildDefaultWidgetNotificationTypes() {
+            return WIDGET_NOTIFICATION_TYPES.reduce((acc, type) => {
+                return { ...acc, [type.id]: true };
+            }, {});
+        }
+
+        function buildWidgetNotificationTypesState(value) {
+            return WIDGET_NOTIFICATION_TYPES.reduce((acc, type) => {
+                return { ...acc, [type.id]: value };
+            }, {});
+        }
+
+        function normalizeWidgetNotificationTypes(value) {
+            const defaults = buildDefaultWidgetNotificationTypes();
+            if (!value || typeof value !== "object") {
+                return defaults;
+            }
+            return WIDGET_NOTIFICATION_TYPES.reduce((acc, type) => {
+                const entry = value[type.id];
+                return {
+                    ...acc,
+                    [type.id]: typeof entry === "boolean" ? entry : defaults[type.id],
+                };
+            }, {});
+        }
+
+        function buildDefaultWidgetNotificationPreference() {
+            return {
+                enabled: true,
+                types: buildDefaultWidgetNotificationTypes(),
+            };
+        }
+
+        function normalizeWidgetNotificationPreference(value) {
+            if (typeof value === "boolean") {
+                return {
+                    enabled: value,
+                    types: buildDefaultWidgetNotificationTypes(),
+                };
+            }
+            if (!value || typeof value !== "object") {
+                return buildDefaultWidgetNotificationPreference();
+            }
+            const enabled = typeof value.enabled === "boolean" ? value.enabled : true;
+            const types = normalizeWidgetNotificationTypes(value.types);
+            return { enabled, types };
+        }
+
+        function normalizeWidgetNotificationPreferences(value) {
+            if (!value || typeof value !== "object") {
+                return {};
+            }
+            return Object.entries(value).reduce((acc, [key, entry]) => {
+                if (!key) {
+                    return acc;
+                }
+                return { ...acc, [key]: normalizeWidgetNotificationPreference(entry) };
+            }, {});
+        }
+
+        function getWidgetNotificationPreference(widgetId) {
+            if (!widgetId) {
+                return buildDefaultWidgetNotificationPreference();
+            }
+            const stored = widgetNotificationPreferences[widgetId];
+            return normalizeWidgetNotificationPreference(stored);
+        }
+
+        function isWidgetNotificationTypeEnabled(widgetId, typeId) {
+            const preference = getWidgetNotificationPreference(widgetId);
+            if (!preference.enabled) {
+                return false;
+            }
+            if (!typeId || typeof typeId !== "string") {
+                return true;
+            }
+            const value = preference.types?.[typeId];
+            return typeof value === "boolean" ? value : true;
+        }
+
+        function resolveWidgetNotificationPreset(types) {
+            const normalized = normalizeWidgetNotificationTypes(types);
+            const values = WIDGET_NOTIFICATION_TYPES.map(type => normalized[type.id]);
+            const allEnabled = values.every(value => value === true);
+            if (allEnabled) {
+                return WIDGET_NOTIFICATION_PRESET_ALL;
+            }
+            const allDisabled = values.every(value => value === false);
+            if (allDisabled) {
+                return WIDGET_NOTIFICATION_PRESET_NONE;
+            }
+            return WIDGET_NOTIFICATION_PRESET_CUSTOM;
+        }
+
+        function updateWidgetNotificationPreferences(nextPreferences) {
+            widgetNotificationPreferences = normalizeWidgetNotificationPreferences(nextPreferences);
+            renderWidgetLibrary();
+        }
+
+        async function hydrateWidgetNotificationPreferences() {
+            const profileState = await loadUserProfileState({ force: false });
+            const dashboardPreferences =
+                profileState?.preferences && typeof profileState.preferences === "object"
+                    ? profileState.preferences.dashboard
+                    : null;
+            const widgetNotifications =
+                dashboardPreferences && typeof dashboardPreferences === "object"
+                    ? dashboardPreferences.widgetNotifications
+                    : null;
+            updateWidgetNotificationPreferences(widgetNotifications ?? {});
+        }
+
+        async function persistWidgetNotificationPreference(widgetId, nextPreference) {
+            const token = readAuthToken();
+            if (!token) {
+                return;
+            }
+            const profileState = await loadUserProfileState({ force: false });
+            const basePreferences = resolvePreferencesBase(profileState);
+            const dashboardPreferences =
+                basePreferences.dashboard && typeof basePreferences.dashboard === "object"
+                    ? basePreferences.dashboard
+                    : {};
+            const nextWidgetNotifications = {
+                ...(dashboardPreferences.widgetNotifications ?? {}),
+                [widgetId]: nextPreference,
+            };
+            const nextPreferences = {
+                ...basePreferences,
+                dashboard: {
+                    ...dashboardPreferences,
+                    widgetNotifications: nextWidgetNotifications,
+                },
+            };
+            const updatedAt = Date.now();
+            await persistPreferencesUpdate(nextPreferences, {
+                updatedAt,
+                source: "dashboard.widgetNotifications",
+            });
+        }
+
+        function updateWidgetNotificationPreference(widgetId, updater) {
+            if (!widgetId) {
+                return;
+            }
+            const current = getWidgetNotificationPreference(widgetId);
+            const next = typeof updater === "function" ? updater(current) : updater;
+            const normalized = normalizeWidgetNotificationPreference(next);
+            widgetNotificationPreferences = {
+                ...widgetNotificationPreferences,
+                [widgetId]: normalized,
+            };
+            renderWidgetLibrary();
+            if (widgetId === RECENT_ACTIVITY_WIDGET_ID) {
+                loadRecentActivityWidget({ force: true });
+            }
+            void persistWidgetNotificationPreference(widgetId, normalized);
+        }
+
+        function getDashboardRestoreOverlay() {
+            if (typeof document === "undefined") {
+                return null;
+            }
+            const overlay = document.getElementById(DASHBOARD_RESTORE_OVERLAY_ID);
+            return overlay instanceof HTMLElement ? overlay : null;
+        }
+
+        function getDashboardRestoreMessageNode() {
+            if (typeof document === "undefined") {
+                return null;
+            }
+            const message = document.getElementById(DASHBOARD_RESTORE_MESSAGE_ID);
+            return message instanceof HTMLElement ? message : null;
+        }
+
+        function setDashboardRestoreMessage(message) {
+            const messageNode = getDashboardRestoreMessageNode();
+            if (!messageNode) {
+                return;
+            }
+            messageNode.textContent = message;
+        }
+
+        function startDashboardRestore() {
+            const overlay = getDashboardRestoreOverlay();
+            if (!overlay) {
+                return;
+            }
+            if (dashboardRestoreState.timeoutId !== null) {
+                clearTimeout(dashboardRestoreState.timeoutId);
+            }
+            overlay.classList.remove("is-hidden");
+            overlay.setAttribute("aria-hidden", "false");
+            setDashboardRestoreMessage(DASHBOARD_RESTORE_MESSAGE_DEFAULT);
+            dashboardRestoreState = {
+                status: "loading",
+                startedAt: Date.now(),
+                timeoutId: null,
+            };
+        }
+
+        function finishDashboardRestore(options) {
+            const overlay = getDashboardRestoreOverlay();
+            if (!overlay) {
+                return;
+            }
+            if (options?.usedFallback) {
+                setDashboardRestoreMessage(DASHBOARD_RESTORE_MESSAGE_FALLBACK);
+            }
+            const elapsed = Date.now() - dashboardRestoreState.startedAt;
+            const delay = Math.max(0, DASHBOARD_RESTORE_MIN_MS - elapsed);
+            const hideOverlay = () => {
+                overlay.classList.add("is-hidden");
+                overlay.setAttribute("aria-hidden", "true");
+            };
+            const timeoutId = window.setTimeout(hideOverlay, delay);
+            dashboardRestoreState = {
+                status: "ready",
+                startedAt: dashboardRestoreState.startedAt,
+                timeoutId,
+            };
+        }
 
         function loadInitialWidgetState() {
             const stateElement = document.getElementById("dashboardWidgetState");
@@ -6585,7 +9356,22 @@ export class DashboardServer {
             );
             if (!pendingLayout.hasPending &&
                 serverLayout && typeof serverLayout === "object") {
-                saveWidgetLayoutState(serverLayout);
+                const currentLayout = loadWidgetLayout();
+                const currentMeta = loadWidgetLayoutMeta();
+                const resolved = resolveWidgetLayoutConflict(
+                    currentLayout,
+                    currentMeta,
+                    serverLayout,
+                    { updatedAt: 0 },
+                );
+                const shouldApply = resolved.action !== "keep"
+                    || !areWidgetLayoutStatesEqual(currentLayout, resolved.layout);
+                if (shouldApply) {
+                    saveWidgetLayoutState(resolved.layout, {
+                        updatedAt: resolved.updatedAt,
+                        allowZero: resolved.updatedAt === 0,
+                    });
+                }
             }
             if (hasServerLayoutValue) {
                 updateWidgetLayoutSyncState({
@@ -6613,6 +9399,322 @@ export class DashboardServer {
                 widgetLayoutSyncRequested = false;
             }
             updateAddSelectedWidgetsState();
+        }
+
+        function updateWidgetLayoutSaveState(nextState) {
+            widgetLayoutSaveState = { ...widgetLayoutSaveState, ...nextState };
+        }
+
+        function updateWidgetLayoutAutosaveState(nextState) {
+            widgetLayoutAutosaveState = { ...widgetLayoutAutosaveState, ...nextState };
+        }
+
+        function getWidgetLayoutSaveIndicator() {
+            if (typeof document === "undefined") {
+                return null;
+            }
+            const indicator = document.getElementById("layoutSaveIndicator");
+            return indicator instanceof HTMLElement ? indicator : null;
+        }
+
+        function clearWidgetLayoutSaveIndicator() {
+            const indicator = getWidgetLayoutSaveIndicator();
+            if (!indicator) {
+                return;
+            }
+            if (widgetLayoutSaveState.indicatorTimeoutId !== null) {
+                clearTimeout(widgetLayoutSaveState.indicatorTimeoutId);
+            }
+            indicator.classList.remove("is-visible", "is-error");
+            indicator.setAttribute("aria-hidden", "true");
+            const retryButton = indicator.querySelector(".layout-save-retry");
+            if (retryButton instanceof HTMLButtonElement) {
+                retryButton.hidden = true;
+            }
+            updateWidgetLayoutSaveState({ indicatorTimeoutId: null });
+        }
+
+        function showWidgetLayoutSaveIndicator(options) {
+            const indicator = getWidgetLayoutSaveIndicator();
+            if (!indicator) {
+                return;
+            }
+            const status = options?.status ?? "success";
+            const message = options?.message ?? (status === "success" ? "Layout saved" : "Layout save failed");
+            const icon = indicator.querySelector(".layout-save-icon");
+            const text = indicator.querySelector(".layout-save-text");
+            if (icon instanceof HTMLElement) {
+                icon.textContent = status === "success" ? "\u2713" : "!";
+            }
+            if (text instanceof HTMLElement) {
+                text.textContent = message;
+            }
+            indicator.classList.toggle("is-error", status === "error");
+            indicator.classList.add("is-visible");
+            indicator.setAttribute("aria-hidden", "false");
+            const retryButton = indicator.querySelector(".layout-save-retry");
+            if (retryButton instanceof HTMLButtonElement) {
+                retryButton.hidden = status !== "error";
+            }
+            if (widgetLayoutSaveState.indicatorTimeoutId !== null) {
+                clearTimeout(widgetLayoutSaveState.indicatorTimeoutId);
+            }
+            if (options?.autoHide === false) {
+                updateWidgetLayoutSaveState({ indicatorTimeoutId: null });
+                return;
+            }
+            const durationMs = typeof options?.durationMs === "number" ? options.durationMs : 2000;
+            const timeoutId = window.setTimeout(() => {
+                clearWidgetLayoutSaveIndicator();
+            }, durationMs);
+            updateWidgetLayoutSaveState({ indicatorTimeoutId: timeoutId });
+        }
+
+        function initWidgetLayoutSaveIndicator() {
+            const indicator = getWidgetLayoutSaveIndicator();
+            if (!indicator) {
+                return;
+            }
+            const retryButton = indicator.querySelector(".layout-save-retry");
+            if (!(retryButton instanceof HTMLButtonElement)) {
+                return;
+            }
+            if (retryButton.dataset.retryReady === "true") {
+                return;
+            }
+            retryButton.dataset.retryReady = "true";
+            retryButton.addEventListener("click", (event) => {
+                event.preventDefault();
+                attemptWidgetLayoutSaveRetry();
+            });
+        }
+
+        function isClientOnline() {
+            if (typeof navigator === "undefined") {
+                return true;
+            }
+            return navigator.onLine !== false;
+        }
+
+        function clearWidgetLayoutAutosaveTimeout() {
+            if (widgetLayoutAutosaveState.timeoutId === null) {
+                return;
+            }
+            clearTimeout(widgetLayoutAutosaveState.timeoutId);
+            updateWidgetLayoutAutosaveState({ timeoutId: null });
+        }
+
+        function flushWidgetLayoutAutoSave() {
+            const pendingLayout = widgetLayoutAutosaveState.pendingLayout;
+            const pendingFullLayout = widgetLayoutAutosaveState.pendingFullLayout;
+            updateWidgetLayoutAutosaveState({
+                timeoutId: null,
+                pendingLayout: {},
+                pendingFullLayout: false,
+            });
+            if (!pendingLayout || typeof pendingLayout !== "object" || Object.keys(pendingLayout).length === 0) {
+                return;
+            }
+            const hasLiveSync = Boolean(wsConnection && wsConnection.readyState === WebSocket.OPEN);
+            sendWidgetLayoutBatch(pendingLayout, { fullLayout: pendingFullLayout });
+            if (hasLiveSync) {
+                notifyWidgetLayoutSaveSuccess({});
+            }
+        }
+
+        function scheduleWidgetLayoutAutoSave(layoutUpdates, options) {
+            if (!layoutUpdates || typeof layoutUpdates !== "object") {
+                return;
+            }
+            const normalized = normalizeWidgetLayoutState(layoutUpdates);
+            if (Object.keys(normalized).length === 0) {
+                return;
+            }
+            markWidgetLayoutSaveRequested();
+            const shouldSendFullLayout = Boolean(options?.fullLayout);
+            const currentPendingLayout = widgetLayoutAutosaveState.pendingLayout || {};
+            const mergedPendingLayout = mergeWidgetLayoutUpdates(currentPendingLayout, normalized);
+            const nextPendingLayout = shouldSendFullLayout ? normalized : mergedPendingLayout;
+            const nextPendingFullLayout = shouldSendFullLayout || widgetLayoutAutosaveState.pendingFullLayout;
+            clearWidgetLayoutAutosaveTimeout();
+            const timeoutId = window.setTimeout(() => {
+                flushWidgetLayoutAutoSave();
+            }, WIDGET_LAYOUT_AUTOSAVE_DEBOUNCE_MS);
+            updateWidgetLayoutAutosaveState({
+                timeoutId,
+                pendingLayout: nextPendingLayout,
+                pendingFullLayout: nextPendingFullLayout,
+            });
+        }
+
+        function clearWidgetLayoutSaveToast() {
+            if (widgetLayoutSaveState.toastTimeoutId === null) {
+                return;
+            }
+            clearTimeout(widgetLayoutSaveState.toastTimeoutId);
+            updateWidgetLayoutSaveState({ toastTimeoutId: null });
+        }
+
+        function scheduleWidgetLayoutSaveToast(message, options) {
+            if (!message) {
+                return;
+            }
+            const now = Date.now();
+            const elapsed = now - (widgetLayoutSaveState.lastToastAt || 0);
+            const delay = elapsed < WIDGET_LAYOUT_SAVE_TOAST_COOLDOWN_MS
+                ? WIDGET_LAYOUT_SAVE_TOAST_COOLDOWN_MS - elapsed
+                : WIDGET_LAYOUT_SAVE_TOAST_DELAY_MS;
+            clearWidgetLayoutSaveToast();
+            const timeoutId = window.setTimeout(() => {
+                showToast(message, options);
+                updateWidgetLayoutSaveState({
+                    lastToastAt: Date.now(),
+                    toastTimeoutId: null,
+                });
+            }, Math.max(0, delay));
+            updateWidgetLayoutSaveState({ toastTimeoutId: timeoutId });
+        }
+
+        function markWidgetLayoutSaveRequested() {
+            updateWidgetLayoutSaveState({
+                pendingFeedback: true,
+                recoveryFailed: false,
+                retryCount: 0,
+            });
+        }
+
+        function notifyWidgetLayoutSaveSuccess(options) {
+            if (!widgetLayoutSaveState.pendingFeedback && !options?.force) {
+                clearWidgetLayoutSaveRetry();
+                return;
+            }
+            clearWidgetLayoutSaveToast();
+            showWidgetLayoutSaveIndicator({
+                status: "success",
+                message: options?.message ?? "Layout saved",
+                durationMs: 2000,
+            });
+            updateWidgetLayoutSaveState({
+                pendingFeedback: false,
+                lastFailureToastAt: 0,
+                lastRecoveryToastAt: 0,
+                recoveryFailed: false,
+            });
+            clearWidgetLayoutSaveRetry();
+        }
+
+        function notifyWidgetLayoutSaveFailure(options) {
+            const shouldToast = widgetLayoutSaveState.pendingFeedback || options?.force;
+            updateWidgetLayoutSaveState({ pendingFeedback: true });
+            clearWidgetLayoutSaveToast();
+            const indicatorMessage = isClientOnline()
+                ? "Layout save failed"
+                : "Layout save queued";
+            showWidgetLayoutSaveIndicator({
+                status: "error",
+                message: indicatorMessage,
+                autoHide: false,
+            });
+            const now = Date.now();
+            const lastFailureToastAt = widgetLayoutSaveState.lastFailureToastAt || 0;
+            if (shouldToast && now - lastFailureToastAt >= WIDGET_LAYOUT_SAVE_FAILURE_TOAST_COOLDOWN_MS) {
+                const fallbackMessage = isClientOnline()
+                    ? "Layout save failed. Retrying..."
+                    : "Layout save failed while offline. Changes queued for retry.";
+                showToast(options?.message ?? fallbackMessage, {
+                    type: "warning",
+                    durationMs: 2600,
+                });
+                updateWidgetLayoutSaveState({ lastFailureToastAt: now });
+            }
+            scheduleWidgetLayoutSaveRetry();
+        }
+
+        function notifyWidgetLayoutSaveRecoveryFailure(options) {
+            const now = Date.now();
+            const lastRecoveryToastAt = widgetLayoutSaveState.lastRecoveryToastAt || 0;
+            if (now - lastRecoveryToastAt < WIDGET_LAYOUT_SAVE_RECOVERY_TOAST_COOLDOWN_MS) {
+                updateWidgetLayoutSaveState({ recoveryFailed: true });
+                return;
+            }
+            const fallbackMessage = isClientOnline()
+                ? "Layout save failed after multiple attempts. Changes are queued to retry."
+                : "Layout save failed offline. Changes will retry when you are back online.";
+            showWidgetLayoutSaveIndicator({
+                status: "error",
+                message: "Layout save needs attention",
+                autoHide: false,
+            });
+            showToast(options?.message ?? fallbackMessage, {
+                type: "error",
+                durationMs: 4200,
+            });
+            updateWidgetLayoutSaveState({
+                recoveryFailed: true,
+                lastRecoveryToastAt: now,
+            });
+        }
+
+        function clearWidgetLayoutSaveRetry() {
+            if (widgetLayoutSaveState.retryTimeoutId === null) {
+                updateWidgetLayoutSaveState({ retryCount: 0 });
+                return;
+            }
+            clearTimeout(widgetLayoutSaveState.retryTimeoutId);
+            updateWidgetLayoutSaveState({
+                retryTimeoutId: null,
+                retryCount: 0,
+            });
+        }
+
+        function scheduleWidgetLayoutSaveRetry() {
+            const pending = loadPendingWidgetLayoutSync();
+            if (!pending.hasPending || Object.keys(pending.widgetLayout).length === 0) {
+                return;
+            }
+            if (widgetLayoutSaveState.retryTimeoutId !== null) {
+                return;
+            }
+            const retryCount = widgetLayoutSaveState.retryCount || 0;
+            if (retryCount >= WIDGET_LAYOUT_SAVE_MAX_RETRIES) {
+                notifyWidgetLayoutSaveRecoveryFailure({});
+                return;
+            }
+            const baseDelay = Math.min(
+                WIDGET_LAYOUT_SAVE_RETRY_MAX_MS,
+                WIDGET_LAYOUT_SAVE_RETRY_BASE_MS * Math.pow(2, retryCount),
+            );
+            const jitter = Math.floor(Math.random() * WIDGET_LAYOUT_SAVE_RETRY_JITTER_MS);
+            const timeoutId = window.setTimeout(() => {
+                updateWidgetLayoutSaveState({ retryTimeoutId: null });
+                attemptWidgetLayoutSaveRetry();
+            }, baseDelay + jitter);
+            updateWidgetLayoutSaveState({
+                retryTimeoutId: timeoutId,
+                retryCount: retryCount + 1,
+            });
+        }
+
+        function attemptWidgetLayoutSaveRetry() {
+            const pending = loadPendingWidgetLayoutSync();
+            if (!pending.hasPending || Object.keys(pending.widgetLayout).length === 0) {
+                clearWidgetLayoutSaveRetry();
+                return;
+            }
+            const hasLiveSync = Boolean(wsConnection && wsConnection.readyState === WebSocket.OPEN);
+            if (hasLiveSync) {
+                sendWidgetLayoutBatch(pending.widgetLayout, { fullLayout: pending.isFullLayout });
+                notifyWidgetLayoutSaveSuccess({});
+                return;
+            }
+            void postWidgetLayoutUpdate(pending.widgetLayout, { fullLayout: pending.isFullLayout }).then((success) => {
+                if (success) {
+                    reconcileWidgetLayoutPendingAfterHttp(pending.widgetLayout, { fullLayout: pending.isFullLayout });
+                    notifyWidgetLayoutSaveSuccess({});
+                    return;
+                }
+                scheduleWidgetLayoutSaveRetry();
+            });
         }
 
         function clearWidgetLayoutSyncTimeout() {
@@ -6671,6 +9773,54 @@ export class DashboardServer {
 
         function updateWidgetDragState(nextState) {
             widgetDragState = { ...widgetDragState, ...nextState };
+        }
+
+        function updateWidgetLibraryDragState(nextState) {
+            widgetLibraryDragState = { ...widgetLibraryDragState, ...nextState };
+        }
+
+        function updateWidgetTouchDragState(nextState) {
+            widgetTouchDragState = { ...widgetTouchDragState, ...nextState };
+        }
+
+        function attachWidgetLibraryDragListeners() {
+            if (widgetLibraryDragListenersAttached) {
+                return;
+            }
+            widgetLibraryDragListenersAttached = true;
+            window.addEventListener("pointermove", handleWidgetLibraryPointerMove);
+            window.addEventListener("pointerup", handleWidgetLibraryPointerEnd);
+            window.addEventListener("pointercancel", handleWidgetLibraryPointerEnd);
+        }
+
+        function detachWidgetLibraryDragListeners() {
+            if (!widgetLibraryDragListenersAttached) {
+                return;
+            }
+            widgetLibraryDragListenersAttached = false;
+            window.removeEventListener("pointermove", handleWidgetLibraryPointerMove);
+            window.removeEventListener("pointerup", handleWidgetLibraryPointerEnd);
+            window.removeEventListener("pointercancel", handleWidgetLibraryPointerEnd);
+        }
+
+        function attachWidgetTouchDragListeners() {
+            if (widgetTouchDragListenersAttached) {
+                return;
+            }
+            widgetTouchDragListenersAttached = true;
+            window.addEventListener("pointermove", handleWidgetTouchPointerMove, { passive: false });
+            window.addEventListener("pointerup", handleWidgetTouchPointerEnd);
+            window.addEventListener("pointercancel", handleWidgetTouchPointerEnd);
+        }
+
+        function detachWidgetTouchDragListeners() {
+            if (!widgetTouchDragListenersAttached) {
+                return;
+            }
+            widgetTouchDragListenersAttached = false;
+            window.removeEventListener("pointermove", handleWidgetTouchPointerMove);
+            window.removeEventListener("pointerup", handleWidgetTouchPointerEnd);
+            window.removeEventListener("pointercancel", handleWidgetTouchPointerEnd);
         }
 
         function updateSelectedWidgetIds(nextSelected) {
@@ -6791,6 +9941,9 @@ export class DashboardServer {
             }
             const label = document.getElementById("addSelectedWidgetsLabel");
             const count = selectedWidgetIds.size;
+            const limitState = getWidgetLimitState();
+            updateWidgetLimitMessage(limitState);
+            updateWidgetLimitActionButtons(limitState);
             const needsLayoutSync = count > 0 && shouldGateAddSelectedWidgets();
             if (needsLayoutSync && !widgetLayoutSyncRequested) {
                 widgetLayoutSyncRequested = true;
@@ -6800,15 +9953,28 @@ export class DashboardServer {
                 widgetLayoutSyncRequested = false;
             }
             const isSyncing = (pendingAddSelectedWidgets && count > 0) || needsLayoutSync;
-            button.disabled = count === 0 || pendingAddSelectedWidgets || needsLayoutSync;
+            button.disabled = count === 0 || pendingAddSelectedWidgets || needsLayoutSync || limitState.limitReached;
             button.setAttribute("aria-busy", isSyncing ? "true" : "false");
+            if (limitState.limitReached) {
+                button.setAttribute(
+                    "title",
+                    buildWidgetLimitMessage(limitState.visibleCount, limitState.maxVisible),
+                );
+            } else {
+                button.removeAttribute("title");
+            }
             if (label instanceof HTMLElement) {
                 if (isSyncing) {
                     label.textContent = "Syncing layout...";
                     return;
                 }
+                if (limitState.limitReached && count > 0) {
+                    label.textContent = "Limit reached";
+                    return;
+                }
                 label.textContent = count > 0 ? "Add Selected (" + count + ")" : "Add Selected";
             }
+            updateWidgetLibrarySelectionSummary();
         }
 
         function triggerPendingAddSelectedWidgets() {
@@ -6838,8 +10004,36 @@ export class DashboardServer {
             updateSelectedWidgetIds(nextSelected);
         }
 
+        const WIDGET_LAYOUT_ERROR_CODES = {
+            invalidPayload: "widget_layout_invalid_payload",
+            invalidContainer: "widget_layout_invalid_container",
+            invalidWidgetId: "widget_layout_invalid_widget_id",
+            invalidVersion: "widget_layout_invalid_version",
+            versionMismatch: "widget_layout_version_mismatch",
+        };
+        const WIDGET_SIZE_ERROR_CODES = {
+            invalidPayload: "widget_size_invalid_payload",
+            invalidWidgetId: "widget_size_invalid_widget_id",
+            invalidSize: "widget_size_invalid_value",
+            invalidVersion: "widget_size_invalid_version",
+            versionMismatch: "widget_size_version_mismatch",
+        };
+
+        function normalizeWidgetSizeState(input) {
+            if (!input || typeof input !== "object" || Array.isArray(input)) {
+                return {};
+            }
+            return Object.entries(input).reduce((acc, [widgetId, size]) => {
+                if (typeof widgetId !== "string" || widgetId.length === 0) {
+                    return acc;
+                }
+                const normalizedSize = normalizeWidgetSize(size);
+                return { ...acc, [widgetId]: normalizedSize };
+            }, {});
+        }
+
         function normalizeWidgetLayoutState(input) {
-            if (!input || typeof input !== "object") {
+            if (!input || typeof input !== "object" || Array.isArray(input)) {
                 return {};
             }
             return Object.entries(input).reduce((acc, [containerId, widgetIds]) => {
@@ -6854,6 +10048,167 @@ export class DashboardServer {
                 }, []);
                 return { ...acc, [containerId]: normalizedWidgetIds };
             }, {});
+        }
+
+        function validateWidgetLayoutState(payload) {
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+                return { valid: false, layout: {}, errorCode: WIDGET_LAYOUT_ERROR_CODES.invalidPayload };
+            }
+            const entries = Object.entries(payload);
+            if (entries.length === 0) {
+                return { valid: true, layout: {} };
+            }
+            const result = entries.reduce(
+                (state, [containerId, widgetIds]) => {
+                    if (!state.valid) {
+                        return state;
+                    }
+                    if (typeof containerId !== "string" || containerId.length === 0 || !Array.isArray(widgetIds)) {
+                        return {
+                            layout: state.layout,
+                            valid: false,
+                            errorCode: WIDGET_LAYOUT_ERROR_CODES.invalidContainer,
+                        };
+                    }
+                    const hasInvalidIds = widgetIds.some(
+                        widgetId => typeof widgetId !== "string" || widgetId.length === 0,
+                    );
+                    if (hasInvalidIds) {
+                        return {
+                            layout: state.layout,
+                            valid: false,
+                            errorCode: WIDGET_LAYOUT_ERROR_CODES.invalidWidgetId,
+                        };
+                    }
+                    const normalizedWidgetIds = widgetIds.reduce(
+                        (ids, widgetId) => (ids.includes(widgetId) ? ids : ids.concat(widgetId)),
+                        [],
+                    );
+                    return {
+                        layout: { ...state.layout, [containerId]: normalizedWidgetIds },
+                        valid: true,
+                        errorCode: null,
+                    };
+                },
+                { layout: {}, valid: true, errorCode: null },
+            );
+
+            return result.valid
+                ? { valid: true, layout: result.layout }
+                : { valid: false, layout: {}, errorCode: result.errorCode };
+        }
+
+        function validateWidgetSizeState(payload) {
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+                return { valid: false, sizes: {}, errorCode: WIDGET_SIZE_ERROR_CODES.invalidPayload };
+            }
+            const entries = Object.entries(payload);
+            if (entries.length === 0) {
+                return { valid: true, sizes: {} };
+            }
+            const allowedSizes = new Set(WIDGET_SIZE_OPTIONS);
+            const result = entries.reduce(
+                (state, [widgetId, size]) => {
+                    if (!state.valid) {
+                        return state;
+                    }
+                    if (typeof widgetId !== "string" || widgetId.length === 0) {
+                        return {
+                            sizes: state.sizes,
+                            valid: false,
+                            errorCode: WIDGET_SIZE_ERROR_CODES.invalidWidgetId,
+                        };
+                    }
+                    if (typeof size !== "string" || !allowedSizes.has(size)) {
+                        return {
+                            sizes: state.sizes,
+                            valid: false,
+                            errorCode: WIDGET_SIZE_ERROR_CODES.invalidSize,
+                        };
+                    }
+                    return {
+                        sizes: { ...state.sizes, [widgetId]: size },
+                        valid: true,
+                        errorCode: null,
+                    };
+                },
+                { sizes: {}, valid: true, errorCode: null },
+            );
+            return result.valid
+                ? { valid: true, sizes: result.sizes }
+                : { valid: false, sizes: {}, errorCode: result.errorCode };
+        }
+
+        function validateWidgetSizePayload(payload) {
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+                return { valid: false, sizes: {}, errorCode: WIDGET_SIZE_ERROR_CODES.invalidPayload };
+            }
+            const hasSizesKey = Object.prototype.hasOwnProperty.call(payload, "sizes");
+            const hasVersionKey = Object.prototype.hasOwnProperty.call(payload, "version");
+            const isWrapped = hasSizesKey && hasVersionKey;
+            const candidateVersion = isWrapped ? payload.version : WIDGET_SIZE_SCHEMA_VERSION;
+            if (isWrapped) {
+                if (
+                    typeof candidateVersion !== "number"
+                    || !Number.isFinite(candidateVersion)
+                    || !Number.isInteger(candidateVersion)
+                    || candidateVersion < 1
+                ) {
+                    return { valid: false, sizes: {}, errorCode: WIDGET_SIZE_ERROR_CODES.invalidVersion };
+                }
+                if (candidateVersion !== WIDGET_SIZE_SCHEMA_VERSION) {
+                    return {
+                        valid: false,
+                        sizes: {},
+                        errorCode: WIDGET_SIZE_ERROR_CODES.versionMismatch,
+                        version: candidateVersion,
+                    };
+                }
+            }
+            const candidateSizes = isWrapped ? payload.sizes : payload;
+            const validated = validateWidgetSizeState(candidateSizes);
+            if (!validated.valid) {
+                return validated;
+            }
+            return { valid: true, sizes: validated.sizes, version: WIDGET_SIZE_SCHEMA_VERSION };
+        }
+
+        function validateWidgetLayoutPayload(payload) {
+            if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+                return { valid: false, layout: {}, errorCode: WIDGET_LAYOUT_ERROR_CODES.invalidPayload };
+            }
+
+            const hasLayoutKey = Object.prototype.hasOwnProperty.call(payload, "layout");
+            const hasVersionKey = Object.prototype.hasOwnProperty.call(payload, "version");
+            const isWrapped = hasLayoutKey && hasVersionKey;
+            const candidateVersion = isWrapped ? payload.version : WIDGET_LAYOUT_SCHEMA_VERSION;
+            if (isWrapped) {
+                if (
+                    typeof candidateVersion !== "number"
+                    || !Number.isFinite(candidateVersion)
+                    || !Number.isInteger(candidateVersion)
+                    || candidateVersion < 1
+                ) {
+                    return { valid: false, layout: {}, errorCode: WIDGET_LAYOUT_ERROR_CODES.invalidVersion };
+                }
+                if (candidateVersion !== WIDGET_LAYOUT_SCHEMA_VERSION) {
+                    return {
+                        valid: false,
+                        layout: {},
+                        errorCode: WIDGET_LAYOUT_ERROR_CODES.versionMismatch,
+                        version: candidateVersion,
+                    };
+                }
+            }
+
+            const candidateLayout = isWrapped ? payload.layout : payload;
+            const validated = validateWidgetLayoutState(candidateLayout);
+            if (!validated.valid) {
+                return validated;
+            }
+
+            const normalizedLayout = dedupeWidgetLayoutState(validated.layout);
+            return { valid: true, layout: normalizedLayout, version: WIDGET_LAYOUT_SCHEMA_VERSION };
         }
 
         function dedupeWidgetLayoutEntries(entries) {
@@ -6951,15 +10306,115 @@ export class DashboardServer {
             return Array.from(new Set(normalizedIds));
         }
 
-        function loadWidgetLayout() {
+        function normalizeWidgetLayoutUpdatedAt(value) {
+            if (typeof value === "number" && Number.isFinite(value)) {
+                return value > 0 ? value : 0;
+            }
+            if (typeof value === "string" && value.trim().length > 0) {
+                const parsed = Number(value);
+                return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+            }
+            return 0;
+        }
+
+        function loadWidgetLayoutMeta() {
+            try {
+                const raw = localStorage.getItem(WIDGET_LAYOUT_META_STORAGE_KEY);
+                const parsed = raw ? JSON.parse(raw) : null;
+                const updatedAt = normalizeWidgetLayoutUpdatedAt(parsed?.updatedAt);
+                return { updatedAt };
+            } catch (error) {
+                console.warn("Failed to load widget layout metadata:", error);
+                return { updatedAt: 0 };
+            }
+        }
+
+        function saveWidgetLayoutMeta(updatedAt) {
+            const normalizedUpdatedAt = normalizeWidgetLayoutUpdatedAt(updatedAt);
+            const resolvedUpdatedAt = normalizedUpdatedAt > 0
+                ? normalizedUpdatedAt
+                : updatedAt === 0
+                    ? 0
+                    : Date.now();
+            const payload = { updatedAt: resolvedUpdatedAt };
+            safeLocalStorageSet(
+                WIDGET_LAYOUT_META_STORAGE_KEY,
+                payload,
+                "Failed to persist widget layout metadata:",
+            );
+            return payload;
+        }
+
+        function readWidgetLayoutFromStorage() {
             try {
                 const raw = localStorage.getItem(WIDGET_LAYOUT_STORAGE_KEY);
-                const parsed = raw ? JSON.parse(raw) : {};
-                return dedupeWidgetLayoutState(normalizeWidgetLayoutState(parsed));
+                if (!raw) {
+                    return { status: "missing", layout: null, errorCode: null, version: null };
+                }
+                const parsed = JSON.parse(raw);
+                const validated = validateWidgetLayoutPayload(parsed);
+                if (!validated.valid) {
+                    const status = validated.errorCode === WIDGET_LAYOUT_ERROR_CODES.versionMismatch
+                        ? "version-mismatch"
+                        : "corrupt";
+                    return {
+                        status,
+                        layout: null,
+                        errorCode: validated.errorCode ?? null,
+                        version: validated.version ?? null,
+                    };
+                }
+                return { status: "valid", layout: validated.layout, errorCode: null, version: validated.version ?? null };
             } catch (error) {
                 console.warn("Failed to load widget layout:", error);
-                return {};
+                return {
+                    status: "corrupt",
+                    layout: null,
+                    errorCode: WIDGET_LAYOUT_ERROR_CODES.invalidPayload,
+                    version: null,
+                };
             }
+        }
+
+        function loadWidgetLayout() {
+            const loaded = readWidgetLayoutFromStorage();
+            return loaded.status === "valid" ? loaded.layout : {};
+        }
+
+        function initializeWidgetLayoutFromStorage() {
+            const loaded = readWidgetLayoutFromStorage();
+            if (loaded.status === "valid") {
+                return {
+                    status: "restored",
+                    layout: loaded.layout,
+                    errorCode: null,
+                    version: loaded.version ?? null,
+                };
+            }
+            if (loaded.status === "version-mismatch") {
+                console.warn(
+                    "Widget layout version mismatch. Rebuilding default layout.",
+                    { expected: WIDGET_LAYOUT_SCHEMA_VERSION, found: loaded.version },
+                );
+            } else if (loaded.status === "corrupt") {
+                if (loaded.errorCode) {
+                    console.warn(
+                        "Invalid widget layout found in localStorage. Falling back to default layout.",
+                        { code: loaded.errorCode },
+                    );
+                } else {
+                    console.warn("Invalid widget layout found in localStorage. Falling back to default layout.");
+                }
+            }
+            const snapshot = buildWidgetLayoutForContainers(getWidgetContainers());
+            const normalized = dedupeWidgetLayoutState(normalizeWidgetLayoutState(snapshot));
+            saveWidgetLayoutState(normalized, { updatedAt: 0, allowZero: true });
+            return {
+                status: "fallback",
+                layout: normalized,
+                errorCode: loaded.errorCode ?? null,
+                version: loaded.version ?? null,
+            };
         }
 
         function seedWidgetLayoutIfEmpty() {
@@ -6970,7 +10425,7 @@ export class DashboardServer {
             const snapshot = buildWidgetLayoutForContainers(getWidgetContainers());
             const normalized = dedupeWidgetLayoutState(normalizeWidgetLayoutState(snapshot));
             if (Object.keys(normalized).length > 0) {
-                saveWidgetLayoutState(normalized);
+                saveWidgetLayoutState(normalized, { updatedAt: 0, allowZero: true });
             }
             return normalized;
         }
@@ -6986,14 +10441,69 @@ export class DashboardServer {
             return mergeWidgetLayoutUpdates(layout, pending.widgetLayout);
         }
 
-        function loadWidgetSizes() {
+        function buildWidgetSizePayload(sizes) {
+            return {
+                version: WIDGET_SIZE_SCHEMA_VERSION,
+                sizes: normalizeWidgetSizeState(sizes),
+            };
+        }
+
+        function readWidgetSizesFromStorage() {
             try {
                 const raw = localStorage.getItem(WIDGET_SIZE_STORAGE_KEY);
-                return raw ? JSON.parse(raw) : {};
+                if (!raw) {
+                    return { status: "missing", sizes: {}, errorCode: null, version: null };
+                }
+                const parsed = JSON.parse(raw);
+                const validated = validateWidgetSizePayload(parsed);
+                if (!validated.valid) {
+                    const status = validated.errorCode === WIDGET_SIZE_ERROR_CODES.versionMismatch
+                        ? "version-mismatch"
+                        : "corrupt";
+                    return {
+                        status,
+                        sizes: {},
+                        errorCode: validated.errorCode ?? null,
+                        version: validated.version ?? null,
+                    };
+                }
+                return { status: "valid", sizes: validated.sizes, errorCode: null, version: validated.version ?? null };
             } catch (error) {
                 console.warn("Failed to load widget sizes:", error);
-                return {};
+                return {
+                    status: "corrupt",
+                    sizes: {},
+                    errorCode: WIDGET_SIZE_ERROR_CODES.invalidPayload,
+                    version: null,
+                };
             }
+        }
+
+        function clearWidgetSizeStorage() {
+            localStorage.removeItem(WIDGET_SIZE_STORAGE_KEY);
+        }
+
+        function loadWidgetSizes() {
+            const loaded = readWidgetSizesFromStorage();
+            if (loaded.status === "valid") {
+                return loaded.sizes;
+            }
+            if (loaded.status === "version-mismatch") {
+                console.warn(
+                    "Widget size version mismatch. Resetting stored sizes.",
+                    { expected: WIDGET_SIZE_SCHEMA_VERSION, found: loaded.version },
+                );
+            } else if (loaded.status === "corrupt") {
+                if (loaded.errorCode) {
+                    console.warn("Invalid widget sizes found in localStorage.", { code: loaded.errorCode });
+                } else {
+                    console.warn("Invalid widget sizes found in localStorage.");
+                }
+            }
+            if (loaded.status !== "missing") {
+                clearWidgetSizeStorage();
+            }
+            return {};
         }
 
         function loadHiddenWidgetIds() {
@@ -7073,13 +10583,27 @@ export class DashboardServer {
             localStorage.removeItem(WIDGET_LIBRARY_PENDING_ADD_KEY);
         }
 
-        function saveWidgetLayoutState(layout) {
+        function saveWidgetLayoutState(layout, options) {
             const normalized = dedupeWidgetLayoutState(normalizeWidgetLayoutState(layout));
+            const normalizedUpdatedAt = normalizeWidgetLayoutUpdatedAt(options?.updatedAt);
+            const shouldPreserveZero = options?.allowZero === true;
+            const resolvedUpdatedAt = normalizedUpdatedAt > 0
+                ? normalizedUpdatedAt
+                : shouldPreserveZero
+                    ? 0
+                    : Date.now();
+            const payload = {
+                version: WIDGET_LAYOUT_SCHEMA_VERSION,
+                layout: normalized,
+            };
             safeLocalStorageSet(
                 WIDGET_LAYOUT_STORAGE_KEY,
-                normalized,
+                payload,
                 "Failed to persist widget layout:",
             );
+            const meta = saveWidgetLayoutMeta(resolvedUpdatedAt);
+            widgetLayoutLastAppliedAt = meta.updatedAt;
+            widgetLayoutLastAppliedSnapshot = normalized;
             return normalized;
         }
 
@@ -7088,10 +10612,10 @@ export class DashboardServer {
                 return;
             }
             const sizes = loadWidgetSizes();
-            const nextSizes = { ...sizes, [widgetId]: size };
+            const nextSizes = { ...sizes, [widgetId]: normalizeWidgetSize(size) };
             safeLocalStorageSet(
                 WIDGET_SIZE_STORAGE_KEY,
-                nextSizes,
+                buildWidgetSizePayload(nextSizes),
                 "Failed to persist widget sizes:",
             );
         }
@@ -7101,10 +10625,10 @@ export class DashboardServer {
                 return loadWidgetSizes();
             }
             const sizes = loadWidgetSizes();
-            const nextSizes = { ...sizes, ...updatedSizes };
+            const nextSizes = normalizeWidgetSizeState({ ...sizes, ...updatedSizes });
             safeLocalStorageSet(
                 WIDGET_SIZE_STORAGE_KEY,
-                nextSizes,
+                buildWidgetSizePayload(nextSizes),
                 "Failed to persist widget sizes:",
             );
             return nextSizes;
@@ -7190,6 +10714,59 @@ export class DashboardServer {
                 return false;
             }
             return left.every((value, index) => value === right[index]);
+        }
+
+        function areWidgetLayoutStatesEqual(left, right) {
+            const normalizedLeft = dedupeWidgetLayoutState(normalizeWidgetLayoutState(left));
+            const normalizedRight = dedupeWidgetLayoutState(normalizeWidgetLayoutState(right));
+            const leftKeys = Object.keys(normalizedLeft);
+            const rightKeys = Object.keys(normalizedRight);
+            if (leftKeys.length !== rightKeys.length) {
+                return false;
+            }
+            return leftKeys.every((containerId) =>
+                Object.prototype.hasOwnProperty.call(normalizedRight, containerId)
+                && areWidgetIdListsEqual(normalizedLeft[containerId], normalizedRight[containerId]),
+            );
+        }
+
+        function mergeWidgetLayoutFallback(currentLayout, incomingLayout) {
+            const normalizedCurrent = dedupeWidgetLayoutState(normalizeWidgetLayoutState(currentLayout));
+            const normalizedIncoming = dedupeWidgetLayoutState(normalizeWidgetLayoutState(incomingLayout));
+            const currentContainers = new Set(Object.keys(normalizedCurrent));
+            const fallbackUpdates = Object.entries(normalizedIncoming).reduce((acc, [containerId, widgetIds]) => {
+                if (currentContainers.has(containerId)) {
+                    return acc;
+                }
+                return { ...acc, [containerId]: widgetIds };
+            }, {});
+            return mergeWidgetLayoutUpdates(normalizedCurrent, fallbackUpdates);
+        }
+
+        function resolveWidgetLayoutConflict(currentLayout, currentMeta, incomingLayout, incomingMeta) {
+            const normalizedCurrent = dedupeWidgetLayoutState(normalizeWidgetLayoutState(currentLayout));
+            const normalizedIncoming = dedupeWidgetLayoutState(normalizeWidgetLayoutState(incomingLayout));
+            const currentUpdatedAt = normalizeWidgetLayoutUpdatedAt(currentMeta?.updatedAt);
+            const incomingUpdatedAt = normalizeWidgetLayoutUpdatedAt(incomingMeta?.updatedAt);
+            if (currentUpdatedAt > 0 && incomingUpdatedAt > 0) {
+                if (incomingUpdatedAt > currentUpdatedAt) {
+                    return { layout: normalizedIncoming, updatedAt: incomingUpdatedAt, action: "replace" };
+                }
+                if (incomingUpdatedAt < currentUpdatedAt) {
+                    return { layout: normalizedCurrent, updatedAt: currentUpdatedAt, action: "keep" };
+                }
+                const merged = mergeWidgetLayoutUpdates(normalizedCurrent, normalizedIncoming);
+                return { layout: merged, updatedAt: currentUpdatedAt, action: "merge" };
+            }
+            if (currentUpdatedAt > 0 && incomingUpdatedAt === 0) {
+                const merged = mergeWidgetLayoutFallback(normalizedCurrent, normalizedIncoming);
+                return { layout: merged, updatedAt: currentUpdatedAt, action: "merge" };
+            }
+            if (incomingUpdatedAt > 0 && currentUpdatedAt === 0) {
+                return { layout: normalizedIncoming, updatedAt: incomingUpdatedAt, action: "replace" };
+            }
+            const merged = mergeWidgetLayoutUpdates(normalizedCurrent, normalizedIncoming);
+            return { layout: merged, updatedAt: 0, action: "merge" };
         }
 
         function reconcileWidgetLayoutPendingAfterHttp(widgetLayout, options) {
@@ -7376,6 +10953,15 @@ export class DashboardServer {
                 });
         }
 
+        function handleWidgetLayoutHttpResult(widgetLayout, options, success) {
+            if (success) {
+                reconcileWidgetLayoutPendingAfterHttp(widgetLayout, options);
+                notifyWidgetLayoutSaveSuccess({});
+                return;
+            }
+            notifyWidgetLayoutSaveFailure({});
+        }
+
         function postWidgetVisibilityUpdate(hiddenWidgetIds) {
             if (!Array.isArray(hiddenWidgetIds)) {
                 return Promise.resolve(false);
@@ -7408,9 +10994,7 @@ export class DashboardServer {
             if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
                 queueWidgetLayoutSync(updates, { fullLayout: false });
                 void postWidgetLayoutUpdate(updates, { fullLayout: false }).then((success) => {
-                    if (success) {
-                        reconcileWidgetLayoutPendingAfterHttp(updates, { fullLayout: false });
-                    }
+                    handleWidgetLayoutHttpResult(updates, { fullLayout: false }, success);
                 });
                 return;
             }
@@ -7436,9 +11020,7 @@ export class DashboardServer {
             if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
                 queueWidgetLayoutSync(normalized, { fullLayout });
                 void postWidgetLayoutUpdate(normalized, { fullLayout }).then((success) => {
-                    if (success) {
-                        reconcileWidgetLayoutPendingAfterHttp(normalized, { fullLayout });
-                    }
+                    handleWidgetLayoutHttpResult(normalized, { fullLayout }, success);
                 });
                 return;
             }
@@ -7449,6 +11031,264 @@ export class DashboardServer {
                 type: "widget_layout_update",
                 data
             }));
+        }
+
+        function setupWidgetLayoutSyncChannel() {
+            if (typeof BroadcastChannel === "undefined") {
+                return;
+            }
+            if (widgetLayoutSyncChannel) {
+                return;
+            }
+            const channel = new BroadcastChannel(WIDGET_LAYOUT_SYNC_CHANNEL);
+            channel.onmessage = (event) => {
+                handleWidgetLayoutBroadcast(event?.data);
+            };
+            widgetLayoutSyncChannel = channel;
+        }
+
+        function broadcastWidgetLayoutSync(widgetLayout, options) {
+            if (!widgetLayoutSyncChannel) {
+                return;
+            }
+            const updatedAt = normalizeWidgetLayoutUpdatedAt(options?.updatedAt) || Date.now();
+            widgetLayoutSyncChannel.postMessage({
+                type: "widget_layout_sync",
+                layout: widgetLayout,
+                updatedAt,
+                sourceId: widgetLayoutSyncTabId,
+            });
+        }
+
+        function handleWidgetLayoutBroadcast(payload) {
+            if (!payload || payload.type !== "widget_layout_sync") {
+                return;
+            }
+            if (payload.sourceId && payload.sourceId === widgetLayoutSyncTabId) {
+                return;
+            }
+            const incomingLayout = payload.layout;
+            if (!incomingLayout || typeof incomingLayout !== "object") {
+                return;
+            }
+            const currentLayout = loadWidgetLayout();
+            const currentMeta = loadWidgetLayoutMeta();
+            const resolved = resolveWidgetLayoutConflict(
+                currentLayout,
+                currentMeta,
+                incomingLayout,
+                { updatedAt: payload.updatedAt },
+            );
+            const shouldApply = resolved.action !== "keep"
+                || !areWidgetLayoutStatesEqual(currentLayout, resolved.layout);
+            if (!shouldApply) {
+                widgetLayoutLastAppliedAt = Math.max(widgetLayoutLastAppliedAt, resolved.updatedAt);
+                return;
+            }
+            applyWidgetLayoutState(resolved.layout, {
+                updatedAt: resolved.updatedAt,
+                allowZero: resolved.updatedAt === 0,
+            });
+            updateWidgetLayoutSyncState({
+                hasSynced: true,
+                hasLayout: Object.keys(resolved.layout).length > 0,
+            });
+            triggerPendingAddSelectedWidgets();
+        }
+
+        async function loadUserProfileState(options) {
+            const token = readAuthToken();
+            if (!token) {
+                widgetLayoutProfileState = {
+                    ...widgetLayoutProfileState,
+                    isAuthenticated: false,
+                };
+                return null;
+            }
+            const now = Date.now();
+            const shouldRefresh = options?.force
+                || !widgetLayoutProfileState.isAuthenticated
+                || now - (widgetLayoutProfileState.lastFetchedAt || 0) > WIDGET_LAYOUT_PROFILE_REFRESH_MS;
+            if (!shouldRefresh && widgetLayoutProfileState.preferences) {
+                return widgetLayoutProfileState;
+            }
+            try {
+                const response = await fetch("/api/users/me", {
+                    headers: {
+                        Authorization: "Bearer " + token,
+                    },
+                });
+                if (!response.ok) {
+                    widgetLayoutProfileState = {
+                        ...widgetLayoutProfileState,
+                        isAuthenticated: false,
+                    };
+                    return null;
+                }
+                const data = await response.json();
+                const user = data?.user;
+                if (!user || !user.id) {
+                    return null;
+                }
+                const nextPreferences = user.preferences && typeof user.preferences === "object"
+                    ? user.preferences
+                    : {};
+                widgetLayoutProfileState = {
+                    userId: user.id,
+                    preferences: nextPreferences,
+                    lastFetchedAt: now,
+                    isAuthenticated: true,
+                };
+                return widgetLayoutProfileState;
+            } catch (error) {
+                console.warn("Failed to load user profile:", error);
+                widgetLayoutProfileState = {
+                    ...widgetLayoutProfileState,
+                    isAuthenticated: false,
+                };
+                return null;
+            }
+        }
+
+        function extractWidgetLayoutFromProfile(preferences) {
+            if (!preferences || typeof preferences !== "object") {
+                return null;
+            }
+            const dashboardPreferences = preferences.dashboard;
+            if (!dashboardPreferences || typeof dashboardPreferences !== "object") {
+                return null;
+            }
+            const widgetLayout = dashboardPreferences.widgetLayout;
+            if (!widgetLayout || typeof widgetLayout !== "object") {
+                return null;
+            }
+            const layout = widgetLayout.layout ?? widgetLayout.widgetLayout ?? widgetLayout;
+            if (!layout || typeof layout !== "object") {
+                return null;
+            }
+            const updatedAt = normalizeWidgetLayoutUpdatedAt(widgetLayout.updatedAt);
+            return { layout, updatedAt };
+        }
+
+        function buildWidgetLayoutProfilePayload(layout, updatedAt) {
+            const normalizedLayout = dedupeWidgetLayoutState(normalizeWidgetLayoutState(layout));
+            return {
+                layout: normalizedLayout,
+                updatedAt: normalizeWidgetLayoutUpdatedAt(updatedAt) || Date.now(),
+                version: WIDGET_LAYOUT_PROFILE_VERSION,
+            };
+        }
+
+        async function hydrateWidgetLayoutFromProfile(options) {
+            const profileState = await loadUserProfileState(options);
+            if (!profileState || !profileState.isAuthenticated) {
+                return;
+            }
+            if (widgetLayoutProfileSyncState.pendingLayout) {
+                void flushWidgetLayoutProfileSync();
+            }
+            const profileLayout = extractWidgetLayoutFromProfile(profileState.preferences);
+            if (!profileLayout) {
+                return;
+            }
+            const currentLayout = loadWidgetLayout();
+            const currentMeta = loadWidgetLayoutMeta();
+            const resolved = resolveWidgetLayoutConflict(
+                currentLayout,
+                currentMeta,
+                profileLayout.layout,
+                { updatedAt: profileLayout.updatedAt },
+            );
+            const shouldApply = resolved.action !== "keep"
+                || !areWidgetLayoutStatesEqual(currentLayout, resolved.layout);
+            if (!shouldApply) {
+                if (currentMeta.updatedAt > profileLayout.updatedAt) {
+                    scheduleWidgetLayoutProfileSync(currentLayout, { updatedAt: currentMeta.updatedAt });
+                }
+                return;
+            }
+            applyWidgetLayoutState(resolved.layout, {
+                updatedAt: resolved.updatedAt,
+                allowZero: resolved.updatedAt === 0,
+            });
+            updateWidgetLayoutSyncState({
+                hasSynced: true,
+                hasLayout: Object.keys(resolved.layout).length > 0,
+            });
+            triggerPendingAddSelectedWidgets();
+            if (resolved.action === "merge") {
+                scheduleWidgetLayoutProfileSync(resolved.layout, { updatedAt: resolved.updatedAt, force: true });
+            }
+        }
+
+        function scheduleWidgetLayoutProfileSync(layout, options) {
+            if (!layout || typeof layout !== "object") {
+                return;
+            }
+            const updatedAt = normalizeWidgetLayoutUpdatedAt(options?.updatedAt) || Date.now();
+            if (!options?.force && updatedAt <= widgetLayoutProfileSyncState.lastSyncedUpdatedAt) {
+                return;
+            }
+            const normalized = dedupeWidgetLayoutState(normalizeWidgetLayoutState(layout));
+            if (Object.keys(normalized).length === 0) {
+                return;
+            }
+            if (widgetLayoutProfileSyncState.timeoutId !== null) {
+                clearTimeout(widgetLayoutProfileSyncState.timeoutId);
+            }
+            const timeoutId = window.setTimeout(() => {
+                void flushWidgetLayoutProfileSync();
+            }, WIDGET_LAYOUT_PROFILE_SYNC_DEBOUNCE_MS);
+            widgetLayoutProfileSyncState = {
+                ...widgetLayoutProfileSyncState,
+                timeoutId,
+                pendingLayout: normalized,
+                pendingUpdatedAt: updatedAt,
+            };
+        }
+
+        async function flushWidgetLayoutProfileSync() {
+            const pendingLayout = widgetLayoutProfileSyncState.pendingLayout;
+            if (!pendingLayout || typeof pendingLayout !== "object") {
+                return;
+            }
+            widgetLayoutProfileSyncState = {
+                ...widgetLayoutProfileSyncState,
+                timeoutId: null,
+            };
+            const token = readAuthToken();
+            if (!token) {
+                return;
+            }
+            const profileState = await loadUserProfileState({ force: false });
+            const basePreferences = resolvePreferencesBase(profileState);
+            const dashboardPreferences = basePreferences.dashboard && typeof basePreferences.dashboard === "object"
+                ? basePreferences.dashboard
+                : {};
+            const payload = buildWidgetLayoutProfilePayload(
+                pendingLayout,
+                widgetLayoutProfileSyncState.pendingUpdatedAt,
+            );
+            const nextPreferences = {
+                ...basePreferences,
+                dashboard: {
+                    ...dashboardPreferences,
+                    widgetLayout: payload,
+                },
+            };
+            const updatedAt = normalizeWidgetLayoutUpdatedAt(payload.updatedAt) || Date.now();
+            const success = await persistPreferencesUpdate(nextPreferences, {
+                updatedAt,
+                source: "dashboard.widgetLayout",
+            });
+            if (success) {
+                widgetLayoutProfileSyncState = {
+                    ...widgetLayoutProfileSyncState,
+                    pendingLayout: null,
+                    pendingUpdatedAt: 0,
+                    lastSyncedUpdatedAt: updatedAt,
+                };
+            }
         }
 
         function requestWidgetLayoutSync() {
@@ -7477,6 +11317,18 @@ export class DashboardServer {
             }));
         }
 
+        function commitWidgetLayoutUpdate(widgetLayout, options) {
+            const updatedAt = normalizeWidgetLayoutUpdatedAt(options?.updatedAt) || Date.now();
+            const normalized = saveWidgetLayoutState(widgetLayout, { updatedAt });
+            if (options?.broadcast) {
+                broadcastWidgetLayoutSync(normalized, { updatedAt });
+            }
+            if (options?.profileSync) {
+                scheduleWidgetLayoutProfileSync(normalized, { updatedAt });
+            }
+            return { layout: normalized, updatedAt };
+        }
+
         function saveWidgetLayout(containerId, widgetIds) {
             if (!containerId) {
                 return;
@@ -7485,16 +11337,25 @@ export class DashboardServer {
             const nextLayout = mergeWidgetLayoutUpdates(layout, {
                 [containerId]: Array.isArray(widgetIds) ? widgetIds : [],
             });
-            saveWidgetLayoutState(nextLayout);
+            commitWidgetLayoutUpdate(nextLayout, { profileSync: true, broadcast: true });
         }
 
         function persistWidgetLayout(containerId, widgetIds, options) {
             if (!containerId) {
                 return;
             }
-            saveWidgetLayout(containerId, widgetIds);
+            const layout = loadWidgetLayout();
+            const nextLayout = mergeWidgetLayoutUpdates(layout, {
+                [containerId]: Array.isArray(widgetIds) ? widgetIds : [],
+            });
+            commitWidgetLayoutUpdate(nextLayout, {
+                profileSync: true,
+                broadcast: true,
+            });
             if (options?.broadcast) {
-                sendWidgetLayoutUpdate(containerId, widgetIds);
+                scheduleWidgetLayoutAutoSave({
+                    [containerId]: Array.isArray(widgetIds) ? widgetIds : [],
+                });
             }
         }
 
@@ -7515,6 +11376,91 @@ export class DashboardServer {
                 .filter(widget => !widget.classList.contains("widget-hidden"));
         }
 
+        function getDashboardGridContainers() {
+            return getWidgetContainers().filter(container => container.classList.contains("dashboard-grid"));
+        }
+
+        function parsePixelValue(value) {
+            const parsed = Number.parseFloat(value);
+            return Number.isFinite(parsed) ? parsed : 0;
+        }
+
+        function resolveDashboardGridRange(viewportWidth) {
+            if (viewportWidth < DASHBOARD_GRID_BREAKPOINTS.mobileMax + 1) {
+                return DASHBOARD_GRID_RANGES.mobile;
+            }
+            if (viewportWidth <= DASHBOARD_GRID_BREAKPOINTS.tabletMax) {
+                return DASHBOARD_GRID_RANGES.tablet;
+            }
+            return DASHBOARD_GRID_RANGES.desktop;
+        }
+
+        function getDashboardGridGap(container) {
+            if (typeof window === "undefined") {
+                return 0;
+            }
+            const styles = window.getComputedStyle(container);
+            const gapValue = styles.columnGap || styles.gap || "0";
+            return parsePixelValue(gapValue);
+        }
+
+        function getDashboardGridMinWidth(container) {
+            if (typeof window === "undefined") {
+                return 0;
+            }
+            const styles = window.getComputedStyle(container);
+            const minWidthValue = styles.getPropertyValue("--dashboard-grid-min-width") || "0";
+            return parsePixelValue(minWidthValue);
+        }
+
+        function getDashboardGridContainerWidth(container, viewportWidth) {
+            const rect = container.getBoundingClientRect();
+            const width = rect.width || container.clientWidth || viewportWidth || 0;
+            return Math.max(width, 0);
+        }
+
+        function computeDashboardGridColumns(container, widgetCount, viewportWidth) {
+            const range = resolveDashboardGridRange(viewportWidth);
+            const safeWidgetCount = Math.max(1, widgetCount);
+            const minWidth = getDashboardGridMinWidth(container);
+            const gap = getDashboardGridGap(container);
+            const containerWidth = getDashboardGridContainerWidth(container, viewportWidth);
+            const columnWidth = minWidth + gap;
+            const maxByWidth = columnWidth > 0
+                ? Math.floor((containerWidth + gap) / columnWidth)
+                : range.max;
+            const maxColumns = Math.min(range.max, safeWidgetCount, Math.max(1, maxByWidth));
+            const minColumns = Math.min(range.min, maxColumns);
+            return Math.max(minColumns, 1);
+        }
+
+        function applyDashboardGridColumns(container, columns) {
+            container.style.setProperty("--dashboard-grid-columns", String(columns));
+            if (columns === 1) {
+                container.classList.add("dashboard-grid-single");
+                return;
+            }
+            container.classList.remove("dashboard-grid-single");
+        }
+
+        function applyResponsiveDashboardGrid(containers) {
+            if (typeof window === "undefined") {
+                return;
+            }
+            const viewportWidth = window.innerWidth || 0;
+            const resolvedContainers = Array.isArray(containers) && containers.length > 0
+                ? containers
+                : getDashboardGridContainers();
+            resolvedContainers.forEach(container => {
+                if (!(container instanceof HTMLElement) || !container.classList.contains("dashboard-grid")) {
+                    return;
+                }
+                const widgetCount = getWidgets(container).length;
+                const columns = computeDashboardGridColumns(container, widgetCount, viewportWidth);
+                applyDashboardGridColumns(container, columns);
+            });
+        }
+
         function getWidgetsIncludingHidden(container) {
             return Array.from(container.querySelectorAll("[data-widget-id]"));
         }
@@ -7527,6 +11473,95 @@ export class DashboardServer {
             return getWidgetContainers().reduce((widgets, container) => {
                 return widgets.concat(getWidgets(container));
             }, []);
+        }
+
+        function getMaxVisibleWidgets() {
+            return MAX_VISIBLE_WIDGETS;
+        }
+
+        function getVisibleWidgetCount() {
+            return getAllWidgets().length;
+        }
+
+        function getRemainingWidgetSlots(visibleCountOverride) {
+            const maxVisible = getMaxVisibleWidgets();
+            const visibleCount = typeof visibleCountOverride === "number"
+                ? visibleCountOverride
+                : getVisibleWidgetCount();
+            return Math.max(0, maxVisible - visibleCount);
+        }
+
+        function getWidgetLimitState() {
+            const visibleCount = getVisibleWidgetCount();
+            const maxVisible = getMaxVisibleWidgets();
+            const remainingSlots = getRemainingWidgetSlots(visibleCount);
+            return {
+                visibleCount,
+                maxVisible,
+                remainingSlots,
+                limitReached: remainingSlots === 0,
+            };
+        }
+
+        function updateWidgetLimitMessage(limitState) {
+            const message = document.getElementById("widgetLimitMessage");
+            if (!(message instanceof HTMLElement)) {
+                return;
+            }
+            if (limitState.limitReached) {
+                message.textContent = buildWidgetLimitMessage(limitState.visibleCount, limitState.maxVisible);
+                message.hidden = false;
+                message.setAttribute("aria-hidden", "false");
+                return;
+            }
+            message.textContent = "";
+            message.hidden = true;
+            message.setAttribute("aria-hidden", "true");
+        }
+
+        function updateWidgetLimitActionButtons(limitState) {
+            const showAllWidgetsBtn = document.getElementById("showAllWidgetsBtn");
+            if (showAllWidgetsBtn instanceof HTMLButtonElement) {
+                const isDisabled = limitState.limitReached;
+                showAllWidgetsBtn.disabled = isDisabled;
+                if (isDisabled) {
+                    showAllWidgetsBtn.setAttribute("aria-disabled", "true");
+                    showAllWidgetsBtn.title = "Widget limit reached";
+                } else {
+                    showAllWidgetsBtn.removeAttribute("aria-disabled");
+                    showAllWidgetsBtn.removeAttribute("title");
+                }
+            }
+        }
+
+        function buildWidgetLimitMessage(visibleCountOverride, maxVisibleOverride) {
+            const maxVisible = typeof maxVisibleOverride === "number"
+                ? maxVisibleOverride
+                : getMaxVisibleWidgets();
+            const visibleCount = typeof visibleCountOverride === "number"
+                ? visibleCountOverride
+                : getVisibleWidgetCount();
+            return "Widget limit reached. You can show up to " +
+                maxVisible +
+                " widgets (currently " +
+                visibleCount +
+                "). Hide a widget to add more.";
+        }
+
+        function buildWidgetLimitAddMessage(maxVisible, attemptedCount, addedCount) {
+            if (typeof attemptedCount !== "number" || typeof addedCount !== "number") {
+                return "Widget limit reached. You can show up to " + maxVisible + " widgets. Hide a widget to add more.";
+            }
+            if (attemptedCount <= addedCount) {
+                return "Widget limit reached. You can show up to " + maxVisible + " widgets. Hide a widget to add more.";
+            }
+            return "Widget limit reached. Added " +
+                addedCount +
+                " of " +
+                attemptedCount +
+                " widgets (max " +
+                maxVisible +
+                "). Hide a widget to add more.";
         }
 
         function updateEmptyDashboardState() {
@@ -7589,6 +11624,297 @@ export class DashboardServer {
             return WIDGET_CONTAINER_LABELS[containerId] || "Other";
         }
 
+        function getWidgetMoveAnnouncer() {
+            if (typeof document === "undefined") {
+                return null;
+            }
+            const announcer = document.getElementById(WIDGET_MOVE_ANNOUNCER_ID);
+            return announcer instanceof HTMLElement ? announcer : null;
+        }
+
+        function announceWidgetMove(message) {
+            if (!message || typeof window === "undefined") {
+                return;
+            }
+            const announcer = getWidgetMoveAnnouncer();
+            if (!announcer) {
+                return;
+            }
+            announcer.textContent = "";
+            window.setTimeout(() => {
+                announcer.textContent = message;
+            }, 0);
+        }
+
+        const WIDGET_LIBRARY_DESCRIPTION_OVERRIDES = {
+            "overview-total": "Total tasks across your workspace.",
+            "overview-pending": "Tasks awaiting action right now.",
+            "overview-in-progress": "Active work currently in progress.",
+            "overview-completed": "Completed tasks and throughput.",
+            "overview-my-tasks": "Top tasks with quick actions to complete, reprioritize, or review.",
+            "overview-connections": "Live agent connections and activity.",
+            "overview-status-breakdown": "Status distribution across your tasks.",
+            "overview-priority-breakdown": "Priority distribution snapshot.",
+            "overview-recent-activity": "Latest task updates and activity stream.",
+            "queue-total": "Queued tasks waiting for processing.",
+            "queue-high-priority": "High priority tasks in the queue.",
+            "queue-avg-processing": "Average processing time for queued work.",
+            "queue-failed": "Failed queue items requiring attention.",
+            "health-system": "System resource health snapshot.",
+            "health-memory": "Memory usage overview.",
+            "health-connections": "Active connection health signals.",
+            "health-system-info": "System build and environment details.",
+            "health-performance": "CPU and throughput signals.",
+            "health-controls": "Worker controls and toggles.",
+            "health-alerts": "Active alerts and warnings.",
+        };
+
+        const WIDGET_LIBRARY_PREVIEW_OVERRIDES = {
+            "overview-total": "Workspace totals",
+            "overview-my-tasks": "Task action list",
+            "overview-recent-activity": "Activity feed preview",
+            "overview-priority-breakdown": "Priority split preview",
+            "health-system": "Live health snapshot",
+            "health-alerts": "Alert activity preview",
+        };
+
+        const WIDGET_LIBRARY_DATA_SOURCE_OVERRIDES = {
+            "overview-my-tasks": ["Task store", "Task actions"],
+            "overview-connections": ["WebSocket", "Daemon sessions"],
+            "overview-recent-activity": ["Activity log", "Task events"],
+            "overview-status-breakdown": ["Task store", "Workflow status"],
+            "overview-priority-breakdown": ["Task store", "Priority analytics"],
+            "queue-avg-processing": ["Queue processor", "Timing metrics"],
+            "health-system-info": ["Daemon runtime", "Host environment"],
+            "health-controls": ["Worker manager", "Scheduler"],
+            "health-alerts": ["Alerting", "System monitor"],
+        };
+
+        const WIDGET_LIBRARY_METRICS_COUNT_OVERRIDES = {
+            "overview-status-breakdown": 3,
+            "overview-priority-breakdown": 3,
+            "overview-recent-activity": 5,
+            "overview-my-tasks": 5,
+            "health-system-info": 4,
+            "health-controls": 2,
+            "health-alerts": 2,
+        };
+
+        const WIDGET_LIBRARY_DATA_SOURCE_DEFAULTS = {
+            overview: ["Task store", "Dashboard metrics"],
+            queue: ["Queue processor", "Task store"],
+            health: ["System monitor", "Daemon telemetry"],
+            other: ["Dashboard telemetry"],
+        };
+
+        function buildWidgetLibraryDescription(widgetInfo) {
+            const explicit = WIDGET_LIBRARY_DESCRIPTION_OVERRIDES[widgetInfo.id];
+            if (explicit) {
+                return explicit;
+            }
+            const label = widgetInfo.label || "Widget";
+            const containerLabel = widgetInfo.containerLabel || getWidgetContainerLabel(widgetInfo.containerId);
+            if (widgetInfo.id.startsWith("overview-")) {
+                return "Overview signal for " + label + ".";
+            }
+            if (widgetInfo.id.startsWith("queue-")) {
+                return "Queue signal for " + label + ".";
+            }
+            if (widgetInfo.id.startsWith("health-")) {
+                return "Health signal for " + label + ".";
+            }
+            return containerLabel ? containerLabel + " widget for " + label + "." : "Dashboard widget for " + label + ".";
+        }
+
+        function buildWidgetLibraryDataSources(widgetInfo) {
+            const explicit = WIDGET_LIBRARY_DATA_SOURCE_OVERRIDES[widgetInfo.id];
+            if (explicit) {
+                return [...explicit];
+            }
+            if (widgetInfo.id.startsWith("overview-")) {
+                return [...WIDGET_LIBRARY_DATA_SOURCE_DEFAULTS.overview];
+            }
+            if (widgetInfo.id.startsWith("queue-")) {
+                return [...WIDGET_LIBRARY_DATA_SOURCE_DEFAULTS.queue];
+            }
+            if (widgetInfo.id.startsWith("health-")) {
+                return [...WIDGET_LIBRARY_DATA_SOURCE_DEFAULTS.health];
+            }
+            return [...WIDGET_LIBRARY_DATA_SOURCE_DEFAULTS.other];
+        }
+
+        function buildWidgetLibraryMetricsCount(widgetInfo) {
+            const explicit = WIDGET_LIBRARY_METRICS_COUNT_OVERRIDES[widgetInfo.id];
+            if (typeof explicit === "number") {
+                return explicit;
+            }
+            if (widgetInfo.id.startsWith("health-")) {
+                return 2;
+            }
+            return 1;
+        }
+
+        function buildWidgetLibraryPreview(widgetInfo) {
+            const explicit = WIDGET_LIBRARY_PREVIEW_OVERRIDES[widgetInfo.id];
+            if (explicit) {
+                return explicit;
+            }
+            const containerLabel = widgetInfo.containerLabel || getWidgetContainerLabel(widgetInfo.containerId);
+            return containerLabel ? containerLabel + " preview" : "Dashboard preview";
+        }
+
+        function normalizeWidgetLibrarySearchQuery(query) {
+            if (typeof query !== "string") {
+                return "";
+            }
+            return query.trim().toLowerCase();
+        }
+
+        function updateWidgetLibrarySearchQuery(nextQuery) {
+            const resolved = typeof nextQuery === "string" ? nextQuery : "";
+            if (resolved === widgetLibrarySearchQuery) {
+                return;
+            }
+            widgetLibrarySearchQuery = resolved;
+            renderWidgetLibrary();
+        }
+
+        function updateWidgetLibraryCategoryFilter(nextCategory) {
+            const resolved = nextCategory || WIDGET_LIBRARY_FILTER_ALL;
+            if (resolved === widgetLibraryActiveCategory) {
+                return;
+            }
+            widgetLibraryActiveCategory = resolved;
+            renderWidgetLibrary();
+        }
+
+        function resetWidgetLibraryFilters() {
+            widgetLibrarySearchQuery = "";
+            widgetLibraryActiveCategory = WIDGET_LIBRARY_FILTER_ALL;
+            renderWidgetLibrary();
+        }
+
+        function getWidgetLibraryCategoryOptions(catalog) {
+            const counts = catalog.reduce((acc, widget) => {
+                const containerId = widget.containerId || "other";
+                const current = acc[containerId] ?? 0;
+                return { ...acc, [containerId]: current + 1 };
+            }, {});
+            const orderedContainerIds = [
+                ...WIDGET_CONTAINER_ORDER,
+                ...Object.keys(counts).filter(id => !WIDGET_CONTAINER_ORDER.includes(id)),
+            ];
+            const options = orderedContainerIds.map(containerId => ({
+                id: containerId,
+                label: getWidgetContainerLabel(containerId),
+                count: counts[containerId] ?? 0,
+            }));
+            const totalCount = catalog.length;
+            return [{ id: WIDGET_LIBRARY_FILTER_ALL, label: "All", count: totalCount }].concat(options);
+        }
+
+        function filterWidgetLibraryCatalog(catalog, searchQuery, activeCategory) {
+            const searchTerm = normalizeWidgetLibrarySearchQuery(searchQuery);
+            return catalog.filter(widget => {
+                if (activeCategory !== WIDGET_LIBRARY_FILTER_ALL && widget.containerId !== activeCategory) {
+                    return false;
+                }
+                if (!searchTerm) {
+                    return true;
+                }
+                const haystack = [
+                    widget.label,
+                    widget.id,
+                    widget.containerLabel,
+                    widget.description,
+                    Array.isArray(widget.dataSources) ? widget.dataSources.join(" ") : "",
+                ]
+                    .filter(Boolean)
+                    .join(" ")
+                    .toLowerCase();
+                return haystack.includes(searchTerm);
+            });
+        }
+
+        function buildWidgetLibraryTooltipId(widgetId) {
+            if (!widgetId) {
+                return "widget-library-tooltip";
+            }
+            const safeId = widgetId.replace(/[^a-zA-Z0-9_-]/g, "");
+            return "widget-library-tooltip-" + safeId;
+        }
+
+        function buildWidgetLibraryTooltip(widgetInfo, state) {
+            const tooltip = document.createElement("div");
+            tooltip.className = "widget-library-tooltip";
+            tooltip.id = buildWidgetLibraryTooltipId(widgetInfo.id);
+            tooltip.setAttribute("role", "tooltip");
+
+            const preview = document.createElement("div");
+            preview.className = "widget-library-tooltip-preview";
+
+            const badge = document.createElement("div");
+            badge.className = "widget-library-tooltip-badge";
+
+            const previewText = document.createElement("div");
+            previewText.textContent = buildWidgetLibraryPreview(widgetInfo);
+
+            preview.appendChild(badge);
+            preview.appendChild(previewText);
+
+            const title = document.createElement("div");
+            title.className = "widget-library-tooltip-title";
+            title.textContent = widgetInfo.label;
+
+            const detail = document.createElement("div");
+            detail.className = "widget-library-tooltip-detail";
+            const left = document.createElement("span");
+            left.textContent = widgetInfo.containerLabel || "Widget";
+            const right = document.createElement("span");
+            right.className = "widget-library-tooltip-status";
+            if (!state.isHidden) {
+                right.textContent = "On dashboard";
+            } else if (state.isSelected) {
+                right.textContent = "Selected";
+            } else {
+                right.textContent = "Available";
+            }
+            detail.appendChild(left);
+            detail.appendChild(right);
+
+            const description = document.createElement("div");
+            description.textContent = widgetInfo.description;
+
+            tooltip.appendChild(preview);
+            tooltip.appendChild(title);
+            tooltip.appendChild(description);
+            tooltip.appendChild(detail);
+
+            return tooltip;
+        }
+
+        function updateWidgetLibrarySelectionSummary(summary) {
+            const summaryElement = document.getElementById("widgetLibrarySelectionSummary");
+            if (!(summaryElement instanceof HTMLElement)) {
+                return;
+            }
+            const clearButton = document.getElementById("clearSelectedWidgetsBtn");
+            const totalCount = summary?.totalCount ?? widgetCatalog.length;
+            const filteredCount = summary?.filteredCount ?? totalCount;
+            const selectedCount = selectedWidgetIds.size;
+            const countLabel = filteredCount === totalCount
+                ? filteredCount + " widgets"
+                : filteredCount + " of " + totalCount + " widgets";
+            if (selectedCount === 0) {
+                summaryElement.textContent = "Showing " + countLabel + ". None selected.";
+            } else {
+                summaryElement.textContent = "Showing " + countLabel + ". " + selectedCount + " selected.";
+            }
+            if (clearButton instanceof HTMLButtonElement) {
+                clearButton.disabled = selectedCount === 0;
+            }
+        }
+
         function sortWidgetCatalog(catalog) {
             const orderIndex = WIDGET_CONTAINER_ORDER.reduce((acc, id, index) => {
                 return { ...acc, [id]: index };
@@ -7622,11 +11948,20 @@ export class DashboardServer {
                 if (label && !widget.dataset.widgetLabel) {
                     widget.dataset.widgetLabel = label;
                 }
-                return acc.concat({
+                const containerLabel = getWidgetContainerLabel(resolvedContainerId);
+                const widgetInfo = {
                     id: widgetId,
                     label,
                     containerId: resolvedContainerId,
-                    containerLabel: getWidgetContainerLabel(resolvedContainerId),
+                    containerLabel,
+                };
+                const dataSources = buildWidgetLibraryDataSources(widgetInfo);
+                const metricsCount = buildWidgetLibraryMetricsCount(widgetInfo);
+                return acc.concat({
+                    ...widgetInfo,
+                    description: buildWidgetLibraryDescription(widgetInfo),
+                    dataSources,
+                    metricsCount,
                 });
             }, []);
             widgetCatalog = sortWidgetCatalog(catalog);
@@ -7706,16 +12041,20 @@ export class DashboardServer {
             return Array.from(new Set(filtered));
         }
 
-        function setWidgetVisibility(widget, isVisible) {
-            if (!(widget instanceof HTMLElement)) {
-                return;
-            }
-            if (isVisible) {
-                widget.classList.remove("widget-hidden");
-                widget.removeAttribute("aria-hidden");
-                widget.setAttribute("tabindex", "0");
-                widget.setAttribute("draggable", "true");
-            } else {
+function setWidgetVisibility(widget, isVisible) {
+             if (!(widget instanceof HTMLElement)) {
+                 return;
+             }
+             if (isVisible) {
+                 widget.classList.remove("widget-hidden");
+                 widget.removeAttribute("aria-hidden");
+                 widget.setAttribute("tabindex", "0");
+                 widget.setAttribute("draggable", "true");
+                 widget.classList.add("widget-appearing");
+                 setTimeout(() => {
+                     widget.classList.remove("widget-appearing");
+                 }, 400);
+             } else {
                 widget.classList.add("widget-hidden");
                 widget.setAttribute("aria-hidden", "true");
                 widget.setAttribute("tabindex", "-1");
@@ -7725,14 +12064,36 @@ export class DashboardServer {
             }
         }
 
+        function enforceWidgetVisibilityLimit(hiddenWidgetIds) {
+            const maxVisible = getMaxVisibleWidgets();
+            if (!Number.isFinite(maxVisible) || maxVisible <= 0) {
+                return hiddenWidgetIds;
+            }
+            const orderedWidgetIds = getAllWidgetsIncludingHidden()
+                .map(widget => widget.dataset.widgetId)
+                .filter(Boolean);
+            if (orderedWidgetIds.length === 0) {
+                return hiddenWidgetIds;
+            }
+            const hiddenSet = new Set(hiddenWidgetIds);
+            const visibleIds = orderedWidgetIds.filter(widgetId => !hiddenSet.has(widgetId));
+            if (visibleIds.length <= maxVisible) {
+                return hiddenWidgetIds;
+            }
+            const overflowIds = visibleIds.slice(maxVisible);
+            const nextHiddenSet = new Set(hiddenWidgetIds.concat(overflowIds));
+            return Array.from(nextHiddenSet);
+        }
+
         function applyWidgetVisibilityState(hiddenWidgetIdsOverride) {
             const resolvedHiddenWidgetIds = hiddenWidgetIdsOverride
                 ? normalizeWidgetVisibilityState(hiddenWidgetIdsOverride)
                 : loadHiddenWidgetIds();
-            if (hiddenWidgetIdsOverride) {
-                saveHiddenWidgetIds(resolvedHiddenWidgetIds);
+            const limitedHiddenWidgetIds = enforceWidgetVisibilityLimit(resolvedHiddenWidgetIds);
+            if (hiddenWidgetIdsOverride || limitedHiddenWidgetIds.length !== resolvedHiddenWidgetIds.length) {
+                saveHiddenWidgetIds(limitedHiddenWidgetIds);
             }
-            const hiddenWidgetIds = new Set(resolvedHiddenWidgetIds);
+            const hiddenWidgetIds = new Set(limitedHiddenWidgetIds);
             getAllWidgetsIncludingHidden().forEach(widget => {
                 if (!(widget instanceof HTMLElement)) {
                     return;
@@ -7751,8 +12112,9 @@ export class DashboardServer {
             if (hiddenWidgetIds.size > 0) {
                 getWidgetContainers().forEach(container => saveWidgetLayoutForContainer(container));
             }
-            pruneSelectedWidgetIds(resolvedHiddenWidgetIds);
+            pruneSelectedWidgetIds(limitedHiddenWidgetIds);
             updateEmptyDashboardState();
+            applyResponsiveDashboardGrid();
             renderWidgetLibrary();
         }
 
@@ -7763,6 +12125,15 @@ export class DashboardServer {
             const widget = getWidgetById(widgetId);
             if (!(widget instanceof HTMLElement)) {
                 return;
+            }
+            if (shouldShow) {
+                const visibleCount = getVisibleWidgetCount();
+                const maxVisible = getMaxVisibleWidgets();
+                if (visibleCount >= maxVisible) {
+                    showWarning(buildWidgetLimitMessage(visibleCount, maxVisible));
+                    renderWidgetLibrary();
+                    return;
+                }
             }
             const layout = loadWidgetLayout();
             const targetContainer = resolveWidgetPlacementContainer(widgetId, widget, layout);
@@ -7790,12 +12161,23 @@ export class DashboardServer {
             const nextLayout = persistWidgetLayoutForContainers(containersToUpdate, { broadcast: true });
             containersToUpdate.forEach(container => applyWidgetOrderForContainer(container, nextLayout));
             updateEmptyDashboardState();
+            applyResponsiveDashboardGrid(containersToUpdate);
             renderWidgetLibrary();
         }
 
         function buildWidgetLayoutUpdatesForAddedWidgets(widgetTargets, layout) {
             const normalizedLayout = dedupeWidgetLayoutState(normalizeWidgetLayoutState(layout));
             const layoutAssignments = buildWidgetPlacementAssignments(normalizedLayout);
+            const appendTargetsByContainer = widgetTargets.reduce((acc, target) => {
+                if (!target?.shouldAppendAtEnd) {
+                    return acc;
+                }
+                if (!target.containerId || !target.widgetId) {
+                    return acc;
+                }
+                const current = acc[target.containerId] || [];
+                return { ...acc, [target.containerId]: current.concat(target.widgetId) };
+            }, {});
             const groupedTargets = widgetTargets.reduce((acc, target) => {
                 const withTarget = acc[target.containerId]
                     ? acc
@@ -7842,8 +12224,12 @@ export class DashboardServer {
                     .map(widget => widget.dataset.widgetId)
                     .filter(Boolean);
                 const containerWidgetSet = new Set(containerWidgetIds);
+                const appendIds = appendTargetsByContainer[containerId] || [];
+                const appendSet = new Set(appendIds);
                 const baseOrder = Array.isArray(normalizedLayout[containerId])
-                    ? normalizedLayout[containerId].filter(widgetId => containerWidgetSet.has(widgetId))
+                    ? normalizedLayout[containerId].filter(
+                        widgetId => containerWidgetSet.has(widgetId) && !appendSet.has(widgetId),
+                    )
                     : [];
                 const baseOrderSet = new Set(baseOrder);
                 const nextOrder = baseOrder.concat(containerWidgetIds.filter(widgetId => !baseOrderSet.has(widgetId)));
@@ -7863,9 +12249,24 @@ export class DashboardServer {
             }
 
             const hasUpdates = Object.keys(layoutUpdates.updates).length > 0;
+            const updatedAt = Date.now();
             const nextLayout = hasUpdates
-                ? saveWidgetLayoutState(mergeWidgetLayoutUpdates(normalizedLayout, layoutUpdates.updates))
-                : persistWidgetLayoutForContainers(containersToUpdate, { broadcast: false });
+                ? commitWidgetLayoutUpdate(
+                    mergeWidgetLayoutUpdates(normalizedLayout, layoutUpdates.updates),
+                    { broadcast: true, profileSync: true, updatedAt },
+                ).layout
+                : (() => {
+                    const layoutFromStorage = loadWidgetLayout();
+                    const containerUpdates = normalizeWidgetLayoutState(
+                        buildWidgetLayoutForContainers(containersToUpdate),
+                    );
+                    const mergedLayout = mergeWidgetLayoutUpdates(layoutFromStorage, containerUpdates);
+                    return commitWidgetLayoutUpdate(mergedLayout, {
+                        broadcast: true,
+                        profileSync: true,
+                        updatedAt,
+                    }).layout;
+                })();
 
             const broadcastUpdates = hasUpdates
                 ? layoutUpdates.updates
@@ -7874,7 +12275,7 @@ export class DashboardServer {
                 !widgetLayoutSyncState.hasServerSync || !widgetLayoutSyncState.hasLayout;
             const broadcastPayload = shouldBroadcastFullLayout ? nextLayout : broadcastUpdates;
             if (Object.keys(broadcastPayload).length > 0) {
-                sendWidgetLayoutBatch(broadcastPayload, { fullLayout: shouldBroadcastFullLayout });
+                scheduleWidgetLayoutAutoSave(broadcastPayload, { fullLayout: shouldBroadcastFullLayout });
             }
 
             return { nextLayout, containersToUpdate };
@@ -7920,7 +12321,22 @@ export class DashboardServer {
                 return;
             }
 
-            const widgetTargets = selectedIds.reduce((acc, widgetId) => {
+            const visibleCount = getVisibleWidgetCount();
+            const maxVisible = getMaxVisibleWidgets();
+            const remainingSlots = getRemainingWidgetSlots(visibleCount);
+            if (remainingSlots === 0) {
+                showWarning(buildWidgetLimitMessage(visibleCount, maxVisible));
+                renderWidgetLibrary();
+                return;
+            }
+            const selectedIdsToAdd = selectedIds.slice(0, remainingSlots);
+            const limitReached = selectedIdsToAdd.length < selectedIds.length;
+            if (selectedIdsToAdd.length === 0) {
+                renderWidgetLibrary();
+                return;
+            }
+
+            const widgetTargets = selectedIdsToAdd.reduce((acc, widgetId) => {
                 const widget = getWidgetById(widgetId);
                 if (!(widget instanceof HTMLElement)) {
                     return acc;
@@ -7950,6 +12366,7 @@ export class DashboardServer {
                     sourceContainer,
                     sourceContainerId,
                     shouldShow: isHidden,
+                    shouldAppendAtEnd: true,
                 });
             }, []);
 
@@ -7960,7 +12377,7 @@ export class DashboardServer {
             }
 
             widgetTargets.forEach(target => {
-                if (target.widget.parentElement !== target.container) {
+                if (target.shouldAppendAtEnd || target.widget.parentElement !== target.container) {
                     target.container.appendChild(target.widget);
                 }
                 syncWidgetHomeContainer(target.widget, target.containerId);
@@ -8002,7 +12419,11 @@ export class DashboardServer {
                         " to the dashboard.",
                 );
             }
-            if (remainingSelectedIds.length > 0) {
+            if (limitReached) {
+                showWarning(
+                    buildWidgetLimitAddMessage(maxVisible, selectedIds.length, widgetIdsToPersistSet.size),
+                );
+            } else if (remainingSelectedIds.length > 0) {
                 showWarning("Some selected widgets could not be added. Try refreshing the dashboard.");
             }
         }
@@ -8068,9 +12489,14 @@ export class DashboardServer {
             if (!hiddenSet.has(widgetId)) {
                 return { added: false, label };
             }
+            const visibleCount = getVisibleWidgetCount();
+            const maxVisible = getMaxVisibleWidgets();
+            if (visibleCount >= maxVisible) {
+                showWarning(buildWidgetLimitMessage(visibleCount, maxVisible));
+                return { added: false, label, reason: "limit" };
+            }
             const seededLayout = seedWidgetLayoutIfEmpty();
             const layout = resolveWidgetLayoutForAdd(seededLayout);
-            const layoutContainer = getWidgetContainerFromLayout(widgetId, layout);
             const currentContainer = widget.closest("[data-widget-container]");
             const resolvedCurrentContainer = currentContainer instanceof HTMLElement ? currentContainer : null;
             const container = resolveWidgetPlacementContainer(widgetId, widget, layout) ||
@@ -8085,7 +12511,6 @@ export class DashboardServer {
             }
             const sourceContainer = resolvedCurrentContainer;
             const sourceContainerId = sourceContainer?.dataset.widgetContainer || null;
-            const shouldAppendAtEnd = !(layoutContainer instanceof HTMLElement);
             const widgetTargets = [
                 {
                     widgetId,
@@ -8095,7 +12520,7 @@ export class DashboardServer {
                     sourceContainer,
                     sourceContainerId,
                     shouldShow: true,
-                    shouldAppendAtEnd,
+                    shouldAppendAtEnd: true,
                 },
             ];
 
@@ -8135,30 +12560,193 @@ export class DashboardServer {
             return { added: true, label };
         }
 
+        function addWidgetFromLibraryToDashboardAtPosition(widgetId, container, placeholder) {
+            if (!widgetId) {
+                return { added: false, label: "Widget" };
+            }
+            const widget = getWidgetById(widgetId);
+            if (!(widget instanceof HTMLElement)) {
+                return { added: false, label: "Widget" };
+            }
+            const label = getWidgetDisplayName(widget);
+            if (!isWidgetLayoutReady()) {
+                if (!hasWidgetLayoutSyncConnection()) {
+                    const seededLayout = seedWidgetLayoutIfEmpty();
+                    updateWidgetLayoutSyncState({
+                        hasSynced: true,
+                        hasLayout: Object.keys(seededLayout).length > 0,
+                        hasServerSync: false,
+                    });
+                } else {
+                    requestWidgetLayoutSync();
+                    scheduleWidgetLayoutSyncFallback();
+                    showInfo("Syncing layout. Try again in a moment.");
+                    return { added: false, label };
+                }
+            }
+            const hiddenWidgetIds = loadHiddenWidgetIds();
+            const hiddenSet = new Set(hiddenWidgetIds);
+            if (!hiddenSet.has(widgetId)) {
+                return { added: false, label };
+            }
+            const visibleCount = getVisibleWidgetCount();
+            const maxVisible = getMaxVisibleWidgets();
+            if (visibleCount >= maxVisible) {
+                showWarning(buildWidgetLimitMessage(visibleCount, maxVisible));
+                return { added: false, label, reason: "limit" };
+            }
+            const seededLayout = seedWidgetLayoutIfEmpty();
+            const layout = resolveWidgetLayoutForAdd(seededLayout);
+            const resolvedContainer = container instanceof HTMLElement
+                ? container
+                : resolveWidgetPlacementContainer(widgetId, widget, layout) ||
+                    getWidgetHomeContainer(widget) ||
+                    getFallbackWidgetContainer();
+            if (!(resolvedContainer instanceof HTMLElement)) {
+                return { added: false, label };
+            }
+            const containerId = resolvedContainer.dataset.widgetContainer;
+            if (!containerId) {
+                return { added: false, label };
+            }
+            const sourceContainer = widget.closest("[data-widget-container]");
+            const resolvedSourceContainer = sourceContainer instanceof HTMLElement ? sourceContainer : null;
+
+            if (placeholder && placeholder.parentNode === resolvedContainer) {
+                resolvedContainer.insertBefore(widget, placeholder);
+            } else {
+                resolvedContainer.appendChild(widget);
+            }
+            syncWidgetHomeContainer(widget, containerId);
+            initializeWidget(widget);
+            initWidgetSizingForWidget(widget);
+            setWidgetVisibility(widget, true);
+
+            const nextHiddenWidgetIds = hiddenWidgetIds.filter(id => id !== widgetId);
+            persistWidgetVisibility(nextHiddenWidgetIds, { broadcast: true });
+
+            const layoutContainer = getWidgetContainerFromLayout(widgetId, layout);
+            const containersToUpdate = uniqueContainers([
+                resolvedContainer,
+                resolvedSourceContainer,
+                layoutContainer,
+            ]);
+            const nextLayout = containersToUpdate.length > 0
+                ? persistWidgetLayoutForContainers(containersToUpdate, { broadcast: true })
+                : loadWidgetLayout();
+            if (containersToUpdate.length > 0) {
+                applyWidgetOrderForContainers(containersToUpdate, nextLayout);
+            }
+            const nextLayoutHasEntries = Object.keys(nextLayout).length > 0;
+            if (!widgetLayoutSyncState.hasLayout && nextLayoutHasEntries) {
+                updateWidgetLayoutSyncState({ hasLayout: true });
+            }
+            if (!widgetLayoutSyncState.hasSynced && nextLayoutHasEntries) {
+                updateWidgetLayoutSyncState({ hasSynced: true });
+            }
+
+            const remainingSelectedIds = Array.from(selectedWidgetIds).filter(id => id !== widgetId);
+            updateSelectedWidgetIds(remainingSelectedIds);
+            updateEmptyDashboardState();
+            renderWidgetLibrary();
+
+            return { added: true, label };
+        }
+
         function renderWidgetLibrary() {
             const list = document.getElementById("widgetLibraryList");
             if (!(list instanceof HTMLElement)) {
                 return;
             }
             collectWidgetCatalog();
+            const limitState = getWidgetLimitState();
+            const limitReached = limitState.limitReached;
             const hiddenWidgetIds = new Set(loadHiddenWidgetIds());
             const catalogIds = widgetCatalog.map(widget => widget.id);
             pruneSelectedWidgetIds(hiddenWidgetIds, catalogIds);
-            const grouped = widgetCatalog.reduce((acc, widget) => {
+            const searchInput = document.getElementById("widgetLibrarySearch");
+            if (searchInput instanceof HTMLInputElement && searchInput.value !== widgetLibrarySearchQuery) {
+                searchInput.value = widgetLibrarySearchQuery;
+            }
+
+            const categoryOptions = getWidgetLibraryCategoryOptions(widgetCatalog);
+            const validCategoryIds = new Set(categoryOptions.map(option => option.id));
+            const resolvedCategory = validCategoryIds.has(widgetLibraryActiveCategory)
+                ? widgetLibraryActiveCategory
+                : WIDGET_LIBRARY_FILTER_ALL;
+            if (resolvedCategory !== widgetLibraryActiveCategory) {
+                widgetLibraryActiveCategory = resolvedCategory;
+            }
+
+            const filterGroup = document.getElementById("widgetLibraryFilterGroup");
+            if (filterGroup instanceof HTMLElement) {
+                filterGroup.innerHTML = "";
+                categoryOptions.forEach(option => {
+                    const button = document.createElement("button");
+                    button.type = "button";
+                    button.className = "widget-library-filter-btn";
+                    if (option.id === resolvedCategory) {
+                        button.classList.add("is-active");
+                    }
+                    button.setAttribute("aria-pressed", option.id === resolvedCategory ? "true" : "false");
+                    button.textContent = option.label + " (" + option.count + ")";
+                    button.addEventListener("click", () => {
+                        updateWidgetLibraryCategoryFilter(option.id);
+                    });
+                    filterGroup.appendChild(button);
+                });
+            }
+
+            const filteredCatalog = filterWidgetLibraryCatalog(
+                widgetCatalog,
+                widgetLibrarySearchQuery,
+                resolvedCategory,
+            );
+
+            const results = document.getElementById("widgetLibraryResults");
+            if (results instanceof HTMLElement) {
+                const searchTerm = normalizeWidgetLibrarySearchQuery(widgetLibrarySearchQuery);
+                const resultLabel = filteredCatalog.length === widgetCatalog.length
+                    ? "Showing " + filteredCatalog.length + " widgets."
+                    : "Showing " + filteredCatalog.length + " of " + widgetCatalog.length + " widgets.";
+                const categoryLabel = resolvedCategory === WIDGET_LIBRARY_FILTER_ALL
+                    ? ""
+                    : " " + getWidgetContainerLabel(resolvedCategory) + ".";
+                const searchLabel = searchTerm
+                    ? " Search: \"" + widgetLibrarySearchQuery.trim() + "\"."
+                    : "";
+                results.textContent = resultLabel + categoryLabel + searchLabel;
+            }
+
+            updateWidgetLibrarySelectionSummary({
+                filteredCount: filteredCatalog.length,
+                totalCount: widgetCatalog.length,
+            });
+
+            const grouped = filteredCatalog.reduce((acc, widget) => {
                 const containerId = widget.containerId || "other";
                 const nextGroup = acc[containerId] ? acc[containerId].concat(widget) : [widget];
                 return { ...acc, [containerId]: nextGroup };
             }, {});
             const orderedContainerIds = [
-                ...WIDGET_CONTAINER_ORDER,
+                ...WIDGET_CONTAINER_ORDER.filter(id => grouped[id]?.length),
                 ...Object.keys(grouped).filter(id => !WIDGET_CONTAINER_ORDER.includes(id)),
             ];
 
             list.innerHTML = "";
 
-            if (Object.keys(grouped).length === 0) {
+            if (filteredCatalog.length === 0) {
                 const emptyState = document.createElement("div");
-                emptyState.textContent = "No widgets available.";
+                emptyState.className = "widget-library-empty";
+                const emptyTitle = document.createElement("div");
+                emptyTitle.textContent = "No widgets match your filters.";
+                const resetButton = document.createElement("button");
+                resetButton.type = "button";
+                resetButton.className = "btn btn-secondary btn-sm";
+                resetButton.textContent = "Reset filters";
+                resetButton.addEventListener("click", resetWidgetLibraryFilters);
+                emptyState.appendChild(emptyTitle);
+                emptyState.appendChild(resetButton);
                 list.appendChild(emptyState);
                 return;
             }
@@ -8172,42 +12760,106 @@ export class DashboardServer {
                 const section = document.createElement("div");
                 section.className = "widget-library-section";
 
-                const title = document.createElement("div");
+                const title = document.createElement("h3");
                 title.className = "widget-library-section-title";
                 title.textContent = getWidgetContainerLabel(containerId);
                 section.appendChild(title);
 
                 const sectionList = document.createElement("div");
-                sectionList.className = "widget-library-list";
+                sectionList.className = "widget-library-catalog-grid";
 
                 widgets.forEach(widgetInfo => {
                     const isHidden = hiddenWidgetIds.has(widgetInfo.id);
                     const isSelected = selectedWidgetIds.has(widgetInfo.id);
                     const item = document.createElement("div");
-                    item.className = "widget-library-item";
+                    item.className = "widget-library-card";
                     if (isSelected) {
                         item.classList.add("selected");
                     }
 
-                    const info = document.createElement("div");
-                    info.className = "widget-library-item-info";
+                    const tooltip = buildWidgetLibraryTooltip(widgetInfo, { isHidden, isSelected });
+                    item.appendChild(tooltip);
+                    item.setAttribute("aria-describedby", tooltip.id);
 
+                    const preview = document.createElement("div");
+                    preview.className = "widget-library-card-preview";
+                    preview.addEventListener("pointerdown", event => {
+                        startWidgetLibraryPress(event, widgetInfo.id);
+                    });
+
+                    const previewBadge = document.createElement("div");
+                    previewBadge.className = "widget-library-card-badge";
+
+                    const previewText = document.createElement("div");
                     const name = document.createElement("div");
-                    name.className = "widget-library-item-name";
+                    name.className = "widget-library-card-title";
                     name.textContent = widgetInfo.label;
-                    info.appendChild(name);
+                    const subtitle = document.createElement("div");
+                    subtitle.className = "widget-library-card-subtitle";
+                    subtitle.textContent = widgetInfo.containerLabel || "Widget";
+                    previewText.appendChild(name);
+                    previewText.appendChild(subtitle);
+                    preview.appendChild(previewBadge);
+                    preview.appendChild(previewText);
+
+                    const body = document.createElement("div");
+                    body.className = "widget-library-card-body";
+
+                    const description = document.createElement("div");
+                    description.className = "widget-library-card-description widget-library-item-description";
+                    description.textContent = widgetInfo.description;
+                    body.appendChild(description);
+
+                    const rows = document.createElement("div");
+                    rows.className = "widget-library-card-rows";
+
+                    const sourcesRow = document.createElement("div");
+                    sourcesRow.className = "widget-library-card-row";
+                    const sourcesLabel = document.createElement("span");
+                    sourcesLabel.className = "widget-library-card-row-label";
+                    sourcesLabel.textContent = "Sources";
+                    const sourcesValue = document.createElement("div");
+                    sourcesValue.className = "widget-library-card-row-value";
+                    const sources = Array.isArray(widgetInfo.dataSources) && widgetInfo.dataSources.length > 0
+                        ? widgetInfo.dataSources
+                        : ["Unspecified"];
+                    sources.forEach(source => {
+                        const tag = document.createElement("span");
+                        tag.className = "widget-library-card-tag";
+                        tag.textContent = source;
+                        sourcesValue.appendChild(tag);
+                    });
+                    sourcesRow.appendChild(sourcesLabel);
+                    sourcesRow.appendChild(sourcesValue);
+
+                    const metricsRow = document.createElement("div");
+                    metricsRow.className = "widget-library-card-row";
+                    const metricsLabel = document.createElement("span");
+                    metricsLabel.className = "widget-library-card-row-label";
+                    metricsLabel.textContent = "Metrics";
+                    const metricsValue = document.createElement("span");
+                    metricsValue.className = "widget-library-card-row-metrics";
+                    const metricsCount = Number.isFinite(widgetInfo.metricsCount) ? widgetInfo.metricsCount : 0;
+                    metricsValue.textContent = metricsCount + " total";
+                    metricsRow.appendChild(metricsLabel);
+                    metricsRow.appendChild(metricsValue);
+
+                    rows.appendChild(sourcesRow);
+                    rows.appendChild(metricsRow);
+                    body.appendChild(rows);
 
                     const meta = document.createElement("div");
-                    meta.className = "widget-library-item-meta";
+                    meta.className = "widget-library-card-id";
                     meta.textContent = widgetInfo.id;
-                    info.appendChild(meta);
+                    body.appendChild(meta);
 
                     const actionWrap = document.createElement("div");
-                    actionWrap.className = "widget-library-item-actions";
+                    actionWrap.className = "widget-library-card-actions";
 
                     const addState = getWidgetLibraryAddState(widgetInfo.id);
                     const isAdding = addState.status === "loading";
                     const isAdded = addState.status === "success";
+                    const isDisabledForLimit = limitReached && isHidden;
                     const addButton = document.createElement("button");
                     addButton.type = "button";
                     addButton.className = "widget-library-add";
@@ -8217,16 +12869,29 @@ export class DashboardServer {
                     if (isAdded) {
                         addButton.classList.add("is-success");
                     }
-                    addButton.disabled = !isHidden || isAdding || isAdded;
+                    addButton.disabled = !isHidden || isAdding || isAdded || isDisabledForLimit;
                     addButton.setAttribute("aria-busy", isAdding ? "true" : "false");
+                    addButton.setAttribute("aria-live", "polite");
                     const addLabel = isAdding
                         ? "Adding..."
                         : isAdded
                             ? "Added"
                             : !isHidden
                                 ? "On dashboard"
+                                : isDisabledForLimit
+                                    ? "Limit reached"
                                 : "Add";
                     addButton.textContent = addLabel;
+                    const addAriaLabel = isAdding
+                        ? "Adding " + widgetInfo.label + " to dashboard"
+                        : isAdded
+                            ? widgetInfo.label + " added to dashboard"
+                            : !isHidden
+                                ? widgetInfo.label + " already on dashboard"
+                                : isDisabledForLimit
+                                    ? buildWidgetLimitMessage(limitState.visibleCount, limitState.maxVisible)
+                                : "Add " + widgetInfo.label + " to dashboard";
+                    addButton.setAttribute("aria-label", addAriaLabel);
                     addButton.addEventListener("click", () => {
                         addWidgetFromLibrary(widgetInfo.id);
                     });
@@ -8258,6 +12923,14 @@ export class DashboardServer {
                         } else {
                             item.classList.remove("selected");
                         }
+                        const tooltipStatus = tooltip.querySelector(".widget-library-tooltip-status");
+                        if (tooltipStatus instanceof HTMLElement) {
+                            tooltipStatus.textContent = target.checked ? "Selected" : "Available";
+                        }
+                        updateWidgetLibrarySelectionSummary({
+                            filteredCount: filteredCatalog.length,
+                            totalCount: widgetCatalog.length,
+                        });
                     });
 
                     selectWrap.appendChild(selectBox);
@@ -8291,8 +12964,107 @@ export class DashboardServer {
                     actionWrap.appendChild(selectWrap);
                     actionWrap.appendChild(toggleWrap);
 
-                    item.appendChild(info);
+                    const notificationPreference = getWidgetNotificationPreference(widgetInfo.id);
+                    const notificationsEnabled = notificationPreference.enabled;
+                    const normalizedNotificationTypes = normalizeWidgetNotificationTypes(notificationPreference.types);
+                    const notificationPreset = resolveWidgetNotificationPreset(normalizedNotificationTypes);
+                    const notificationsWrap = document.createElement("div");
+                    notificationsWrap.className = "widget-library-notifications";
+
+                    const notificationsHeader = document.createElement("div");
+                    notificationsHeader.className = "widget-library-notifications-header";
+                    const notificationsTitle = document.createElement("span");
+                    notificationsTitle.textContent = "Notifications";
+                    const notificationsToggle = document.createElement("label");
+                    notificationsToggle.className = "widget-library-notifications-toggle";
+                    const notificationsToggleInput = document.createElement("input");
+                    notificationsToggleInput.type = "checkbox";
+                    notificationsToggleInput.checked = notificationsEnabled;
+                    const notificationsToggleLabel = document.createElement("span");
+                    notificationsToggleLabel.textContent = notificationsEnabled ? "On" : "Off";
+                    notificationsToggleInput.addEventListener("change", event => {
+                        const target = event.target;
+                        if (!(target instanceof HTMLInputElement)) {
+                            return;
+                        }
+                        updateWidgetNotificationPreference(widgetInfo.id, (current) => ({
+                            ...current,
+                            enabled: target.checked,
+                        }));
+                    });
+                    notificationsToggle.appendChild(notificationsToggleInput);
+                    notificationsToggle.appendChild(notificationsToggleLabel);
+                    notificationsHeader.appendChild(notificationsTitle);
+                    notificationsHeader.appendChild(notificationsToggle);
+
+                    const notificationsPresetSelect = document.createElement("select");
+                    notificationsPresetSelect.className = "widget-library-notification-select";
+                    notificationsPresetSelect.disabled = !notificationsEnabled;
+                    [
+                        { id: WIDGET_NOTIFICATION_PRESET_ALL, label: "All updates" },
+                        { id: WIDGET_NOTIFICATION_PRESET_NONE, label: "None" },
+                        { id: WIDGET_NOTIFICATION_PRESET_CUSTOM, label: "Custom" },
+                    ].forEach(optionInfo => {
+                        const option = document.createElement("option");
+                        option.value = optionInfo.id;
+                        option.textContent = optionInfo.label;
+                        notificationsPresetSelect.appendChild(option);
+                    });
+                    notificationsPresetSelect.value = notificationPreset;
+                    notificationsPresetSelect.addEventListener("change", event => {
+                        const target = event.target;
+                        if (!(target instanceof HTMLSelectElement)) {
+                            return;
+                        }
+                        if (target.value === WIDGET_NOTIFICATION_PRESET_CUSTOM) {
+                            return;
+                        }
+                        const nextTypes = target.value === WIDGET_NOTIFICATION_PRESET_ALL
+                            ? buildWidgetNotificationTypesState(true)
+                            : buildWidgetNotificationTypesState(false);
+                        updateWidgetNotificationPreference(widgetInfo.id, (current) => ({
+                            ...current,
+                            types: nextTypes,
+                        }));
+                    });
+
+                    const notificationTypes = document.createElement("div");
+                    notificationTypes.className = "widget-library-notification-types";
+                    WIDGET_NOTIFICATION_TYPES.forEach(typeInfo => {
+                        const typeLabel = document.createElement("label");
+                        typeLabel.className = "widget-library-notification-type";
+                        const typeCheckbox = document.createElement("input");
+                        typeCheckbox.type = "checkbox";
+                        typeCheckbox.checked = normalizedNotificationTypes[typeInfo.id];
+                        typeCheckbox.disabled = !notificationsEnabled;
+                        typeCheckbox.addEventListener("change", event => {
+                            const target = event.target;
+                            if (!(target instanceof HTMLInputElement)) {
+                                return;
+                            }
+                            updateWidgetNotificationPreference(widgetInfo.id, (current) => {
+                                const normalizedTypes = normalizeWidgetNotificationTypes(current.types);
+                                return {
+                                    ...current,
+                                    types: { ...normalizedTypes, [typeInfo.id]: target.checked },
+                                };
+                            });
+                        });
+                        const typeText = document.createElement("span");
+                        typeText.textContent = typeInfo.label;
+                        typeLabel.appendChild(typeCheckbox);
+                        typeLabel.appendChild(typeText);
+                        notificationTypes.appendChild(typeLabel);
+                    });
+
+                    notificationsWrap.appendChild(notificationsHeader);
+                    notificationsWrap.appendChild(notificationsPresetSelect);
+                    notificationsWrap.appendChild(notificationTypes);
+
+                    item.appendChild(preview);
+                    item.appendChild(body);
                     item.appendChild(actionWrap);
+                    item.appendChild(notificationsWrap);
                     sectionList.appendChild(item);
                 });
 
@@ -8303,16 +13075,48 @@ export class DashboardServer {
 
         function showAllWidgets() {
             const allWidgets = getAllWidgetsIncludingHidden();
+            const visibleWidgets = getAllWidgets();
+            const visibleCount = visibleWidgets.length;
+            const maxVisible = getMaxVisibleWidgets();
+            const remainingSlots = getRemainingWidgetSlots(visibleCount);
+            if (remainingSlots === 0) {
+                showWarning(buildWidgetLimitMessage(visibleCount, maxVisible));
+                return;
+            }
+            const hiddenWidgets = allWidgets.filter(widget =>
+                widget instanceof HTMLElement && widget.classList.contains("widget-hidden"),
+            );
+            const widgetsToShow = hiddenWidgets.slice(0, remainingSlots);
+            const widgetsToKeepHidden = hiddenWidgets.slice(remainingSlots);
+            const hiddenWidgetIds = widgetsToKeepHidden
+                .map(widget => widget.dataset.widgetId)
+                .filter(Boolean);
+            const nextHiddenSet = new Set(hiddenWidgetIds);
             allWidgets.forEach(widget => {
-                setWidgetVisibility(widget, true);
-                initializeWidget(widget);
-                initWidgetSizingForWidget(widget);
+                if (!(widget instanceof HTMLElement)) {
+                    return;
+                }
+                const widgetId = widget.dataset.widgetId;
+                if (!widgetId) {
+                    return;
+                }
+                const shouldShow = !nextHiddenSet.has(widgetId);
+                setWidgetVisibility(widget, shouldShow);
+                if (shouldShow) {
+                    initializeWidget(widget);
+                    initWidgetSizingForWidget(widget);
+                }
             });
-            persistWidgetVisibility([], { broadcast: true });
+            persistWidgetVisibility(hiddenWidgetIds, { broadcast: true });
             getWidgetContainers().forEach(container => saveWidgetLayoutForContainer(container, { broadcast: true }));
             updateSelectedWidgetIds([]);
             updateEmptyDashboardState();
             renderWidgetLibrary();
+            if (widgetsToKeepHidden.length > 0) {
+                showWarning(
+                    buildWidgetLimitAddMessage(maxVisible, hiddenWidgets.length, widgetsToShow.length),
+                );
+            }
         }
 
         function hideAllWidgets() {
@@ -8394,13 +13198,24 @@ export class DashboardServer {
             return { hasValue: false, widgetLayout: undefined };
         }
 
-        function applyWidgetLayoutState(widgetLayout) {
+        function applyWidgetLayoutState(widgetLayout, options) {
             if (!widgetLayout || typeof widgetLayout !== "object") {
                 return;
             }
-            saveWidgetLayoutState(widgetLayout);
+            const normalized = dedupeWidgetLayoutState(normalizeWidgetLayoutState(widgetLayout));
+            if (options?.persist === false) {
+                const updatedAt = normalizeWidgetLayoutUpdatedAt(options?.updatedAt);
+                widgetLayoutLastAppliedAt = updatedAt > 0 ? updatedAt : widgetLayoutLastAppliedAt;
+                widgetLayoutLastAppliedSnapshot = normalized;
+            } else {
+                saveWidgetLayoutState(normalized, {
+                    updatedAt: options?.updatedAt,
+                    allowZero: options?.allowZero,
+                });
+            }
             applyWidgetOrder();
             renderWidgetLibrary();
+            updateEmptyDashboardState();
         }
 
         function handleWidgetLayoutSync(messageData) {
@@ -8416,15 +13231,26 @@ export class DashboardServer {
                 return mergeWidgetLayoutUpdates(layout, pendingLayout.widgetLayout);
             };
             const layoutPayload = getWidgetLayoutPayload(messageData);
+            const currentLayout = loadWidgetLayout();
+            const currentMeta = loadWidgetLayoutMeta();
             if (layoutPayload.hasValue) {
                 if (layoutPayload.widgetLayout && typeof layoutPayload.widgetLayout === "object") {
                     const resolvedLayout = mergePendingLayout(layoutPayload.widgetLayout);
+                    const resolved = resolveWidgetLayoutConflict(
+                        currentLayout,
+                        currentMeta,
+                        resolvedLayout,
+                        { updatedAt: 0 },
+                    );
                     updateWidgetLayoutSyncState({
                         hasSynced: true,
-                        hasLayout: Object.keys(resolvedLayout).length > 0,
+                        hasLayout: Object.keys(resolved.layout).length > 0,
                         hasServerSync: true,
                     });
-                    applyWidgetLayoutState(resolvedLayout);
+                    applyWidgetLayoutState(resolved.layout, {
+                        updatedAt: resolved.updatedAt,
+                        allowZero: resolved.updatedAt === 0,
+                    });
                     triggerPendingAddSelectedWidgets();
                     return;
                 }
@@ -8436,20 +13262,27 @@ export class DashboardServer {
                 messageData?.updates ||
                 messageData?.data?.updates;
             if (updates && typeof updates === "object") {
-                const currentLayout = loadWidgetLayout();
                 const nextLayout = mergeWidgetLayoutUpdates(currentLayout, updates);
                 const resolvedLayout = mergePendingLayout(nextLayout);
+                const resolved = resolveWidgetLayoutConflict(
+                    currentLayout,
+                    currentMeta,
+                    resolvedLayout,
+                    { updatedAt: 0 },
+                );
                 updateWidgetLayoutSyncState({
                     hasSynced: true,
-                    hasLayout: Object.keys(resolvedLayout).length > 0,
+                    hasLayout: Object.keys(resolved.layout).length > 0,
                     hasServerSync: true,
                 });
-                applyWidgetLayoutState(resolvedLayout);
+                applyWidgetLayoutState(resolved.layout, {
+                    updatedAt: resolved.updatedAt,
+                    allowZero: resolved.updatedAt === 0,
+                });
                 triggerPendingAddSelectedWidgets();
                 return;
             }
-            const localLayout = loadWidgetLayout();
-            const resolvedLayout = mergePendingLayout(localLayout);
+            const resolvedLayout = mergePendingLayout(currentLayout);
             if (Object.keys(resolvedLayout).length > 0) {
                 sendWidgetLayoutBatch(resolvedLayout, { fullLayout: true });
             } else if (layoutPayload.hasValue && layoutPayload.widgetLayout === null) {
@@ -8499,14 +13332,27 @@ export class DashboardServer {
                 applyWidgetVisibilityState();
                 return;
             }
-            if (event.key === WIDGET_LAYOUT_STORAGE_KEY) {
+            if (event.key === WIDGET_LAYOUT_STORAGE_KEY || event.key === WIDGET_LAYOUT_META_STORAGE_KEY) {
                 const layout = loadWidgetLayout();
+                const meta = loadWidgetLayoutMeta();
+                const updatedAt = meta.updatedAt;
+                const isDuplicate = updatedAt < widgetLayoutLastAppliedAt
+                    || (updatedAt === widgetLayoutLastAppliedAt
+                        && widgetLayoutLastAppliedSnapshot
+                        && areWidgetLayoutStatesEqual(widgetLayoutLastAppliedSnapshot, layout));
+                if (isDuplicate) {
+                    return;
+                }
+                applyWidgetLayoutState(layout, {
+                    updatedAt,
+                    allowZero: updatedAt === 0,
+                    persist: false,
+                });
                 updateWidgetLayoutSyncState({
                     hasSynced: true,
                     hasLayout: Object.keys(layout).length > 0,
                 });
-                applyWidgetOrder();
-                renderWidgetLibrary();
+                triggerPendingAddSelectedWidgets();
                 updateEmptyDashboardState();
             }
         }
@@ -8554,15 +13400,258 @@ export class DashboardServer {
             return controls;
         }
 
+        function getWidgetMoveContext(widget) {
+            if (!(widget instanceof HTMLElement)) {
+                return null;
+            }
+            const container = widget.closest("[data-widget-container]");
+            if (!(container instanceof HTMLElement)) {
+                return null;
+            }
+            const widgets = getWidgets(container);
+            const index = widgets.indexOf(widget);
+            if (index < 0) {
+                return null;
+            }
+            return { container, widgets, index };
+        }
+
+        function shouldIgnoreWidgetKeydown(target, widget) {
+            if (!(target instanceof HTMLElement)) {
+                return true;
+            }
+            if (target === widget) {
+                return false;
+            }
+            if (target.isContentEditable) {
+                return true;
+            }
+            const tagName = target.tagName;
+            return tagName === "BUTTON" || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
+        }
+
+        function focusWidgetByIndex(widget, index) {
+            const context = getWidgetMoveContext(widget);
+            if (!context) {
+                return;
+            }
+            const boundedIndex = Math.max(0, Math.min(context.widgets.length - 1, index));
+            const target = context.widgets[boundedIndex];
+            if (target && typeof target.focus === "function") {
+                target.focus({ preventScroll: true });
+            }
+        }
+
+        function focusAdjacentWidget(widget, offset) {
+            const context = getWidgetMoveContext(widget);
+            if (!context) {
+                return;
+            }
+            const nextIndex = context.index + offset;
+            if (nextIndex < 0 || nextIndex >= context.widgets.length) {
+                return;
+            }
+            const target = context.widgets[nextIndex];
+            if (target && typeof target.focus === "function") {
+                target.focus({ preventScroll: true });
+            }
+        }
+
+        function focusWidgetEdge(widget, edge) {
+            const context = getWidgetMoveContext(widget);
+            if (!context) {
+                return;
+            }
+            const index = edge === "start" ? 0 : context.widgets.length - 1;
+            const target = context.widgets[index];
+            if (target && typeof target.focus === "function") {
+                target.focus({ preventScroll: true });
+            }
+        }
+
+        function handleWidgetKeyDown(event) {
+            const widget = event.currentTarget;
+            if (!(widget instanceof HTMLElement)) {
+                return;
+            }
+            if (widgetDragState && widgetDragState.dragging) {
+                return;
+            }
+            if (shouldIgnoreWidgetKeydown(event.target, widget)) {
+                return;
+            }
+            if (event.altKey || event.ctrlKey || event.metaKey) {
+                return;
+            }
+            switch (event.key) {
+                case "ArrowLeft":
+                case "ArrowUp":
+                    event.preventDefault();
+                    focusAdjacentWidget(widget, -1);
+                    break;
+                case "ArrowRight":
+                case "ArrowDown":
+                    event.preventDefault();
+                    focusAdjacentWidget(widget, 1);
+                    break;
+                case "Home":
+                    event.preventDefault();
+                    focusWidgetEdge(widget, "start");
+                    break;
+                case "End":
+                    event.preventDefault();
+                    focusWidgetEdge(widget, "end");
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        function updateWidgetMoveControlsForWidget(widget, index, total) {
+            if (!(widget instanceof HTMLElement)) {
+                return;
+            }
+            const buttons = Array.from(widget.querySelectorAll(".widget-move-btn"));
+            if (buttons.length === 0) {
+                return;
+            }
+            buttons.forEach(button => {
+                if (!(button instanceof HTMLButtonElement)) {
+                    return;
+                }
+                const direction = button.dataset.widgetMove;
+                const isDisabled = direction === "up"
+                    ? index === 0
+                    : direction === "down"
+                        ? index >= total - 1
+                        : false;
+                button.disabled = isDisabled;
+                button.setAttribute("aria-disabled", isDisabled ? "true" : "false");
+            });
+        }
+
+        function updateWidgetMoveControlsForContainer(container) {
+            if (!(container instanceof HTMLElement)) {
+                return;
+            }
+            const widgets = getWidgets(container);
+            widgets.forEach((widget, index) => {
+                updateWidgetMoveControlsForWidget(widget, index, widgets.length);
+            });
+        }
+
+        function updateWidgetMoveControlsForContainers(containers) {
+            uniqueContainers(containers).forEach(container => {
+                updateWidgetMoveControlsForContainer(container);
+            });
+        }
+
+        function focusWidgetMoveTarget(widget, direction) {
+            if (!(widget instanceof HTMLElement)) {
+                return;
+            }
+            const controls = widget.querySelector(".widget-remove-controls");
+            if (!(controls instanceof HTMLElement)) {
+                if (typeof widget.focus === "function") {
+                    widget.focus({ preventScroll: true });
+                }
+                return;
+            }
+            const preferred = controls.querySelector(
+                ".widget-move-btn[data-widget-move=\"" + direction + "\"]",
+            );
+            const enabledButtons = Array.from(controls.querySelectorAll(".widget-move-btn"))
+                .filter(button => button instanceof HTMLButtonElement && !button.disabled);
+            const preferredButton = preferred instanceof HTMLButtonElement && !preferred.disabled
+                ? preferred
+                : null;
+            const fallback = enabledButtons.find(button => button !== preferredButton);
+            const target = preferredButton || fallback || widget;
+            if (target instanceof HTMLElement && typeof target.focus === "function") {
+                target.focus({ preventScroll: true });
+            }
+        }
+
+        function moveWidgetByDirection(widget, direction) {
+            const context = getWidgetMoveContext(widget);
+            if (!context) {
+                return;
+            }
+            const { container, widgets, index } = context;
+            const targetIndex = direction === "up" ? index - 1 : index + 1;
+            if (targetIndex < 0 || targetIndex >= widgets.length) {
+                return;
+            }
+            const referenceWidget = widgets[targetIndex];
+            const referenceNode = direction === "up"
+                ? referenceWidget
+                : referenceWidget.nextElementSibling;
+            container.insertBefore(widget, referenceNode);
+            persistWidgetLayoutForContainers([container], { broadcast: true });
+            updateWidgetMoveControlsForContainer(container);
+            const nextWidgets = getWidgets(container);
+            const nextIndex = nextWidgets.indexOf(widget);
+            if (nextIndex >= 0) {
+                const widgetLabel = getWidgetDisplayName(widget);
+                const containerLabel = getWidgetContainerLabel(container.dataset.widgetContainer);
+                const position = nextIndex + 1;
+                const total = nextWidgets.length;
+                announceWidgetMove(
+                    "Moved " + widgetLabel + " to position " + position + " of " + total + " in " + containerLabel + ".",
+                );
+            }
+            window.requestAnimationFrame(() => {
+                focusWidgetMoveTarget(widget, direction);
+            });
+        }
+
+        function createWidgetMoveButton(widget, direction, label) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "widget-move-btn";
+            button.dataset.widgetMove = direction;
+            const actionLabel = "Move " + label + " " + direction;
+            button.setAttribute("aria-label", actionLabel);
+            button.setAttribute("title", actionLabel);
+            button.textContent = direction === "up" ? "Up" : "Down";
+            button.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                moveWidgetByDirection(widget, direction);
+            });
+            return button;
+        }
+
+        function ensureWidgetMoveControls(widget, controls) {
+            if (!(widget instanceof HTMLElement) || !(controls instanceof HTMLElement)) {
+                return;
+            }
+            if (controls.dataset.widgetMoveControlsReady === "true") {
+                return;
+            }
+            const label = getWidgetDisplayName(widget);
+            const insertBeforeNode = controls.querySelector(".widget-remove-btn");
+            const moveUpButton = createWidgetMoveButton(widget, "up", label);
+            const moveDownButton = createWidgetMoveButton(widget, "down", label);
+            controls.insertBefore(moveUpButton, insertBeforeNode);
+            controls.insertBefore(moveDownButton, insertBeforeNode);
+            controls.dataset.widgetMoveControlsReady = "true";
+        }
+
         function initWidgetRemoveControls(widget) {
             if (!(widget instanceof HTMLElement)) {
                 return;
             }
-            if (widget.dataset.widgetRemoveReady === "true") {
-                return;
-            }
             const widgetId = widget.dataset.widgetId;
             if (!widgetId) {
+                return;
+            }
+            const existingControls = widget.querySelector(".widget-remove-controls");
+            if (existingControls instanceof HTMLElement) {
+                ensureWidgetMoveControls(widget, existingControls);
+                return;
+            }
+            if (widget.dataset.widgetRemoveReady === "true") {
                 return;
             }
             widget.dataset.widgetRemoveReady = "true";
@@ -8586,8 +13675,25 @@ export class DashboardServer {
                 toggleWidgetVisibility(widgetId, false);
             });
 
+            ensureWidgetMoveControls(widget, controls);
             controls.appendChild(button);
             widget.insertBefore(controls, widget.firstChild);
+        }
+
+        function initWidgetDragHandle(widget) {
+            if (!(widget instanceof HTMLElement)) {
+                return;
+            }
+            if (widget.dataset.widgetDragHandleReady === "true") {
+                return;
+            }
+            widget.dataset.widgetDragHandleReady = "true";
+
+            const handle = document.createElement("div");
+            handle.className = "widget-drag-handle";
+            handle.setAttribute("aria-hidden", "true");
+            handle.dataset.widgetDragHandle = "true";
+            widget.insertBefore(handle, widget.firstChild);
         }
 
         function applyWidgetOrderForContainer(container, layout) {
@@ -8595,6 +13701,8 @@ export class DashboardServer {
             const containerId = container.dataset.widgetContainer;
             const savedOrder = containerId ? layout[containerId] : null;
             if (!Array.isArray(savedOrder) || savedOrder.length === 0) {
+                updateWidgetMoveControlsForContainer(container);
+                applyResponsiveDashboardGrid([container]);
                 return;
             }
 
@@ -8607,6 +13715,8 @@ export class DashboardServer {
 
             orderedWidgets.concat(remainingWidgets).forEach(widget => fragment.appendChild(widget));
             container.appendChild(fragment);
+            updateWidgetMoveControlsForContainer(container);
+            applyResponsiveDashboardGrid([container]);
         }
 
         function applyWidgetOrderForContainers(containers, layout) {
@@ -8690,9 +13800,19 @@ export class DashboardServer {
             widget.setAttribute("draggable", "true");
             widget.setAttribute("tabindex", "0");
             widget.setAttribute("aria-grabbed", "false");
+            ensureWidgetNotificationIndicator(widget);
+            initWidgetDragHandle(widget);
             initWidgetRemoveControls(widget);
+            widget.addEventListener("keydown", handleWidgetKeyDown);
+            widget.addEventListener("pointerdown", handleWidgetPointerDown);
+            widget.addEventListener("pointerup", clearWidgetDragHandleState);
+            widget.addEventListener("pointercancel", clearWidgetDragHandleState);
             widget.addEventListener("dragstart", handleWidgetDragStart);
             widget.addEventListener("dragend", handleWidgetDragEnd);
+            const container = widget.closest("[data-widget-container]");
+            if (container instanceof HTMLElement) {
+                updateWidgetMoveControlsForContainer(container);
+            }
         }
 
         function initWidgetSizingForWidget(widget, sizesOverride) {
@@ -8754,8 +13874,342 @@ export class DashboardServer {
             return Boolean(target.closest("button, a, input, select, textarea, label"));
         }
 
-        function handleWidgetDragStart(event) {
+        function isWidgetDragHandleElement(target) {
+            if (!(target instanceof HTMLElement)) {
+                return false;
+            }
+            if (target.closest(WIDGET_DRAG_HANDLE_SELECTORS)) {
+                return true;
+            }
+            return Boolean(target.closest(WIDGET_DRAG_HEADER_SELECTORS));
+        }
+
+        function isWidgetDragHandleTarget(event) {
+            if (isWidgetDragHandleElement(event.target)) {
+                return true;
+            }
+            if (typeof event.composedPath !== "function") {
+                return false;
+            }
+            return event.composedPath().some(entry => isWidgetDragHandleElement(entry));
+        }
+
+        function clearWidgetDragHandleState() {
+            if (!widgetDragState.dragHandleActive) {
+                return;
+            }
+            updateWidgetDragState({ dragHandleActive: false });
+        }
+
+        function handleWidgetPointerDown(event) {
+            if (!event.isPrimary) {
+                return;
+            }
+            if (event.pointerType === "mouse" && event.button !== 0) {
+                return;
+            }
             if (shouldIgnoreWidgetDrag(event)) {
+                clearWidgetDragHandleState();
+                return;
+            }
+            const dragHandleActive = isWidgetDragHandleTarget(event);
+            updateWidgetDragState({ dragHandleActive });
+            if (dragHandleActive && event.pointerType !== "mouse") {
+                beginWidgetTouchDrag(event);
+            }
+        }
+
+        function beginWidgetTouchDrag(event) {
+            if (widgetDragState.dragging || widgetLibraryDragState.active) {
+                return;
+            }
+            const widget = event.currentTarget;
+            if (!(widget instanceof HTMLElement)) {
+                return;
+            }
+            const container = widget.closest("[data-widget-container]");
+            if (!(container instanceof HTMLElement)) {
+                return;
+            }
+            updateWidgetTouchDragState({
+                pointerId: event.pointerId,
+                widget,
+                container,
+                ghost: null,
+                startX: event.clientX,
+                startY: event.clientY,
+                lastX: event.clientX,
+                lastY: event.clientY,
+                active: false,
+            });
+            if (typeof widget.setPointerCapture === "function") {
+                widget.setPointerCapture(event.pointerId);
+            }
+            attachWidgetTouchDragListeners();
+        }
+
+        function setWidgetDraggingState(isDragging) {
+            if (typeof document === "undefined" || !document.body) {
+                return;
+            }
+            if (isDragging) {
+                document.body.classList.add("widget-dragging");
+            } else {
+                document.body.classList.remove("widget-dragging");
+            }
+        }
+
+        function getWidgetGhostScale() {
+            if (typeof document === "undefined") {
+                return DEFAULT_WIDGET_GHOST_SCALE;
+            }
+            const rawScale = window.getComputedStyle(document.documentElement)
+                .getPropertyValue("--widget-drag-ghost-scale")
+                .trim();
+            const parsedScale = Number.parseFloat(rawScale);
+            return Number.isFinite(parsedScale) && parsedScale > 0
+                ? parsedScale
+                : DEFAULT_WIDGET_GHOST_SCALE;
+        }
+
+        function applyWidgetGhostPointerTransform(ghost) {
+            if (!(ghost instanceof HTMLElement)) {
+                return DEFAULT_WIDGET_GHOST_SCALE;
+            }
+            const scale = getWidgetGhostScale();
+            ghost.style.transform = "translate(-50%, -50%) scale(" + scale + ")";
+            return scale;
+        }
+
+        function updateWidgetDragContainer(nextContainer) {
+            const current = widgetDragState.container;
+            if (current === nextContainer) {
+                return;
+            }
+            if (current instanceof HTMLElement) {
+                current.classList.remove("drag-active", "drag-hover");
+                clearWidgetDragOver(current);
+            }
+            if (nextContainer instanceof HTMLElement) {
+                nextContainer.classList.add("drag-active");
+            }
+            updateWidgetDragState({ container: nextContainer });
+        }
+
+        function updateWidgetTouchGhostPosition(ghost, x, y) {
+            if (!(ghost instanceof HTMLElement)) {
+                return;
+            }
+            ghost.style.left = Number.isFinite(x) ? String(x) + "px" : "";
+            ghost.style.top = Number.isFinite(y) ? String(y) + "px" : "";
+        }
+
+        function activateWidgetTouchDrag() {
+            const widget = widgetTouchDragState.widget;
+            const container = widgetTouchDragState.container;
+            if (!(widget instanceof HTMLElement) || !(container instanceof HTMLElement)) {
+                return;
+            }
+            clearWidgetDropFeedback();
+            updateWidgetDragState({ dragging: widget, container, dragHandleActive: false });
+            captureWidgetDragOrigin(widget, container);
+            const ghost = createWidgetGhost(widget);
+            ghost.style.position = "fixed";
+            applyWidgetGhostPointerTransform(ghost);
+            updateWidgetTouchGhostPosition(ghost, widgetTouchDragState.lastX, widgetTouchDragState.lastY);
+            widget.classList.add("dragging");
+            widget.setAttribute("aria-grabbed", "true");
+            container.classList.add("drag-active");
+            setWidgetDraggingState(true);
+            updateWidgetTouchDragState({ ghost, active: true });
+        }
+
+        function resetWidgetTouchDragState() {
+            const ghost = widgetTouchDragState.ghost;
+            if (ghost && ghost.parentNode) {
+                ghost.parentNode.removeChild(ghost);
+            }
+            detachWidgetTouchDragListeners();
+            updateWidgetTouchDragState({
+                pointerId: null,
+                widget: null,
+                container: null,
+                ghost: null,
+                startX: 0,
+                startY: 0,
+                lastX: 0,
+                lastY: 0,
+                active: false,
+            });
+        }
+
+        function handleWidgetTouchPointerMove(event) {
+            if (!widgetTouchDragState.pointerId || event.pointerId !== widgetTouchDragState.pointerId) {
+                return;
+            }
+            const nextX = event.clientX;
+            const nextY = event.clientY;
+            updateWidgetTouchDragState({ lastX: nextX, lastY: nextY });
+
+            if (!widgetTouchDragState.active) {
+                const dx = nextX - widgetTouchDragState.startX;
+                const dy = nextY - widgetTouchDragState.startY;
+                const distance = Math.hypot(dx, dy);
+                if (distance < WIDGET_TOUCH_DRAG_THRESHOLD) {
+                    return;
+                }
+                activateWidgetTouchDrag();
+                return;
+            }
+
+            event.preventDefault();
+            const ghost = widgetTouchDragState.ghost;
+            if (ghost instanceof HTMLElement) {
+                updateWidgetTouchGhostPosition(ghost, nextX, nextY);
+            }
+
+            const widget = widgetDragState.dragging ?? widgetTouchDragState.widget;
+            if (!(widget instanceof HTMLElement)) {
+                return;
+            }
+
+            const nextContainer = resolveWidgetDropContainer(nextX, nextY);
+            if (nextContainer instanceof HTMLElement) {
+                updateWidgetDragContainer(nextContainer);
+                updateWidgetDragOverAtPosition(widget, nextContainer, nextX, nextY);
+                return;
+            }
+
+            if (widgetDragState.container instanceof HTMLElement) {
+                widgetDragState.container.classList.remove("drag-hover");
+                clearWidgetDragOver(widgetDragState.container);
+            }
+            if (widgetDragState.placeholder) {
+                widgetDragState.placeholder.classList.remove("is-active");
+            }
+            updateWidgetDragContainer(null);
+        }
+
+        function handleWidgetTouchPointerEnd(event) {
+            if (!widgetTouchDragState.pointerId || event.pointerId !== widgetTouchDragState.pointerId) {
+                return;
+            }
+            const wasActive = widgetTouchDragState.active;
+            const dropContainer = widgetDragState.container;
+            const originContainer = widgetDragState.originContainer;
+            const draggingWidget = widgetDragState.dragging;
+
+            resetWidgetTouchDragState();
+            clearWidgetDragHandleState();
+
+            if (!wasActive) {
+                return;
+            }
+            if (!(dropContainer instanceof HTMLElement) || !(draggingWidget instanceof HTMLElement)) {
+                cancelWidgetDrag();
+                return;
+            }
+
+            event.preventDefault();
+            const placeholder = widgetDragState.placeholder;
+            if (placeholder && placeholder.parentNode === dropContainer) {
+                dropContainer.insertBefore(draggingWidget, placeholder);
+            }
+            const containerId = dropContainer.dataset.widgetContainer;
+            if (containerId) {
+                syncWidgetHomeContainer(draggingWidget, containerId);
+            }
+
+            applyWidgetDropFeedback(draggingWidget, dropContainer);
+            finalizeWidgetDrag(dropContainer);
+
+            const containers = [dropContainer, originContainer].filter(
+                (container, index, list) =>
+                    container instanceof HTMLElement && list.indexOf(container) === index,
+            );
+            persistWidgetLayoutForContainers(containers, { broadcast: true });
+        }
+
+        function captureWidgetDragOrigin(widget, container) {
+            if (!(widget instanceof HTMLElement) || !(container instanceof HTMLElement)) {
+                return;
+            }
+            updateWidgetDragState({
+                originContainer: container,
+                originNextSibling: widget.nextElementSibling,
+            });
+        }
+
+        function restoreWidgetDragOrigin() {
+            const { dragging, originContainer, originNextSibling } = widgetDragState;
+            if (!(dragging instanceof HTMLElement) || !(originContainer instanceof HTMLElement)) {
+                return;
+            }
+            if (originNextSibling && originNextSibling.parentElement === originContainer) {
+                originContainer.insertBefore(dragging, originNextSibling);
+                return;
+            }
+            originContainer.appendChild(dragging);
+        }
+
+        function cancelWidgetDrag() {
+            if (!widgetDragState.dragging) {
+                return;
+            }
+            clearWidgetDropFeedback();
+            restoreWidgetDragOrigin();
+            const container = widgetDragState.container ?? widgetDragState.originContainer;
+            if (container instanceof HTMLElement) {
+                finalizeWidgetDrag(container);
+                return;
+            }
+            if (widgetDragState.dragging) {
+                widgetDragState.dragging.classList.remove("dragging");
+                widgetDragState.dragging.setAttribute("aria-grabbed", "false");
+            }
+            updateWidgetDragState({
+                dragging: null,
+                placeholder: null,
+                container: null,
+                originContainer: null,
+                originNextSibling: null,
+                dragHandleActive: false,
+            });
+            setWidgetDraggingState(false);
+        }
+
+        function clearWidgetDropFeedback() {
+            const { dropTimeoutId, dropTarget, dropContainer } = widgetDragState;
+            if (dropTimeoutId !== null) {
+                clearTimeout(dropTimeoutId);
+            }
+            if (dropTarget instanceof HTMLElement) {
+                dropTarget.classList.remove("dropping");
+            }
+            if (dropContainer instanceof HTMLElement) {
+                dropContainer.classList.remove("drag-dropping");
+            }
+            updateWidgetDragState({ dropTimeoutId: null, dropTarget: null, dropContainer: null });
+        }
+
+        function applyWidgetDropFeedback(widget, container) {
+            if (!(widget instanceof HTMLElement) || !(container instanceof HTMLElement)) {
+                return;
+            }
+            clearWidgetDropFeedback();
+            widget.classList.add("dropping");
+            container.classList.add("drag-dropping");
+            const dropTimeoutId = window.setTimeout(() => {
+                widget.classList.remove("dropping");
+                container.classList.remove("drag-dropping");
+                updateWidgetDragState({ dropTimeoutId: null, dropTarget: null, dropContainer: null });
+            }, WIDGET_DRAG_DROP_FEEDBACK_MS);
+            updateWidgetDragState({ dropTimeoutId, dropTarget: widget, dropContainer: container });
+        }
+
+        function handleWidgetDragStart(event) {
+            const dragHandleActive = widgetDragState.dragHandleActive || isWidgetDragHandleTarget(event);
+            if (shouldIgnoreWidgetDrag(event) || !dragHandleActive || widgetLibraryDragState.active) {
                 event.preventDefault();
                 return;
             }
@@ -8770,16 +14224,21 @@ export class DashboardServer {
                 return;
             }
 
-            updateWidgetDragState({ dragging: widget, container });
+            clearWidgetDropFeedback();
+            updateWidgetDragState({ dragging: widget, container, dragHandleActive: false });
+            captureWidgetDragOrigin(widget, container);
+            const ghost = createWidgetGhost(widget);
             widget.classList.add("dragging");
             widget.setAttribute("aria-grabbed", "true");
             container.classList.add("drag-active");
-
-            const ghost = createWidgetGhost(widget);
+            setWidgetDraggingState(true);
             if (event.dataTransfer) {
+                const ghostScale = getWidgetGhostScale();
+                const offsetX = Math.round((ghost.offsetWidth || 0) * ghostScale / 2);
+                const offsetY = Math.round((ghost.offsetHeight || 0) * ghostScale / 2);
                 event.dataTransfer.effectAllowed = "move";
                 event.dataTransfer.setData("text/plain", widget.dataset.widgetId || "");
-                event.dataTransfer.setDragImage(ghost, ghost.offsetWidth / 2, ghost.offsetHeight / 2);
+                event.dataTransfer.setDragImage(ghost, offsetX, offsetY);
             }
 
             window.requestAnimationFrame(() => {
@@ -8795,7 +14254,7 @@ export class DashboardServer {
             }
 
             const container = event.currentTarget;
-            if (!(container instanceof HTMLElement) || container !== widgetDragState.container) {
+            if (!(container instanceof HTMLElement)) {
                 return;
             }
 
@@ -8804,20 +14263,28 @@ export class DashboardServer {
                 event.dataTransfer.dropEffect = "move";
             }
 
-            const reference = getWidgetDropReference(container, event.clientX, event.clientY);
-            const placeholder = ensureWidgetPlaceholder(widgetDragState.dragging, reference?.element);
+            updateWidgetDragContainer(container);
+            const activeContainer = widgetDragState.container;
+            if (!(activeContainer instanceof HTMLElement)) {
+                return;
+            }
 
-            container.classList.add("drag-hover");
-            clearWidgetDragOver(container);
+            const reference = getWidgetDropReference(activeContainer, event.clientX, event.clientY);
+            const placeholder = ensureWidgetPlaceholder(widgetDragState.dragging, reference?.element);
+            setWidgetDropIndicatorEdge(placeholder, reference?.before ? "before" : "after");
+
+            activeContainer.classList.add("drag-hover");
+            clearWidgetDragOver(activeContainer);
+            placeholder.classList.add("drag-over");
             if (reference?.element) {
                 reference.element.classList.add("drag-over");
                 if (reference.before) {
-                    container.insertBefore(placeholder, reference.element);
+                    activeContainer.insertBefore(placeholder, reference.element);
                 } else {
-                    container.insertBefore(placeholder, reference.element.nextSibling);
+                    activeContainer.insertBefore(placeholder, reference.element.nextSibling);
                 }
             } else {
-                container.appendChild(placeholder);
+                activeContainer.appendChild(placeholder);
             }
         }
 
@@ -8827,7 +14294,7 @@ export class DashboardServer {
             }
 
             const container = event.currentTarget;
-            if (!(container instanceof HTMLElement) || container !== widgetDragState.container) {
+            if (!(container instanceof HTMLElement)) {
                 return;
             }
 
@@ -8838,8 +14305,19 @@ export class DashboardServer {
                 container.insertBefore(widgetDragState.dragging, placeholder);
             }
 
+            applyWidgetDropFeedback(widgetDragState.dragging, container);
+            const originContainer = widgetDragState.originContainer;
+            const containerId = container.dataset.widgetContainer;
+            if (containerId) {
+                syncWidgetHomeContainer(widgetDragState.dragging, containerId);
+            }
             finalizeWidgetDrag(container);
-            saveWidgetLayoutForContainer(container, { broadcast: true });
+            const containers = [container, originContainer].filter(
+                (entry, index, list) =>
+                    entry instanceof HTMLElement && list.indexOf(entry) === index,
+            );
+            persistWidgetLayoutForContainers(containers, { broadcast: true });
+            updateWidgetMoveControlsForContainers(containers);
         }
 
         function handleWidgetDragLeave(event) {
@@ -8857,19 +14335,284 @@ export class DashboardServer {
             }
 
             container.classList.remove("drag-hover");
+            if (widgetDragState.placeholder) {
+                widgetDragState.placeholder.classList.remove("is-active");
+            }
             clearWidgetDragOver(container);
         }
 
         function handleWidgetDragEnd() {
+            clearWidgetDragHandleState();
             if (!widgetDragState.dragging) {
                 return;
             }
 
-            const container = widgetDragState.container;
-            if (container instanceof HTMLElement) {
-                finalizeWidgetDrag(container);
-                saveWidgetLayoutForContainer(container, { broadcast: true });
+            cancelWidgetDrag();
+        }
+
+        function clearWidgetLibraryHoldTimeout() {
+            if (widgetLibraryDragState.holdTimeoutId !== null) {
+                clearTimeout(widgetLibraryDragState.holdTimeoutId);
             }
+            updateWidgetLibraryDragState({ holdTimeoutId: null });
+        }
+
+        function clearWidgetLibraryDragContainer() {
+            const container = widgetLibraryDragState.container;
+            if (container instanceof HTMLElement) {
+                container.classList.remove("drag-active", "drag-hover");
+                clearWidgetDragOver(container);
+            }
+            const placeholder = widgetDragState.placeholder;
+            if (placeholder && placeholder.parentNode) {
+                placeholder.parentNode.removeChild(placeholder);
+            }
+            updateWidgetDragState({ placeholder: null });
+            updateWidgetLibraryDragState({ container: null });
+        }
+
+        function createWidgetLibraryGhost(widget) {
+            const ghost = createWidgetGhost(widget);
+            ghost.style.position = "fixed";
+            applyWidgetGhostPointerTransform(ghost);
+            return ghost;
+        }
+
+        function updateWidgetLibraryGhostPosition(ghost, x, y) {
+            if (!(ghost instanceof HTMLElement)) {
+                return;
+            }
+            ghost.style.left = Number.isFinite(x) ? String(x) + "px" : "";
+            ghost.style.top = Number.isFinite(y) ? String(y) + "px" : "";
+        }
+
+        function resolveWidgetDropContainer(x, y) {
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                return null;
+            }
+            const target = document.elementFromPoint(x, y);
+            if (!(target instanceof HTMLElement)) {
+                return null;
+            }
+            const container = target.closest("[data-widget-container]");
+            return container instanceof HTMLElement ? container : null;
+        }
+
+        function updateWidgetDragOverAtPosition(widget, container, x, y) {
+            if (!(widget instanceof HTMLElement) || !(container instanceof HTMLElement)) {
+                return;
+            }
+            const reference = getWidgetDropReference(container, x, y);
+            const placeholder = ensureWidgetPlaceholder(widget, reference?.element);
+            setWidgetDropIndicatorEdge(placeholder, reference?.before ? "before" : "after");
+
+            container.classList.add("drag-hover");
+            clearWidgetDragOver(container);
+            placeholder.classList.add("drag-over");
+            if (reference?.element) {
+                reference.element.classList.add("drag-over");
+                if (reference.before) {
+                    container.insertBefore(placeholder, reference.element);
+                } else {
+                    container.insertBefore(placeholder, reference.element.nextSibling);
+                }
+                return;
+            }
+            container.appendChild(placeholder);
+        }
+
+        function canStartWidgetLibraryDrag(widgetId) {
+            if (!widgetId) {
+                return false;
+            }
+            const hiddenSet = new Set(loadHiddenWidgetIds());
+            if (!hiddenSet.has(widgetId)) {
+                return false;
+            }
+            const visibleCount = getVisibleWidgetCount();
+            const maxVisible = getMaxVisibleWidgets();
+            return visibleCount < maxVisible;
+        }
+
+        function startWidgetLibraryPress(event, widgetId) {
+            if (!widgetId) {
+                return;
+            }
+            if (!event.isPrimary) {
+                return;
+            }
+            if (event.pointerType === "mouse" && event.button !== 0) {
+                return;
+            }
+            if (widgetDragState && widgetDragState.dragging) {
+                return;
+            }
+            if (widgetLibraryDragState.active || widgetLibraryDragState.holdTimeoutId !== null) {
+                return;
+            }
+            if (shouldIgnoreWidgetDrag(event)) {
+                return;
+            }
+
+            const startX = event.clientX;
+            const startY = event.clientY;
+            const holdTimeoutId = canStartWidgetLibraryDrag(widgetId)
+                ? window.setTimeout(() => {
+                    beginWidgetLibraryDrag(widgetId);
+                }, WIDGET_LIBRARY_DRAG_HOLD_MS)
+                : null;
+
+            updateWidgetLibraryDragState({
+                widgetId,
+                widget: null,
+                container: null,
+                ghost: null,
+                pointerId: event.pointerId,
+                holdTimeoutId,
+                startX,
+                startY,
+                lastX: startX,
+                lastY: startY,
+                active: false,
+                moved: false,
+            });
+
+            attachWidgetLibraryDragListeners();
+        }
+
+        function beginWidgetLibraryDrag(widgetId) {
+            clearWidgetLibraryHoldTimeout();
+            if (!widgetId) {
+                return;
+            }
+            const widget = getWidgetById(widgetId);
+            if (!(widget instanceof HTMLElement)) {
+                return;
+            }
+            if (!canStartWidgetLibraryDrag(widgetId)) {
+                return;
+            }
+            clearWidgetDropFeedback();
+            const ghost = createWidgetLibraryGhost(widget);
+            updateWidgetLibraryDragState({
+                widget,
+                ghost,
+                active: true,
+                moved: false,
+            });
+            updateWidgetLibraryGhostPosition(ghost, widgetLibraryDragState.lastX, widgetLibraryDragState.lastY);
+            setWidgetDraggingState(true);
+        }
+
+        function handleWidgetLibraryPointerMove(event) {
+            if (!widgetLibraryDragState.pointerId || event.pointerId !== widgetLibraryDragState.pointerId) {
+                return;
+            }
+
+            const nextX = event.clientX;
+            const nextY = event.clientY;
+            updateWidgetLibraryDragState({ lastX: nextX, lastY: nextY });
+
+            if (!widgetLibraryDragState.active) {
+                const dx = nextX - widgetLibraryDragState.startX;
+                const dy = nextY - widgetLibraryDragState.startY;
+                const distance = Math.hypot(dx, dy);
+                if (distance > WIDGET_LIBRARY_DRAG_MOVE_THRESHOLD) {
+                    clearWidgetLibraryHoldTimeout();
+                    updateWidgetLibraryDragState({ moved: true });
+                }
+                return;
+            }
+
+            event.preventDefault();
+            const ghost = widgetLibraryDragState.ghost;
+            if (ghost instanceof HTMLElement) {
+                updateWidgetLibraryGhostPosition(ghost, nextX, nextY);
+            }
+
+            const widget = widgetLibraryDragState.widget;
+            if (!(widget instanceof HTMLElement)) {
+                return;
+            }
+
+            const nextContainer = resolveWidgetDropContainer(nextX, nextY);
+            if (nextContainer !== widgetLibraryDragState.container) {
+                clearWidgetLibraryDragContainer();
+                if (nextContainer instanceof HTMLElement) {
+                    nextContainer.classList.add("drag-active");
+                    updateWidgetLibraryDragState({ container: nextContainer });
+                }
+            }
+            const activeContainer = widgetLibraryDragState.container;
+            if (!(activeContainer instanceof HTMLElement)) {
+                return;
+            }
+            updateWidgetDragOverAtPosition(widget, activeContainer, nextX, nextY);
+        }
+
+        function handleWidgetLibraryPointerEnd(event) {
+            if (!widgetLibraryDragState.pointerId || event.pointerId !== widgetLibraryDragState.pointerId) {
+                return;
+            }
+
+            const shouldAddOnClick = !widgetLibraryDragState.active && !widgetLibraryDragState.moved;
+            const widgetId = widgetLibraryDragState.widgetId;
+            if (widgetLibraryDragState.active) {
+                finalizeWidgetLibraryDrop();
+            } else {
+                clearWidgetLibraryHoldTimeout();
+                resetWidgetLibraryDragState();
+            }
+
+            if (shouldAddOnClick && widgetId) {
+                addWidgetFromLibrary(widgetId);
+            }
+        }
+
+        function finalizeWidgetLibraryDrop() {
+            const widgetId = widgetLibraryDragState.widgetId;
+            const widget = widgetLibraryDragState.widget;
+            const container = widgetLibraryDragState.container;
+            const placeholder = widgetDragState.placeholder;
+            if (!widgetId || !(widget instanceof HTMLElement) || !(container instanceof HTMLElement)) {
+                cancelWidgetLibraryDrag();
+                return;
+            }
+            const result = addWidgetFromLibraryToDashboardAtPosition(widgetId, container, placeholder);
+            if (result.added) {
+                showSuccess("Added " + result.label + " to the dashboard.");
+            }
+            cancelWidgetLibraryDrag();
+        }
+
+        function resetWidgetLibraryDragState() {
+            detachWidgetLibraryDragListeners();
+            updateWidgetLibraryDragState({
+                widgetId: null,
+                widget: null,
+                container: null,
+                ghost: null,
+                pointerId: null,
+                holdTimeoutId: null,
+                startX: 0,
+                startY: 0,
+                lastX: 0,
+                lastY: 0,
+                active: false,
+                moved: false,
+            });
+        }
+
+        function cancelWidgetLibraryDrag() {
+            clearWidgetLibraryHoldTimeout();
+            clearWidgetLibraryDragContainer();
+            clearWidgetDropFeedback();
+            const ghost = widgetLibraryDragState.ghost;
+            if (ghost && ghost.parentNode) {
+                ghost.parentNode.removeChild(ghost);
+            }
+            setWidgetDraggingState(false);
+            resetWidgetLibraryDragState();
         }
 
         function finalizeWidgetDrag(container) {
@@ -8883,16 +14626,36 @@ export class DashboardServer {
                 widgetDragState.dragging.setAttribute("aria-grabbed", "false");
             }
             container.classList.remove("drag-active", "drag-hover");
-            updateWidgetDragState({ dragging: null, placeholder: null, container: null });
+            updateWidgetDragState({
+                dragging: null,
+                placeholder: null,
+                container: null,
+                originContainer: null,
+                originNextSibling: null,
+                dragHandleActive: false,
+            });
+            setWidgetDraggingState(false);
         }
 
         function createWidgetGhost(widget) {
             const ghost = widget.cloneNode(true);
             ghost.classList.add("widget-ghost");
-            const rect = widget.getBoundingClientRect();
-            ghost.style.width = \`\${rect.width || widget.offsetWidth}px\`;
-            ghost.style.height = \`\${rect.height || widget.offsetHeight}px\`;
+            ghost.classList.remove("widget-hidden");
+            ghost.removeAttribute("data-widget-id");
+            ghost.removeAttribute("data-widget-label");
+            ghost.setAttribute("aria-hidden", "true");
+            Array.from(ghost.querySelectorAll("[id]")).forEach(node => node.removeAttribute("id"));
+            Array.from(ghost.querySelectorAll("[data-widget-id]"))
+                .forEach(node => node.removeAttribute("data-widget-id"));
+            ghost.style.visibility = "hidden";
             document.body.appendChild(ghost);
+            const rect = ghost.getBoundingClientRect();
+            const width = rect.width || widget.offsetWidth || 0;
+            const height = rect.height || widget.offsetHeight || 0;
+            ghost.style.width = width ? \`\${width}px\` : "";
+            ghost.style.height = height ? \`\${height}px\` : "";
+            ghost.style.transformOrigin = "center";
+            ghost.style.visibility = "";
             return ghost;
         }
 
@@ -8907,6 +14670,7 @@ export class DashboardServer {
             const placeholder = document.createElement("div");
             placeholder.className = "widget-drop-indicator widget-card";
             placeholder.setAttribute("aria-hidden", "true");
+            placeholder.dataset.dropEdge = "after";
             const sizeClass = getWidgetSizeClass(widget);
             if (sizeClass) {
                 placeholder.classList.add(sizeClass);
@@ -8931,12 +14695,22 @@ export class DashboardServer {
             placeholder.style.minHeight = height ? \`\${height}px\` : "";
         }
 
+        function setWidgetDropIndicatorEdge(placeholder, edge) {
+            if (!(placeholder instanceof HTMLElement)) {
+                return;
+            }
+            const resolvedEdge = edge === "before" || edge === "after" ? edge : "after";
+            placeholder.dataset.dropEdge = resolvedEdge;
+        }
+
         function ensureWidgetPlaceholder(widget, referenceElement) {
             if (widgetDragState.placeholder) {
+                widgetDragState.placeholder.classList.add("is-active");
                 syncWidgetPlaceholderSize(widgetDragState.placeholder, widget, referenceElement);
                 return widgetDragState.placeholder;
             }
             const placeholder = buildWidgetDropIndicator(widget);
+            placeholder.classList.add("is-active");
             syncWidgetPlaceholderSize(placeholder, widget, referenceElement);
             updateWidgetDragState({ placeholder });
             return placeholder;
@@ -8971,6 +14745,10 @@ export class DashboardServer {
 
         function clearWidgetDragOver(container) {
             getWidgets(container).forEach(widget => widget.classList.remove("drag-over"));
+            const placeholder = widgetDragState.placeholder;
+            if (placeholder && placeholder.parentNode === container) {
+                placeholder.classList.remove("drag-over");
+            }
         }
 
         function saveWidgetLayoutForContainer(container, options) {
@@ -9009,18 +14787,28 @@ export class DashboardServer {
             }
             const layout = loadWidgetLayout();
             const nextLayout = mergeWidgetLayoutUpdates(layout, updates);
-            saveWidgetLayoutState(nextLayout);
+            commitWidgetLayoutUpdate(nextLayout, {
+                profileSync: true,
+                broadcast: true,
+            });
             if (options?.broadcast) {
-                sendWidgetLayoutBatch(updates);
+                scheduleWidgetLayoutAutoSave(updates);
             }
             return nextLayout;
         }
 
         // Event Listeners
-        document.addEventListener("DOMContentLoaded", () => {
+        const initializeDashboard = () => {
+            startDashboardRestore();
+            const layoutRestore = initializeWidgetLayoutFromStorage();
             hydrateWidgetStateFromServer();
+            setupWidgetLayoutSyncChannel();
+            void hydrateWidgetLayoutFromProfile({ force: true });
+            void flushPendingPreferencesSync();
             initTabs();
             initMetricNavigation();
+            initMyTasksWidgetActions();
+            initWidgetLayoutSaveIndicator();
             collectWidgetCatalog();
             applyWidgetVisibilityState();
             updateSelectedWidgetIds(loadSelectedWidgetIds());
@@ -9041,14 +14829,29 @@ export class DashboardServer {
             applyWidgetOrder();
             initWidgetDragAndDrop();
             initWidgetSizing();
+            applyResponsiveDashboardGrid();
             renderWidgetLibrary();
+            void hydrateWidgetNotificationPreferences();
             updateEmptyDashboardState();
+            finishDashboardRestore({ usedFallback: layoutRestore.status !== "restored" });
             if (typeof window !== "undefined" && window.location.hash === "#widgetLibraryList") {
                 openWidgetLibraryFromEmptyState();
             }
             if (typeof window !== "undefined") {
+                const scheduleResponsiveGridUpdate = debounce(() => applyResponsiveDashboardGrid(), 150);
                 window.addEventListener("storage", handleWidgetStorageUpdate);
+                window.addEventListener("resize", scheduleResponsiveGridUpdate);
+                window.addEventListener("orientationchange", scheduleResponsiveGridUpdate);
+                window.addEventListener("online", () => {
+                    attemptWidgetLayoutSaveRetry();
+                    void flushWidgetLayoutProfileSync();
+                    void flushPendingPreferencesSync();
+                });
+                window.addEventListener("focus", () => {
+                    void hydrateWidgetLayoutFromProfile({ force: false });
+                });
             }
+            attemptWidgetLayoutSaveRetry();
 
             const addSelectedWidgetsBtn = document.getElementById("addSelectedWidgetsBtn");
             if (addSelectedWidgetsBtn instanceof HTMLButtonElement) {
@@ -9065,6 +14868,19 @@ export class DashboardServer {
             const openWidgetLibraryBtn = document.getElementById("openWidgetLibraryBtn");
             if (openWidgetLibraryBtn instanceof HTMLButtonElement) {
                 openWidgetLibraryBtn.addEventListener("click", openWidgetLibraryFromEmptyState);
+            }
+            const widgetLibrarySearch = document.getElementById("widgetLibrarySearch");
+            if (widgetLibrarySearch instanceof HTMLInputElement) {
+                widgetLibrarySearch.addEventListener("input", () => {
+                    updateWidgetLibrarySearchQuery(widgetLibrarySearch.value);
+                });
+            }
+            const clearSelectedWidgetsBtn = document.getElementById("clearSelectedWidgetsBtn");
+            if (clearSelectedWidgetsBtn instanceof HTMLButtonElement) {
+                clearSelectedWidgetsBtn.addEventListener("click", () => {
+                    updateSelectedWidgetIds([]);
+                    renderWidgetLibrary();
+                });
             }
             const showAllWidgetsEmptyBtn = document.getElementById("showAllWidgetsEmptyBtn");
             if (showAllWidgetsEmptyBtn instanceof HTMLButtonElement) {
@@ -9102,20 +14918,40 @@ export class DashboardServer {
             
             // Log limit listener
             document.getElementById('logLimit').addEventListener('change', loadLogs);
+
+            initAutoRefreshControls();
+            const storedRefreshRate = readStoredAutoRefreshRate();
+            if (storedRefreshRate) {
+                autoRefreshRate = storedRefreshRate;
+            }
             
             // Initial load
             setMetricsLoadingState(true);
             requestMetricsRefresh();
             loadRecentActivityWidget({ force: true });
             startAutoRefresh();
+            connectWebSocket();
+            void hydrateAutoRefreshPreferences();
             
             // Close modal when clicking outside
-            document.getElementById('taskModal').addEventListener('click', (e) => {
-                if (e.target.id === 'taskModal') {
-                    closeTaskModal();
-                }
-            });
-        });
+            const taskModal = getTaskModalElement();
+            if (taskModal) {
+                taskModal.addEventListener("click", (event) => {
+                    if (event.target === taskModal) {
+                        closeTaskModal();
+                    }
+                });
+                taskModal.addEventListener("keydown", trapTaskModalFocus);
+            }
+        };
+
+        if (typeof document !== "undefined") {
+            if (document.readyState === "loading") {
+                document.addEventListener("DOMContentLoaded", initializeDashboard);
+            } else {
+                initializeDashboard();
+            }
+        }
 
         // Include external audit history script
         function loadAuditHistory() {
@@ -9158,12 +14994,20 @@ export class DashboardServer {
         let bulkActionsVisible = false;
 
         function toggleBulkActions() {
-            bulkActionsVisible = !bulkActionsVisible;
-            const panel = document.getElementById('bulkActionsPanel');
-            panel.style.display = bulkActionsVisible ? 'block' : 'none';
+            const nextVisible = !bulkActionsVisible;
+            bulkActionsVisible = nextVisible;
+            const panel = document.getElementById("bulkActionsPanel");
+            if (panel instanceof HTMLElement) {
+                panel.hidden = !nextVisible;
+                panel.setAttribute("aria-hidden", nextVisible ? "false" : "true");
+            }
+            const toggleButton = document.getElementById("toggleBulkActionsBtn");
+            if (toggleButton instanceof HTMLElement) {
+                toggleButton.setAttribute("aria-expanded", nextVisible ? "true" : "false");
+            }
             
             // Add checkboxes to tasks if showing bulk actions
-            if (bulkActionsVisible) {
+            if (nextVisible) {
                 addTaskCheckboxes();
             } else {
                 removeTaskCheckboxes();
@@ -9173,130 +15017,192 @@ export class DashboardServer {
         }
 
         function addTaskCheckboxes() {
-            const taskItems = document.querySelectorAll('.task-item');
+            const taskItems = document.querySelectorAll(".task-item");
             taskItems.forEach(item => {
+                if (!(item instanceof HTMLElement)) {
+                    return;
+                }
                 const taskId = item.dataset.taskId;
-                if (!item.querySelector('.task-checkbox')) {
-                    const checkbox = document.createElement('input');
-                    checkbox.type = 'checkbox';
-                    checkbox.className = 'task-checkbox';
+                if (!taskId) {
+                    return;
+                }
+                if (!item.querySelector(".task-checkbox")) {
+                    const checkbox = document.createElement("input");
+                    checkbox.type = "checkbox";
+                    checkbox.className = "task-checkbox";
                     checkbox.dataset.taskId = taskId;
-                    checkbox.addEventListener('change', (e) => {
-                        if (e.target.checked) {
+                    const titleElement = item.querySelector(".task-title");
+                    const taskTitle = titleElement instanceof HTMLElement ? titleElement.textContent?.trim() : "";
+                    const label = taskTitle ? "Select task " + taskTitle : "Select task " + taskId;
+                    checkbox.setAttribute("aria-label", label);
+                    checkbox.setAttribute("title", label);
+                    checkbox.addEventListener("change", (event) => {
+                        const target = event.target;
+                        if (!(target instanceof HTMLInputElement)) {
+                            return;
+                        }
+                        if (target.checked) {
                             selectedTasks.add(taskId);
-                            item.classList.add('selected');
+                            item.classList.add("selected");
                         } else {
                             selectedTasks.delete(taskId);
-                            item.classList.remove('selected');
+                            item.classList.remove("selected");
                         }
                         updateBulkActionsUI();
                     });
                     
                     // Insert checkbox at the beginning of task-header
-                    const header = item.querySelector('.task-header');
-                    header.insertBefore(checkbox, header.firstChild);
+                    const header = item.querySelector(".task-header");
+                    if (header instanceof HTMLElement) {
+                        header.insertBefore(checkbox, header.firstChild);
+                    }
                 }
             });
         }
 
         function removeTaskCheckboxes() {
-            const checkboxes = document.querySelectorAll('.task-checkbox');
-            checkboxes.forEach(cb => cb.remove());
+            const checkboxes = document.querySelectorAll(".task-checkbox");
+            checkboxes.forEach(checkbox => checkbox.remove());
             
-            const taskItems = document.querySelectorAll('.task-item');
-            taskItems.forEach(item => item.classList.remove('selected'));
+            const taskItems = document.querySelectorAll(".task-item");
+            taskItems.forEach(item => {
+                if (item instanceof HTMLElement) {
+                    item.classList.remove("selected");
+                }
+            });
             
             selectedTasks.clear();
         }
 
         function selectAllTasks() {
-            const checkboxes = document.querySelectorAll('.task-checkbox');
-            checkboxes.forEach(cb => {
-                cb.checked = true;
-                const taskId = cb.dataset.taskId;
-                selectedTasks.add(taskId);
-                cb.closest('.task-item').classList.add('selected');
+            const checkboxes = document.querySelectorAll(".task-checkbox");
+            checkboxes.forEach(checkbox => {
+                if (!(checkbox instanceof HTMLInputElement)) {
+                    return;
+                }
+                checkbox.checked = true;
+                const taskId = checkbox.dataset.taskId;
+                if (taskId) {
+                    selectedTasks.add(taskId);
+                }
+                const taskItem = checkbox.closest(".task-item");
+                if (taskItem instanceof HTMLElement) {
+                    taskItem.classList.add("selected");
+                }
             });
             updateBulkActionsUI();
         }
 
         function clearSelection() {
-            const checkboxes = document.querySelectorAll('.task-checkbox');
-            checkboxes.forEach(cb => {
-                cb.checked = false;
-                cb.closest('.task-item').classList.remove('selected');
+            const checkboxes = document.querySelectorAll(".task-checkbox");
+            checkboxes.forEach(checkbox => {
+                if (!(checkbox instanceof HTMLInputElement)) {
+                    return;
+                }
+                checkbox.checked = false;
+                const taskItem = checkbox.closest(".task-item");
+                if (taskItem instanceof HTMLElement) {
+                    taskItem.classList.remove("selected");
+                }
             });
             selectedTasks.clear();
             updateBulkActionsUI();
         }
 
         function updateBulkActionsUI() {
-            document.getElementById('selectedCount').textContent = selectedTasks.size;
+            const selectedCount = document.getElementById("selectedCount");
+            if (selectedCount instanceof HTMLElement) {
+                selectedCount.textContent = String(selectedTasks.size);
+            }
             
             // Enable/disable bulk action buttons based on selection
-            const buttons = document.querySelectorAll('.bulk-actions-buttons button');
-            buttons.forEach(btn => {
-                if (btn.textContent.includes('Select All') || btn.textContent.includes('Clear Selection')) {
+            const buttons = document.querySelectorAll(".bulk-actions-buttons button");
+            buttons.forEach(button => {
+                if (!(button instanceof HTMLButtonElement)) {
+                    return;
+                }
+                const label = button.textContent || "";
+                if (label.includes("Select All") || label.includes("Clear Selection")) {
                     return; // Always enable these
                 }
-                btn.disabled = selectedTasks.size === 0;
+                const isDisabled = selectedTasks.size === 0;
+                button.disabled = isDisabled;
+                button.setAttribute("aria-disabled", isDisabled ? "true" : "false");
             });
+            const bulkPrioritySelect = document.getElementById("bulkPrioritySelect");
+            if (bulkPrioritySelect instanceof HTMLSelectElement) {
+                const isDisabled = selectedTasks.size === 0;
+                bulkPrioritySelect.disabled = isDisabled;
+                bulkPrioritySelect.setAttribute("aria-disabled", isDisabled ? "true" : "false");
+            }
         }
 
         async function bulkSetPriority() {
-            if (selectedTasks.size === 0) return;
+            if (selectedTasks.size === 0) {
+                return;
+            }
             
-            const priority = document.getElementById('bulkPrioritySelect').value;
+            const bulkPrioritySelect = document.getElementById("bulkPrioritySelect");
+            if (!(bulkPrioritySelect instanceof HTMLSelectElement)) {
+                return;
+            }
+            const priority = bulkPrioritySelect.value;
             if (!priority) {
-                showError('Please select a priority level');
+                showError("Please select a priority level");
                 return;
             }
             
-            if (!confirm('Set priority to ' + priority + ' for ' + selectedTasks.size + ' selected tasks?')) {
+            if (!confirm("Set priority to " + priority + " for " + selectedTasks.size + " selected tasks?")) {
                 return;
             }
             
-            await performBulkAction('set_priority', { priority });
+            await performBulkAction("set_priority", { priority });
         }
 
         async function bulkResume() {
-            if (selectedTasks.size === 0) return;
-            
-            if (!confirm('Resume ' + selectedTasks.size + ' selected tasks?')) {
+            if (selectedTasks.size === 0) {
                 return;
             }
             
-            await performBulkAction('resume');
+            if (!confirm("Resume " + selectedTasks.size + " selected tasks?")) {
+                return;
+            }
+            
+            await performBulkAction("resume");
         }
 
         async function bulkCancel() {
-            if (selectedTasks.size === 0) return;
-            
-            if (!confirm('Cancel ' + selectedTasks.size + ' selected tasks?')) {
+            if (selectedTasks.size === 0) {
                 return;
             }
             
-            await performBulkAction('cancel');
+            if (!confirm("Cancel " + selectedTasks.size + " selected tasks?")) {
+                return;
+            }
+            
+            await performBulkAction("cancel");
         }
 
         async function bulkDelete() {
-            if (selectedTasks.size === 0) return;
-            
-            if (!confirm('PERMANENTLY delete ' + selectedTasks.size + ' selected tasks? This action cannot be undone.')) {
+            if (selectedTasks.size === 0) {
                 return;
             }
             
-            await performBulkAction('delete');
+            if (!confirm("PERMANENTLY delete " + selectedTasks.size + " selected tasks? This action cannot be undone.")) {
+                return;
+            }
+            
+            await performBulkAction("delete");
         }
 
         async function performBulkAction(action, data) {
             try {
-                showInfo('Performing ' + action + ' on ' + selectedTasks.size + ' tasks...');
+                showInfo("Performing " + action + " on " + selectedTasks.size + " tasks...");
                 
                 const taskIds = Array.from(selectedTasks);
-                const response = await fetch('/api/tasks/bulk-action', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                const response = await fetch("/api/tasks/bulk-action", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         action,
                         taskIds,
@@ -9307,11 +15213,11 @@ export class DashboardServer {
                 const result = await response.json();
                 
                 if (result.successful > 0) {
-                    showSuccess(action + ' completed successfully for ' + result.successful + ' tasks');
+                    showSuccess(action + " completed successfully for " + result.successful + " tasks");
                 }
                 
                 if (result.failed > 0) {
-                    showError(action + ' failed for ' + result.failed + ' tasks');
+                    showError(action + " failed for " + result.failed + " tasks");
                 }
                 
                 // Clear selection and refresh
@@ -9320,7 +15226,8 @@ export class DashboardServer {
                 await requestMetricsRefresh();
                 
             } catch (error) {
-                showError('Failed to perform bulk action: ' + error.message);
+                const message = error instanceof Error ? error.message : "Unknown error";
+                showError("Failed to perform bulk action: " + message);
             }
         }
 
@@ -9427,16 +15334,48 @@ export class DashboardServer {
         window.addEventListener('beforeunload', stopAutoRefresh);
         
         // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            // Ctrl/Cmd + K to focus search (could be implemented)
-            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-                e.preventDefault();
-                // document.getElementById('searchInput')?.focus();
-            }
-            
+        document.addEventListener("keydown", (event) => {
             // Escape to close modal
-            if (e.key === 'Escape') {
+            if (event.key === "Escape") {
+                if (widgetLibraryDragState && (widgetLibraryDragState.active || widgetLibraryDragState.holdTimeoutId !== null)) {
+                    event.preventDefault();
+                    cancelWidgetLibraryDrag();
+                    return;
+                }
+                if (widgetDragState && widgetDragState.dragging) {
+                    event.preventDefault();
+                    cancelWidgetDrag();
+                    return;
+                }
                 closeTaskModal();
+                return;
+            }
+
+            const normalizedKey = event.key.toLowerCase();
+            if ((event.ctrlKey || event.metaKey) && normalizedKey === "k") {
+                event.preventDefault();
+                focusWidgetLibrarySearch();
+                return;
+            }
+
+            if (isEditableTarget(event.target)) {
+                return;
+            }
+
+            if (event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+                if (normalizedKey === "r") {
+                    event.preventDefault();
+                    refreshActiveTab();
+                    return;
+                }
+                const index = Number.parseInt(event.key, 10);
+                if (Number.isFinite(index)) {
+                    const tabName = DASHBOARD_TAB_SEQUENCE[index - 1];
+                    if (tabName) {
+                        event.preventDefault();
+                        activateTab(tabName, { focus: true });
+                    }
+                }
             }
         });
     </script>

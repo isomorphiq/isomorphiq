@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-71c7b437-2216-4f94-92f3-ab38c3ea0c24"
+
 import "../../../tests/test-utils/env-fetch.ts";
 import { UserManager, AuthService, PermissionService } from "@isomorphiq/auth";
 import type { CreateUserInput } from "@isomorphiq/auth";

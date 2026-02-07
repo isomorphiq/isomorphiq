@@ -30,6 +30,7 @@ export type TaskClientOptions = {
 export type TaskClient = {
     listTasks: () => Promise<TaskEntity[]>;
     getTask: (id: string) => Promise<TaskEntity | null>;
+    getTaskByBranch: (branch: string) => Promise<TaskEntity | null>;
     searchTasks: (options: TaskSearchOptions) => Promise<{ tasks: TaskEntity[]; total: number }>;
     createTask: (input: CreateTaskInputWithPriority, createdBy?: string) => Promise<TaskEntity>;
     updateTask: (id: string, updates: Omit<ExtendedUpdateTaskInput, "id">, updatedBy?: string) =>
@@ -123,6 +124,10 @@ const TaskListSchema = z.array(TaskWireSchema);
 const TaskSearchResultWireSchema = TaskSearchResultSchema.extend({
     tasks: TaskListSchema,
 });
+const LegacyTaskSearchResultWireSchema = z.object({
+    tasks: TaskListSchema,
+    total: z.number(),
+});
 
 const normalizeTask = (value: unknown): TaskEntity => TaskWireSchema.parse(value);
 
@@ -136,10 +141,17 @@ const normalizeOptionalTask = (value: unknown): TaskEntity | null => {
 };
 
 const normalizeSearchResult = (value: unknown): { tasks: TaskEntity[]; total: number } => {
-    const parsed = TaskSearchResultWireSchema.parse(value);
+    const parsed = TaskSearchResultWireSchema.safeParse(value);
+    if (parsed.success) {
+        return {
+            tasks: parsed.data.tasks,
+            total: parsed.data.total,
+        };
+    }
+    const legacyParsed = LegacyTaskSearchResultWireSchema.parse(value);
     return {
-        tasks: parsed.tasks,
-        total: parsed.total,
+        tasks: legacyParsed.tasks,
+        total: legacyParsed.total,
     };
 };
 
@@ -183,6 +195,8 @@ export const createTaskClient = (options: TaskClientOptions = {}): TaskClient =>
     return {
         listTasks: async () => normalizeTaskList(await client.list.query()),
         getTask: async (id: string) => normalizeOptionalTask(await client.get.query({ id })),
+        getTaskByBranch: async (branch: string) =>
+            normalizeOptionalTask(await client.getByBranch.query({ branch })),
         searchTasks: async (optionsValue: TaskSearchOptions) =>
             normalizeSearchResult(await client.search.query(optionsValue)),
         createTask: async (input, createdBy) =>

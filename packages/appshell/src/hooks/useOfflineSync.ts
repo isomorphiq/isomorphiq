@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-ff41610d-6ddd-410d-8781-89057230ddec"
+
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const LOG_PREFIX = "[offlineSync]";
@@ -5,8 +7,43 @@ const LOG_PREFIX = "[offlineSync]";
 const logDebug = (...args: unknown[]) => console.debug(LOG_PREFIX, ...args);
 const logError = (...args: unknown[]) => console.error(LOG_PREFIX, ...args);
 
+const SYNC_RETRY_BASE_MS = 5000;
+const SYNC_RETRY_MAX_MS = 60000;
+const SYNC_RETRY_JITTER_MS = 800;
+const SYNC_PERSISTENT_FAILURE_THRESHOLD = 3;
+
 let storageReadyGlobal = false;
 let storageInitPromise: Promise<boolean> | null = null;
+
+const resolveSyncRetryDelayMs = (failureCount: number): number => {
+    if (failureCount <= 0) {
+        return SYNC_RETRY_BASE_MS;
+    }
+    const baseDelay = Math.min(
+        SYNC_RETRY_MAX_MS,
+        SYNC_RETRY_BASE_MS * Math.pow(2, Math.max(0, failureCount - 1)),
+    );
+    const jitter = Math.floor(Math.random() * SYNC_RETRY_JITTER_MS);
+    return baseDelay + jitter;
+};
+
+const buildSyncErrorMessage = async (response: Response, fallback: string): Promise<string> => {
+    if (response.ok) {
+        return fallback;
+    }
+    try {
+        const payload = await response.json();
+        if (payload && typeof payload === "object" && "error" in payload) {
+            const maybeError = payload.error;
+            if (typeof maybeError === "string" && maybeError.trim().length > 0) {
+                return maybeError;
+            }
+        }
+    } catch (_error) {
+        return fallback;
+    }
+    return fallback;
+};
 
 export interface OfflineTask {
 	id: string;
@@ -169,7 +206,7 @@ class OfflineStorage {
 		return new Promise((resolve, reject) => {
 			const transaction = db.transaction(["syncQueue"], "readwrite");
 			const store = transaction.objectStore("syncQueue");
-			const request = store.add(queueItem);
+			const request = store.put(queueItem);
 
 			request.onerror = () => reject(request.error);
 			request.onsuccess = () => resolve(queueItem.id);
@@ -222,33 +259,37 @@ class OfflineStorage {
 export const offlineStorage = new OfflineStorage();
 
 export function useOfflineSync() {
-	const [isOnline, setIsOnline] = useState(navigator.onLine);
-	const [syncInProgress, setSyncInProgress] = useState(false);
-	const syncInProgressRef = useRef(false);
-	const [storageReady, setStorageReady] = useState(false);
-	const [lastSyncTime, setLastSyncTime] = useState<string | null>(
-		localStorage.getItem("lastSyncTime"),
-	);
-	const canUseIndexedDB = typeof window !== "undefined" && "indexedDB" in window;
-	const initializedRef = useRef(false);
+    const [isOnline, setIsOnline] = useState(navigator.onLine);
+    const [syncInProgress, setSyncInProgress] = useState(false);
+    const syncInProgressRef = useRef(false);
+    const [storageReady, setStorageReady] = useState(false);
+    const [lastSyncTime, setLastSyncTime] = useState<string | null>(
+        localStorage.getItem("lastSyncTime"),
+    );
+    const [syncError, setSyncError] = useState<string | null>(null);
+    const [syncFailureCount, setSyncFailureCount] = useState(0);
+    const [syncRetryDelayMs, setSyncRetryDelayMs] = useState(0);
+    const canUseIndexedDB = typeof window !== "undefined" && "indexedDB" in window;
+    const initializedRef = useRef(false);
 
 	useEffect(() => {
-		const handleOnline = () => {
-			logDebug("navigator online event");
-			setIsOnline(true);
-		};
-		const handleOffline = () => {
-			logDebug("navigator offline event");
-			setIsOnline(false);
-		};
+        const handleOnline = () => {
+            logDebug("navigator online event");
+            setIsOnline(true);
+            setSyncRetryDelayMs(0);
+        };
+        const handleOffline = () => {
+            logDebug("navigator offline event");
+            setIsOnline(false);
+        };
 
-		window.addEventListener("online", handleOnline);
-		window.addEventListener("offline", handleOffline);
+        window.addEventListener("online", handleOnline);
+        window.addEventListener("offline", handleOffline);
 
-		return () => {
-			window.removeEventListener("online", handleOnline);
-			window.removeEventListener("offline", handleOffline);
-		};
+        return () => {
+            window.removeEventListener("online", handleOnline);
+            window.removeEventListener("offline", handleOffline);
+        };
 	}, []);
 
 	const ensureStorageReady = useCallback(async (): Promise<boolean> => {
@@ -296,97 +337,154 @@ export function useOfflineSync() {
 		};
 	}, [canUseIndexedDB, ensureStorageReady]);
 
-	const processSyncItem = useCallback(async (item: OfflineQueueItem): Promise<void> => {
-		const authToken = localStorage.getItem("authToken");
-		if (!authToken) throw new Error("No auth token");
+    const assertResponseOk = useCallback(async (response: Response, context: string): Promise<void> => {
+        if (response.ok) {
+            return;
+        }
+        const fallback = `${context} failed with status ${response.status}`;
+        const message = await buildSyncErrorMessage(response, fallback);
+        throw new Error(message);
+    }, []);
 
-		const headers = {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${authToken}`,
-		};
+    const processSyncItem = useCallback(async (item: OfflineQueueItem): Promise<void> => {
+        const authToken = localStorage.getItem("authToken");
+        if (!authToken) throw new Error("No auth token");
 
-		logDebug("processing sync item", { id: item.id, type: item.type, taskId: item.taskId });
+        const headers = {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
+        };
 
-		switch (item.type) {
-			case "create":
-				await fetch("/api/tasks", {
-					method: "POST",
-					headers,
-					body: JSON.stringify(item.data),
-				});
-				break;
+        logDebug("processing sync item", { id: item.id, type: item.type, taskId: item.taskId });
 
-			case "update":
-				await fetch(`/api/tasks/${item.taskId}`, {
-					method: "PUT",
-					headers,
-					body: JSON.stringify(item.data),
-				});
-				break;
+        switch (item.type) {
+            case "create": {
+                const response = await fetch("/api/tasks", {
+                    method: "POST",
+                    headers,
+                    body: JSON.stringify(item.data),
+                });
+                await assertResponseOk(response, "Create task sync");
+                break;
+            }
+            case "update": {
+                const response = await fetch(`/api/tasks/${item.taskId}`, {
+                    method: "PUT",
+                    headers,
+                    body: JSON.stringify(item.data),
+                });
+                await assertResponseOk(response, "Update task sync");
+                break;
+            }
+            case "delete": {
+                const response = await fetch(`/api/tasks/${item.taskId}`, {
+                    method: "DELETE",
+                    headers,
+                });
+                await assertResponseOk(response, "Delete task sync");
+                break;
+            }
+            default:
+                throw new Error(`Unknown sync item type: ${item.type}`);
+        }
+    }, [assertResponseOk]);
 
-			case "delete":
-				await fetch(`/api/tasks/${item.taskId}`, {
-					method: "DELETE",
-					headers,
-				});
-				break;
+    const syncOfflineChanges = useCallback(async (): Promise<void> => {
+        if (!isOnline || !canUseIndexedDB || !storageReady) {
+            logDebug("skip sync", { isOnline, canUseIndexedDB, storageReady });
+            return;
+        }
+        if (syncInProgressRef.current) {
+            logDebug("skip sync; already in progress");
+            return;
+        }
 
-			default:
-				throw new Error(`Unknown sync item type: ${item.type}`);
-		}
-	}, []);
+        syncInProgressRef.current = true;
+        setSyncInProgress(true);
+        try {
+            const ready = await ensureStorageReady();
+            if (!ready) {
+                logDebug("sync aborted; storage not ready");
+                return;
+            }
+            const queue = await offlineStorage.getSyncQueue();
+            logDebug("sync start", { queueSize: queue.length });
 
-	const syncOfflineChanges = useCallback(async (): Promise<void> => {
-		if (!isOnline || !canUseIndexedDB || !storageReady) {
-			logDebug("skip sync", { isOnline, canUseIndexedDB, storageReady });
-			return;
-		}
-		if (syncInProgressRef.current) {
-			logDebug("skip sync; already in progress");
-			return;
-		}
+            let failedCount = 0;
+            let maxRetryCount = 0;
 
-		syncInProgressRef.current = true;
-		setSyncInProgress(true);
-		try {
-			const ready = await ensureStorageReady();
-			if (!ready) {
-				logDebug("sync aborted; storage not ready");
-				return;
-			}
-			const queue = await offlineStorage.getSyncQueue();
-			logDebug("sync start", { queueSize: queue.length });
+            for (const item of queue) {
+                try {
+                    await processSyncItem(item);
+                    await offlineStorage.removeFromSyncQueue(item.id);
+                    logDebug("synced item", { id: item.id, type: item.type });
+                } catch (_error) {
+                    failedCount += 1;
+                    const nextRetryCount = (item.retryCount || 0) + 1;
+                    maxRetryCount = Math.max(maxRetryCount, nextRetryCount);
+                    const retryItem: OfflineQueueItem = {
+                        ...item,
+                        retryCount: nextRetryCount,
+                        timestamp: new Date().toISOString(),
+                    };
+                    logError("failed to sync item; will retry", { item, error: _error });
+                    try {
+                        await offlineStorage.addToSyncQueue(retryItem);
+                    } catch (queueError) {
+                        logError("failed to update sync queue item", { item, error: queueError });
+                    }
+                }
+            }
 
-			for (const item of queue) {
-				try {
-					await processSyncItem(item);
-					await offlineStorage.removeFromSyncQueue(item.id);
-					logDebug("synced item", { id: item.id, type: item.type });
-				} catch (_error) {
-					logError("failed to sync item; will retry", { item, error: _error });
-					const updatedItem = { ...item, retryCount: (item.retryCount || 0) + 1 };
-					await offlineStorage.addToSyncQueue(updatedItem);
-					await offlineStorage.removeFromSyncQueue(item.id);
-				}
-			}
+            if (queue.length === 0) {
+                setSyncFailureCount(0);
+                setSyncRetryDelayMs(SYNC_RETRY_BASE_MS);
+                setSyncError(null);
+            } else if (failedCount > 0) {
+                const nextFailureCount = syncFailureCount + 1;
+                setSyncFailureCount(nextFailureCount);
+                setSyncRetryDelayMs(resolveSyncRetryDelayMs(nextFailureCount));
+                if (
+                    nextFailureCount >= SYNC_PERSISTENT_FAILURE_THRESHOLD
+                    || maxRetryCount >= SYNC_PERSISTENT_FAILURE_THRESHOLD
+                ) {
+                    setSyncError(
+                        "Some offline changes could not be saved after multiple attempts. We'll keep retrying.",
+                    );
+                }
+            } else {
+                setSyncFailureCount(0);
+                setSyncRetryDelayMs(SYNC_RETRY_BASE_MS);
+                setSyncError(null);
+            }
 
-			const now = new Date().toISOString();
-			setLastSyncTime(now);
-			localStorage.setItem("lastSyncTime", now);
-			logDebug("sync complete", { lastSyncTime: now });
-		} finally {
-			syncInProgressRef.current = false;
-			setSyncInProgress(false);
-		}
-	}, [ensureStorageReady, isOnline, canUseIndexedDB, storageReady, processSyncItem]);
+            const now = new Date().toISOString();
+            setLastSyncTime(now);
+            localStorage.setItem("lastSyncTime", now);
+            logDebug("sync complete", { lastSyncTime: now, failedCount });
+        } finally {
+            syncInProgressRef.current = false;
+            setSyncInProgress(false);
+        }
+    }, [
+        ensureStorageReady,
+        isOnline,
+        canUseIndexedDB,
+        storageReady,
+        processSyncItem,
+        syncFailureCount,
+    ]);
 
-	useEffect(() => {
-		if (!isOnline) return;
-		// Run immediately once coming online, then poll on interval
-		void syncOfflineChanges();
-		const interval = window.setInterval(syncOfflineChanges, 5000);
-		return () => window.clearInterval(interval);
-	}, [isOnline, syncOfflineChanges]);
+    useEffect(() => {
+        if (!isOnline || !canUseIndexedDB || !storageReady) {
+            return () => {};
+        }
+        const delayMs = Math.max(0, syncRetryDelayMs);
+        const timeoutId = window.setTimeout(() => {
+            void syncOfflineChanges();
+        }, delayMs);
+        return () => window.clearTimeout(timeoutId);
+    }, [isOnline, canUseIndexedDB, storageReady, syncRetryDelayMs, syncOfflineChanges]);
 
 	const createOfflineTask = async (
 		taskData: Omit<OfflineTask, "id" | "createdAt" | "updatedAt">,
@@ -561,16 +659,23 @@ export function useOfflineSync() {
 		return queue.length;
 	}, [canUseIndexedDB, ensureStorageReady]);
 
+    const retrySyncNow = useCallback(async () => {
+        setSyncRetryDelayMs(0);
+        await syncOfflineChanges();
+    }, [syncOfflineChanges]);
+
 	return {
-		isOnline,
-		syncInProgress,
-		lastSyncTime,
-		syncOfflineChanges,
-		createOfflineTask,
-		updateOfflineTask,
-		deleteOfflineTask,
-		getOfflineTasks,
-		getSyncQueueSize,
+        isOnline,
+        syncInProgress,
+        syncError,
+        syncRetryDelayMs,
+        lastSyncTime,
+        syncOfflineChanges,
+        retrySyncNow,
+        createOfflineTask,
+        updateOfflineTask,
+        deleteOfflineTask,
+        getOfflineTasks,
+        getSyncQueueSize,
 	};
 }
-

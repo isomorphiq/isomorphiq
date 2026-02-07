@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Result } from "@isomorphiq/core";
+import { ConflictError, type Result } from "@isomorphiq/core";
 import { LevelKeyValueAdapter } from "@isomorphiq/persistence-level";
 import { TaskEntitySchema, TaskEntityStruct, type TaskEntity } from "../task-domain.ts";
 import type {
@@ -58,6 +58,28 @@ const readNumber = (record: Record<string, unknown>, key: string): number | unde
     return undefined;
 };
 
+const ACTION_LOG_BASE_KEYS = [
+    "id",
+    "summary",
+    "profile",
+    "durationMs",
+    "createdAt",
+    "success",
+    "transition",
+    "prompt",
+    "modelName",
+];
+
+const ACTION_LOG_BASE_KEY_SET = new Set(ACTION_LOG_BASE_KEYS);
+
+const readActionLogExtras = (record: Record<string, unknown>): Record<string, unknown> =>
+    Object.entries(record).reduce<Record<string, unknown>>((acc, [key, value]) => {
+        if (ACTION_LOG_BASE_KEY_SET.has(key)) {
+            return acc;
+        }
+        return { ...acc, [key]: value };
+    }, {});
+
 const normalizeActionLogEntry = (
     value: unknown,
     fallbackTaskId: string,
@@ -66,7 +88,9 @@ const normalizeActionLogEntry = (
     if (!isRecord(value)) {
         return null;
     }
+    const extras = readActionLogExtras(value);
     const normalized = {
+        ...extras,
         id: readString(value, "id") ?? `log-${fallbackTaskId}-${index}`,
         summary: readString(value, "summary") ?? "",
         profile: readString(value, "profile") ?? "unknown",
@@ -114,9 +138,11 @@ const normalizeTaskEntity = (value: unknown, key?: string): TaskEntity | null =>
         id: readString(value, "id") ?? fallbackId,
         title: readString(value, "title") ?? "",
         description: readString(value, "description") ?? "",
+        prd: readString(value, "prd"),
         status: statusResult.success ? statusResult.data : "todo",
         priority: priorityResult.success ? priorityResult.data : "medium",
         type: typeResult.success ? typeResult.data : "task",
+        branch: readString(value, "branch"),
         dependencies: readStringArray(value, "dependencies") ?? [],
         createdBy: readString(value, "createdBy") ?? "system",
         assignedTo: readString(value, "assignedTo"),
@@ -131,18 +157,28 @@ const normalizeTaskEntity = (value: unknown, key?: string): TaskEntity | null =>
     return normalizedResult.success ? TaskEntityStruct.from(normalizedResult.data) : null;
 };
 
+const BRANCH_INDEX_PREFIX = "branch-index:";
+
+const normalizeBranchName = (branch: string | undefined): string | null => {
+    if (typeof branch !== "string") {
+        return null;
+    }
+    const normalized = branch.trim();
+    return normalized.length > 0 ? normalized : null;
+};
+
 /**
  * LevelDB-backed task repository used by the tasks domain.
  * Stores tasks under a configurable path (default: db/tasks).
  * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class LevelDbTaskRepository implements TaskRepository {
-    private db: LevelKeyValueAdapter<string, TaskEntity>;
+    private db: LevelKeyValueAdapter<string, unknown>;
     private dbReady = false;
 
     constructor(dbPath?: string) {
         const defaultPath = path.join(process.cwd(), "db", "tasks");
-        this.db = new LevelKeyValueAdapter<string, TaskEntity>(dbPath || defaultPath);
+        this.db = new LevelKeyValueAdapter<string, unknown>(dbPath || defaultPath);
     }
 
     private async ensureDbOpen(): Promise<void> {
@@ -152,10 +188,45 @@ export class LevelDbTaskRepository implements TaskRepository {
         }
     }
 
+    private branchIndexKey(branch: string): string {
+        return `${BRANCH_INDEX_PREFIX}${branch}`;
+    }
+
+    private async getIndexedTaskIdForBranch(branch: string): Promise<string | null> {
+        const raw = await this.db.get(this.branchIndexKey(branch)).catch(() => null);
+        return typeof raw === "string" && raw.trim().length > 0 ? raw : null;
+    }
+
+    private async assertBranchAvailable(branch: string, expectedTaskId: string): Promise<void> {
+        const indexedTaskId = await this.getIndexedTaskIdForBranch(branch);
+        if (!indexedTaskId || indexedTaskId === expectedTaskId) {
+            return;
+        }
+        throw new ConflictError(
+            `Branch "${branch}" is already assigned to task ${indexedTaskId}`,
+            { field: "branch" },
+        );
+    }
+
+    private async setBranchIndex(branch: string, taskId: string): Promise<void> {
+        await this.db.put(this.branchIndexKey(branch), taskId);
+    }
+
+    private async removeBranchIndex(branch: string): Promise<void> {
+        await this.db.del(this.branchIndexKey(branch)).catch(() => undefined);
+    }
+
     async create(task: TaskEntity): Promise<Result<TaskEntity>> {
         try {
             await this.ensureDbOpen();
+            const branch = normalizeBranchName(task.branch);
+            if (branch) {
+                await this.assertBranchAvailable(branch, task.id);
+            }
             await this.db.put(task.id, task);
+            if (branch) {
+                await this.setBranchIndex(branch, task.id);
+            }
             return { success: true, data: task };
         } catch (error) {
             return {
@@ -208,7 +279,8 @@ export class LevelDbTaskRepository implements TaskRepository {
     async update(id: string, task: TaskEntity): Promise<Result<TaskEntity>> {
         try {
             await this.ensureDbOpen();
-            const existing = await this.db.get(id).catch(() => null);
+            const existingRaw = await this.db.get(id).catch(() => null);
+            const existing = existingRaw ? normalizeTaskEntity(existingRaw, id) : null;
             if (!existing) {
                 return {
                     success: false,
@@ -216,7 +288,19 @@ export class LevelDbTaskRepository implements TaskRepository {
                 };
             }
 
+            const existingBranch = normalizeBranchName(existing.branch);
+            const nextBranch = normalizeBranchName(task.branch);
+            if (nextBranch && nextBranch !== existingBranch) {
+                await this.assertBranchAvailable(nextBranch, id);
+            }
+
             await this.db.put(id, task);
+            if (existingBranch && existingBranch !== nextBranch) {
+                await this.removeBranchIndex(existingBranch);
+            }
+            if (nextBranch) {
+                await this.setBranchIndex(nextBranch, id);
+            }
             return { success: true, data: task };
         } catch (error) {
             return {
@@ -229,7 +313,8 @@ export class LevelDbTaskRepository implements TaskRepository {
     async delete(id: string): Promise<Result<void>> {
         try {
             await this.ensureDbOpen();
-            const existing = await this.db.get(id).catch(() => null);
+            const existingRaw = await this.db.get(id).catch(() => null);
+            const existing = existingRaw ? normalizeTaskEntity(existingRaw, id) : null;
             if (!existing) {
                 return {
                     success: false,
@@ -238,6 +323,10 @@ export class LevelDbTaskRepository implements TaskRepository {
             }
 
             await this.db.del(id);
+            const existingBranch = normalizeBranchName(existing.branch);
+            if (existingBranch) {
+                await this.removeBranchIndex(existingBranch);
+            }
             return { success: true, data: undefined };
         } catch (error) {
             return {
@@ -256,6 +345,50 @@ export class LevelDbTaskRepository implements TaskRepository {
 
             const tasks = allTasksResult.data.filter((task) => task.status === status);
             return { success: true, data: tasks };
+        } catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error : new Error(String(error)),
+            };
+        }
+    }
+
+    async findByBranch(branch: string): Promise<Result<TaskEntity | null>> {
+        try {
+            await this.ensureDbOpen();
+            const normalizedBranch = normalizeBranchName(branch);
+            if (!normalizedBranch) {
+                return { success: true, data: null };
+            }
+
+            const indexedTaskId = await this.getIndexedTaskIdForBranch(normalizedBranch);
+            if (indexedTaskId) {
+                const indexedTaskResult = await this.findById(indexedTaskId);
+                if (!indexedTaskResult.success) {
+                    return { success: false, error: indexedTaskResult.error };
+                }
+                if (
+                    indexedTaskResult.data &&
+                    normalizeBranchName(indexedTaskResult.data.branch) === normalizedBranch
+                ) {
+                    return { success: true, data: indexedTaskResult.data };
+                }
+                await this.removeBranchIndex(normalizedBranch);
+            }
+
+            const allTasksResult = await this.findAll();
+            if (!allTasksResult.success) {
+                return { success: false, error: allTasksResult.error };
+            }
+
+            const match =
+                allTasksResult.data.find(
+                    (task) => normalizeBranchName(task.branch) === normalizedBranch,
+                ) ?? null;
+            if (match) {
+                await this.setBranchIndex(normalizedBranch, match.id);
+            }
+            return { success: true, data: match };
         } catch (error) {
             return {
                 success: false,
@@ -379,7 +512,8 @@ export class LevelDbTaskRepository implements TaskRepository {
                 tasks = tasks.filter(
                     (task) =>
                         task.title.toLowerCase().includes(query) ||
-                        task.description.toLowerCase().includes(query),
+                        task.description.toLowerCase().includes(query) ||
+                        (typeof task.prd === "string" && task.prd.toLowerCase().includes(query)),
                 );
             }
 
@@ -483,8 +617,39 @@ export class LevelDbTaskRepository implements TaskRepository {
     async createMany(tasks: TaskEntity[]): Promise<Result<TaskEntity[]>> {
         try {
             await this.ensureDbOpen();
+            const branchAssignments = new Map<string, string>();
+            const previousBranches = new Map<string, string | null>();
             for (const task of tasks) {
+                const nextBranch = normalizeBranchName(task.branch);
+                if (nextBranch) {
+                    const existingAssignment = branchAssignments.get(nextBranch);
+                    if (existingAssignment && existingAssignment !== task.id) {
+                        throw new ConflictError(
+                            `Branch "${nextBranch}" is assigned multiple times in createMany payload`,
+                            { field: "branch" },
+                        );
+                    }
+                    branchAssignments.set(nextBranch, task.id);
+                }
+                const existingRaw = await this.db.get(task.id).catch(() => null);
+                const existing = existingRaw ? normalizeTaskEntity(existingRaw, task.id) : null;
+                previousBranches.set(task.id, normalizeBranchName(existing?.branch));
+            }
+
+            for (const [branch, taskId] of branchAssignments.entries()) {
+                await this.assertBranchAvailable(branch, taskId);
+            }
+
+            for (const task of tasks) {
+                const previousBranch = previousBranches.get(task.id) ?? null;
+                const nextBranch = normalizeBranchName(task.branch);
                 await this.db.put(task.id, task);
+                if (previousBranch && previousBranch !== nextBranch) {
+                    await this.removeBranchIndex(previousBranch);
+                }
+                if (nextBranch) {
+                    await this.setBranchIndex(nextBranch, task.id);
+                }
             }
             return { success: true, data: tasks };
         } catch (error) {
@@ -498,8 +663,39 @@ export class LevelDbTaskRepository implements TaskRepository {
     async updateMany(tasks: TaskEntity[]): Promise<Result<TaskEntity[]>> {
         try {
             await this.ensureDbOpen();
+            const branchAssignments = new Map<string, string>();
+            const previousBranches = new Map<string, string | null>();
             for (const task of tasks) {
+                const nextBranch = normalizeBranchName(task.branch);
+                if (nextBranch) {
+                    const existingAssignment = branchAssignments.get(nextBranch);
+                    if (existingAssignment && existingAssignment !== task.id) {
+                        throw new ConflictError(
+                            `Branch "${nextBranch}" is assigned multiple times in updateMany payload`,
+                            { field: "branch" },
+                        );
+                    }
+                    branchAssignments.set(nextBranch, task.id);
+                }
+                const existingRaw = await this.db.get(task.id).catch(() => null);
+                const existing = existingRaw ? normalizeTaskEntity(existingRaw, task.id) : null;
+                previousBranches.set(task.id, normalizeBranchName(existing?.branch));
+            }
+
+            for (const [branch, taskId] of branchAssignments.entries()) {
+                await this.assertBranchAvailable(branch, taskId);
+            }
+
+            for (const task of tasks) {
+                const previousBranch = previousBranches.get(task.id) ?? null;
+                const nextBranch = normalizeBranchName(task.branch);
                 await this.db.put(task.id, task);
+                if (previousBranch && previousBranch !== nextBranch) {
+                    await this.removeBranchIndex(previousBranch);
+                }
+                if (nextBranch) {
+                    await this.setBranchIndex(nextBranch, task.id);
+                }
             }
             return { success: true, data: tasks };
         } catch (error) {
@@ -513,8 +709,21 @@ export class LevelDbTaskRepository implements TaskRepository {
     async deleteMany(ids: string[]): Promise<Result<void>> {
         try {
             await this.ensureDbOpen();
+            const previousBranches = new Map<string, string>();
+            for (const id of ids) {
+                const existingRaw = await this.db.get(id).catch(() => null);
+                const existing = existingRaw ? normalizeTaskEntity(existingRaw, id) : null;
+                const existingBranch = normalizeBranchName(existing?.branch);
+                if (existingBranch) {
+                    previousBranches.set(id, existingBranch);
+                }
+            }
             for (const id of ids) {
                 await this.db.del(id);
+                const existingBranch = previousBranches.get(id);
+                if (existingBranch) {
+                    await this.removeBranchIndex(existingBranch);
+                }
             }
             return { success: true, data: undefined };
         } catch (error) {
@@ -525,4 +734,3 @@ export class LevelDbTaskRepository implements TaskRepository {
         }
     }
 }
-

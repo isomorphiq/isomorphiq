@@ -24,7 +24,7 @@ export type PortfolioCreationPayload = {
     environment?: string;
 };
 
-const matchesEnvironmentForTask = (
+export const matchesEnvironmentForTask = (
     task: WorkflowTask,
     environment?: string,
 ): boolean => {
@@ -33,7 +33,7 @@ const matchesEnvironmentForTask = (
     return typeof envValue !== "string" || envValue === environment;
 };
 
-const countThemeTasksForEnvironment = (
+export const countThemeTasksForEnvironment = (
     tasks: WorkflowTask[],
     environment?: string,
 ): number =>

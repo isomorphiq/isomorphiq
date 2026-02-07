@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-82038d6a-6f3b-4273-8a1c-9ba2f0a32fe1"
+
 import assert from "node:assert/strict";
 import test from "node:test";
 import { addWidgetFromLibrary, removeWidgetFromDashboard } from "./dashboard-service.ts";
@@ -60,6 +62,30 @@ test("places new widgets without overlap", async () => {
             firstWidget.placement.y < secondWidget.placement.y + secondWidget.placement.h &&
             firstWidget.placement.y + firstWidget.placement.h > secondWidget.placement.y;
         assert.equal(overlap, false);
+    }
+});
+
+test("uses requested placement and resolves collisions when adding from library", async () => {
+    const storage = createInMemoryDashboardStorage();
+    await addWidgetFromLibrary({
+        storage,
+        library: sampleLibrary,
+        widgetId: "cpu",
+        options: { gridColumns: 8 }
+    });
+
+    const result = await addWidgetFromLibrary({
+        storage,
+        library: sampleLibrary,
+        widgetId: "memory",
+        placement: { x: 0, y: 0, w: 4, h: 2 },
+        options: { gridColumns: 8 }
+    });
+
+    assert.equal(result.type, "added");
+    if (result.type === "added") {
+        assert.equal(result.widget.placement.x, 4);
+        assert.equal(result.widget.placement.y, 0);
     }
 });
 

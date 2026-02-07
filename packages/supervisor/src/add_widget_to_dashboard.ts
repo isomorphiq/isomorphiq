@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-0af8fea0-7cb3-4b2f-8936-6367b2163275"
+
 export type WidgetPlacement = {
     x: number;
     y: number;
@@ -86,16 +88,16 @@ const findNextAvailablePlacement = (
     requested?: Partial<WidgetPlacement>,
 ): WidgetPlacement => {
     const normalizedGrid = normalizeGrid(grid);
-    const width = clamp(size.w, 1, normalizedGrid.columns);
-    const height = Math.max(1, size.h);
+    const requestedWidth = requested?.w ?? size.w;
+    const requestedHeight = requested?.h ?? size.h;
+    const width = clamp(requestedWidth, 1, normalizedGrid.columns);
+    const height = Math.max(1, requestedHeight);
     const requestedX = requested?.x ?? 0;
-    const requestedY =
-        requested?.y ??
-        widgets.reduce(
-            (maxY, widget) =>
-                Math.max(maxY, widget.position.y + widget.position.h),
-            0,
-        );
+    const requestedY = requested?.y ?? widgets.reduce(
+        (maxY, widget) =>
+            Math.max(maxY, widget.position.y + widget.position.h),
+        0,
+    );
 
     const basePlacement: WidgetPlacement = {
         x: clamp(requestedX, 0, normalizedGrid.columns - width),
@@ -104,26 +106,47 @@ const findNextAvailablePlacement = (
         h: height,
     };
 
-    const collides = widgets.some((widget) =>
+    const hasCollision = widgets.some((widget) =>
         rectsOverlap(basePlacement, widget.position),
     );
 
-    if (!collides) {
+    if (!hasCollision) {
         return basePlacement;
     }
 
-    const bottom =
-        widgets.length === 0
-            ? 0
-            : widgets.reduce(
-                  (maxY, widget) =>
-                      Math.max(maxY, widget.position.y + widget.position.h),
-                  0,
-              );
+    const maxX = Math.max(0, normalizedGrid.columns - width);
+    const bottom = widgets.length === 0
+        ? 0
+        : widgets.reduce(
+            (maxY, widget) =>
+                Math.max(maxY, widget.position.y + widget.position.h),
+            0,
+        );
+    const searchMaxY = bottom + height + 1;
+
+    for (let y = basePlacement.y; y <= searchMaxY; y += 1) {
+        const xStart = y === basePlacement.y ? basePlacement.x : 0;
+        for (let x = xStart; x <= maxX; x += 1) {
+            const candidate: WidgetPlacement = {
+                x,
+                y,
+                w: width,
+                h: height,
+            };
+            const candidateCollides = widgets.some((widget) =>
+                rectsOverlap(candidate, widget.position),
+            );
+            if (!candidateCollides) {
+                return candidate;
+            }
+        }
+    }
 
     return {
-        ...basePlacement,
-        y: bottom,
+        x: 0,
+        y: searchMaxY,
+        w: width,
+        h: height,
     };
 };
 

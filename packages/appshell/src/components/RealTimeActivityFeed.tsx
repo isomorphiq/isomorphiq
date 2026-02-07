@@ -1,4 +1,4 @@
-import { useAtom } from "jotai";
+import { useAtomValue } from "jotai";
 import { useCallback, useEffect, useState } from "react";
 import type {
 	TaskCreatedEvent,
@@ -8,6 +8,7 @@ import type {
 	TaskUpdatedEvent,
 	WebSocketEvent,
 } from "@isomorphiq/realtime/types";
+import { authAtom } from "../authAtoms.ts";
 import { lastEventAtom } from "../atoms.ts";
 
 interface ActivityItem {
@@ -35,7 +36,8 @@ export function RealTimeActivityFeed({ maxItems = 20 }: RealTimeActivityFeedProp
 	const [isConnected, setIsConnected] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
-	const [lastEvent] = useAtom(lastEventAtom);
+	const lastEvent = useAtomValue(lastEventAtom);
+	const auth = useAtomValue(authAtom);
 	type ActivityEvent =
 		| TaskCreatedEvent
 		| TaskUpdatedEvent
@@ -109,10 +111,20 @@ export function RealTimeActivityFeed({ maxItems = 20 }: RealTimeActivityFeedProp
     };
 
     const fetchActivityLogs = useCallback(async () => {
+        if (!auth.token) {
+            setActivities([]);
+            setIsConnected(false);
+            setErrorMessage("Sign in to view activity logs.");
+            setIsLoading(false);
+            return;
+        }
+
+        setIsLoading(true);
         try {
             const response = await fetch(`/api/logs?limit=${maxItems}`, {
                 headers: {
-                    "Accept": "application/json",
+                    Accept: "application/json",
+                    Authorization: `Bearer ${auth.token}`,
                 },
             });
 
@@ -150,7 +162,7 @@ export function RealTimeActivityFeed({ maxItems = 20 }: RealTimeActivityFeedProp
         } finally {
             setIsLoading(false);
         }
-    }, [maxItems]);
+	}, [maxItems, auth.token]);
 
     useEffect(() => {
         void fetchActivityLogs();

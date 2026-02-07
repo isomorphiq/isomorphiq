@@ -46,10 +46,13 @@ export class TaskSearchService implements TaskSearchServiceApi {
             filteredTasks = filteredTasks.filter(task => {
                 const titleMatch = task.title.toLowerCase().includes(searchTerm);
                 const descriptionMatch = task.description.toLowerCase().includes(searchTerm);
+                const prdMatch = typeof task.prd === "string"
+                    ? task.prd.toLowerCase().includes(searchTerm)
+                    : false;
                 const assignedToMatch = task.assignedTo?.toLowerCase().includes(searchTerm) || false;
                 const createdByMatch = task.createdBy.toLowerCase().includes(searchTerm);
                 
-                return titleMatch || descriptionMatch || assignedToMatch || createdByMatch;
+                return titleMatch || descriptionMatch || prdMatch || assignedToMatch || createdByMatch;
             });
         }
         

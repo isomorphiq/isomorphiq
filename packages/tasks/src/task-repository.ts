@@ -16,6 +16,7 @@ export type TaskRepository = {
 
 	// Query operations
 	findByStatus(status: TaskStatus): Promise<Result<TaskEntity[]>>;
+	findByBranch(branch: string): Promise<Result<TaskEntity | null>>;
 	findByCreatedBy(userId: string): Promise<Result<TaskEntity[]>>;
 	findByAssignedTo(userId: string): Promise<Result<TaskEntity[]>>;
 	findByCollaborator(userId: string): Promise<Result<TaskEntity[]>>;
@@ -127,6 +128,24 @@ export class InMemoryTaskRepository implements TaskRepository {
 		}
 	}
 
+	async findByBranch(branch: string): Promise<Result<TaskEntity | null>> {
+		try {
+			const normalizedBranch = branch.trim();
+			if (normalizedBranch.length === 0) {
+				return { success: true, data: null };
+			}
+			const task =
+				Array.from(this.tasks.values()).find((candidate) => candidate.branch === normalizedBranch) ??
+				null;
+			return { success: true, data: task };
+		} catch (error) {
+			return {
+				success: false,
+				error: error instanceof Error ? error : new Error(String(error)),
+			};
+		}
+	}
+
 	async findByCreatedBy(userId: string): Promise<Result<TaskEntity[]>> {
 		try {
 			const tasks = Array.from(this.tasks.values()).filter((task) => task.createdBy === userId);
@@ -204,14 +223,15 @@ export class InMemoryTaskRepository implements TaskRepository {
 			}
 
 			// Apply text search
-			if (options.query) {
-				const query = options.query.toLowerCase();
-				tasks = tasks.filter(
-					(task) =>
-						task.title.toLowerCase().includes(query) ||
-						task.description.toLowerCase().includes(query),
-				);
-			}
+            if (options.query) {
+                const query = options.query.toLowerCase();
+                tasks = tasks.filter(
+                    (task) =>
+                        task.title.toLowerCase().includes(query) ||
+                        task.description.toLowerCase().includes(query) ||
+                        (typeof task.prd === "string" && task.prd.toLowerCase().includes(query)),
+                );
+            }
 
 			// Apply sorting
 			if (options.sort) {
@@ -348,4 +368,3 @@ export class InMemoryTaskRepository implements TaskRepository {
 		}
 	}
 }
-

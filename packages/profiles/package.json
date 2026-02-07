@@ -21,6 +21,7 @@
     },
     "dependencies": {
         "@isomorphiq/core": "workspace:*",
+        "@isomorphiq/core-microservice": "workspace:*",
         "@isomorphiq/integrations": "workspace:*",
         "@isomorphiq/realtime": "workspace:*",
         "@isomorphiq/tasks": "workspace:*",

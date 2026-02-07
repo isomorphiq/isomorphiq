@@ -1,7 +1,7 @@
 import http from "node:http";
 import { randomUUID } from "node:crypto";
 import type { Result } from "@isomorphiq/core";
-import { ProfileManager } from "@isomorphiq/profiles";
+import { ProfileManager, type ProfileConfigurationSnapshot } from "@isomorphiq/profiles";
 import {
     createTaskClient,
     createTaskServiceClient,
@@ -73,6 +73,29 @@ const resolveContextServiceUrl = (): string => {
     return `${resolveGatewayBaseUrl()}/trpc/context-service`;
 };
 
+const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, "");
+
+const resolveProfilesApiBaseUrl = (): string => {
+    const direct =
+        process.env.WORKER_PROFILES_API_URL
+        ?? process.env.PROFILES_API_URL;
+    if (direct && direct.trim().length > 0) {
+        return trimTrailingSlash(direct.trim());
+    }
+
+    const serviceDirect =
+        process.env.WORKER_USER_PROFILE_SERVICE_URL
+        ?? process.env.USER_PROFILE_SERVICE_URL
+        ?? process.env.USER_PROFILE_HTTP_URL;
+    if (serviceDirect && serviceDirect.trim().length > 0) {
+        return `${trimTrailingSlash(serviceDirect.trim())}/api/profiles`;
+    }
+
+    const host = process.env.USER_PROFILE_HOST ?? "127.0.0.1";
+    const port = readPort(process.env.USER_PROFILE_HTTP_PORT ?? process.env.USER_PROFILE_PORT, 3010);
+    return `http://${host}:${port}/api/profiles`;
+};
+
 const resolveWorkerServerPort = (): number =>
     readPort(
         process.env.WORKER_SERVER_PORT
@@ -91,6 +114,8 @@ const applyWorkerAcpMcpDefaults = (
     process.env.TASKS_SERVICE_URL = process.env.TASKS_SERVICE_URL ?? tasksServiceUrl;
     process.env.CONTEXT_SERVICE_URL = process.env.CONTEXT_SERVICE_URL ?? contextServiceUrl;
 };
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const startWorkerServer = async (
     workerId: string,
@@ -136,10 +161,33 @@ const startWorkerServer = async (
     return server;
 };
 
+const syncProfileOverridesFromService = async (
+    profileManager: ProfileManager,
+    profilesApiBaseUrl: string,
+): Promise<void> => {
+    const response = await fetch(`${profilesApiBaseUrl}/configs`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+    });
+    if (!response.ok) {
+        throw new Error(`Profile config sync failed (${response.status})`);
+    }
+    const snapshots = (await response.json()) as ProfileConfigurationSnapshot[];
+    for (const snapshot of snapshots) {
+        await profileManager.updateProfileConfiguration(snapshot.name, {
+            runtimeName: snapshot.overrides.runtimeName,
+            modelName: snapshot.overrides.modelName,
+            systemPrompt: snapshot.overrides.systemPrompt,
+            taskPromptPrefix: snapshot.overrides.taskPromptPrefix,
+        });
+    }
+};
+
 const createWorkerRuntime = async (
     workerId: string,
     profileManager: ProfileManager,
     tasksServiceUrl: string,
+    profilesApiBaseUrl: string,
 ): Promise<WorkerRuntime> => {
     const taskClient = createTaskClient({
         url: tasksServiceUrl,
@@ -148,6 +196,25 @@ const createWorkerRuntime = async (
     const taskService = createTaskServiceClient(taskClient);
     const workflowAgentRunner = createWorkflowAgentRunner({ profileManager });
     const contextId = workerId;
+    const profileSyncIntervalMs = 2000;
+    let lastProfileSyncAt = 0;
+
+    const syncProfileOverrides = async (force: boolean = false): Promise<void> => {
+        const now = Date.now();
+        if (!force && now - lastProfileSyncAt < profileSyncIntervalMs) {
+            return;
+        }
+        try {
+            await syncProfileOverridesFromService(profileManager, profilesApiBaseUrl);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`[WORKER] Failed to sync profile overrides: ${message}`);
+        } finally {
+            lastProfileSyncAt = Date.now();
+        }
+    };
+
+    await syncProfileOverrides(true);
 
     const updateTaskStatus = async (
         taskId: string,
@@ -155,6 +222,26 @@ const createWorkerRuntime = async (
         updatedBy?: string,
     ): Promise<void> => {
         await resolveResult(taskService.updateTaskStatus(taskId, status, updatedBy ?? workerId));
+    };
+
+    const updateTask = async (
+        taskId: string,
+        updates: { branch?: string },
+        updatedBy?: string,
+    ) => {
+        if (typeof updates.branch !== "string" || updates.branch.trim().length === 0) {
+            throw new Error(`[WORKER] updateTask requires a non-empty branch for task ${taskId}`);
+        }
+        return await resolveResult(
+            taskService.updateTask(
+                taskId,
+                {
+                    id: taskId,
+                    branch: updates.branch,
+                },
+                updatedBy ?? workerId,
+            ),
+        );
     };
 
     const appendTaskActionLogEntry = async (
@@ -177,11 +264,25 @@ const createWorkerRuntime = async (
     };
 
     const workflowRunner = new ProfileWorkflowRunner({
-        taskProvider: async () => await resolveResult(taskService.getAllTasks()),
-        taskExecutor: workflowAgentRunner.executeTask,
+        taskProvider: async () => {
+            console.log(`[WORKER] taskProvider: fetching fresh tasks from service`);
+            const tasks = await resolveResult(taskService.getAllTasks());
+            console.log(`[WORKER] taskProvider: retrieved ${tasks.length} tasks`);
+            const themeCount = tasks.filter((task: any) =>
+                (task.type ?? "").toLowerCase().trim() === "theme"
+                && (task.status === "todo" || task.status === "in-progress")
+            ).length;
+            console.log(`[WORKER] taskProvider: ${themeCount} theme tasks found`);
+            return tasks;
+        },
+        taskExecutor: async (context) => {
+            await syncProfileOverrides();
+            return await workflowAgentRunner.executeTask(context);
+        },
         contextId,
         workerId,
         updateTaskStatus,
+        updateTask,
         appendTaskActionLogEntry,
         claimTask: async (taskId: string) => await taskClient.claimTask(taskId, workerId),
     });
@@ -211,19 +312,36 @@ async function main(): Promise<void> {
     const workerServerPort = resolveWorkerServerPort();
     const tasksServiceUrl = resolveTasksServiceUrl();
     const contextServiceUrl = resolveContextServiceUrl();
+    const profilesApiBaseUrl = resolveProfilesApiBaseUrl();
     applyWorkerAcpMcpDefaults(tasksServiceUrl, contextServiceUrl);
 
-    const profileManager = new ProfileManager();
+    const profileManager = new ProfileManager({ enableConfigPersistence: false });
     await profileManager.waitForProfileOverrides();
 
     console.log(`[WORKER] Starting worker ${workerId}`);
     console.log(`[WORKER] Tasks service via gateway: ${tasksServiceUrl}`);
     console.log(`[WORKER] Context service via gateway: ${contextServiceUrl}`);
-    const workerServer = await startWorkerServer(workerId, workerServerPort);
+    console.log(`[WORKER] Profile configuration source: ${profilesApiBaseUrl}`);
+    const workerServer = await (async function bindWorkerServer(): Promise<http.Server> {
+        try {
+            return await startWorkerServer(workerId, workerServerPort);
+        } catch (error) {
+            const err = error as { code?: string };
+            if (err.code === "EADDRINUSE") {
+                console.warn(
+                    `[WORKER] Port ${workerServerPort} still in use; retrying in 1500ms`,
+                );
+                await sleep(1500);
+                return bindWorkerServer();
+            }
+            throw error;
+        }
+    })();
     const runtime = await createWorkerRuntime(
         workerId,
         profileManager,
         tasksServiceUrl,
+        profilesApiBaseUrl,
     );
 
     const shutdown = async (signal: NodeJS.Signals): Promise<void> => {

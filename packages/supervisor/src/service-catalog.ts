@@ -9,8 +9,9 @@ export type SupervisorServiceId =
     | "search-service"
     | "context-service"
     | "notifications-service"
+    | "dashboard-service"
     | "gateway"
-    | "worker"
+    | "worker-manager"
     | "mcp-service";
 
 export type SupervisorServiceConfig = {
@@ -259,6 +260,25 @@ export const createSupervisorServiceCatalog = (
             ],
         },
         {
+            id: "dashboard-service",
+            name: "dashboard-service",
+            description: "Dashboard microservice",
+            entry: path.join(root, "packages", "dashboard", "src", "web", "dashboard-service.ts"),
+            env: {},
+            endpoints: [
+                {
+                    label: "http",
+                    protocol: "http",
+                    hostEnvKeys: ["DASHBOARD_HOST"],
+                    portEnvKeys: ["DASHBOARD_PORT"],
+                    defaultHost: "127.0.0.1",
+                    defaultPort: 3005,
+                    healthPath: "/health",
+                    enabled: alwaysEnabled,
+                },
+            ],
+        },
+        {
             id: "gateway",
             name: "gateway",
             description: "HTTP gateway service",
@@ -278,30 +298,28 @@ export const createSupervisorServiceCatalog = (
             ],
         },
         {
-            id: "worker",
-            name: "worker",
-            description: "Stateless worker process",
-            entry: path.join(root, "packages", "worker", "src", "worker-daemon.ts"),
+            id: "worker-manager",
+            name: "worker-manager",
+            description: "Supervisor microservice that manages worker processes",
+            entry: path.join(
+                root,
+                "packages",
+                "worker-manager",
+                "src",
+                "worker-manager-server.ts",
+            ),
             env: {
-                WORKER_SERVER_PORT: env.WORKER_SERVER_PORT ?? "9001",
-                ACP_SESSION_UPDATE_STREAM: interactive
-                    ? env.ACP_SESSION_UPDATE_STREAM
-                    : "",
-                ACP_SESSION_UPDATE_PATH: interactive
-                    ? env.ACP_SESSION_UPDATE_PATH
-                    : "",
-                ACP_SESSION_UPDATE_QUIET: interactive
-                    ? env.ACP_SESSION_UPDATE_QUIET
-                    : "0",
+                WORKER_MANAGER_HTTP_PORT: env.WORKER_MANAGER_HTTP_PORT ?? env.WORKER_MANAGER_PORT ?? "3012",
+                WORKER_MANAGER_HOST: env.WORKER_MANAGER_HOST ?? "127.0.0.1",
             },
             endpoints: [
                 {
-                    label: "worker-http",
+                    label: "worker-manager-http",
                     protocol: "http",
-                    hostEnvKeys: [],
-                    portEnvKeys: ["WORKER_SERVER_PORT", "ISOMORPHIQ_WORKER_SERVER_PORT"],
+                    hostEnvKeys: ["WORKER_MANAGER_HOST"],
+                    portEnvKeys: ["WORKER_MANAGER_HTTP_PORT", "WORKER_MANAGER_PORT"],
                     defaultHost: "127.0.0.1",
-                    defaultPort: 9001,
+                    defaultPort: 3012,
                     healthPath: "/health",
                     enabled: alwaysEnabled,
                 },

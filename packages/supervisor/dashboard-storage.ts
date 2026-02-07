@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-a6b6afba-4106-4ed3-94c8-ce21f481beaf"
+
 import { DashboardStateSchema, createEmptyDashboardState } from "./dashboard.ts";
 
 export type DashboardStorage = {

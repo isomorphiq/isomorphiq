@@ -1,3 +1,5 @@
+// FILE_CONTEXT: "context-e00f613e-60db-4882-923f-807cab4ca013"
+
 import { LevelKeyValueAdapter } from "@isomorphiq/persistence-level";
 import type { KeyValueAdapter, KeyValueIterator } from "@isomorphiq/persistence-adapter";
 import type { ContextRecord } from "./context-domain.ts";
