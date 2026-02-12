@@ -1,0 +1,9 @@
+{
+  "id": "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-004",
+  "title": "Implement Widget Library UI with Add/Remove Controls",
+  "description": "Create the user interface for the widget library and widget add/remove functionality. Build on existing addWidgetFromLibrary/removeWidgetFromDashboard services to create interactive UI components. Implement widget library browser, add widget buttons, and remove controls with proper hover/focus states.\n\nAcceptance Criteria:\n- Creates widget library browser component showing all 5 available widget types\n- Implements add widget functionality using existing dashboard-service.ts\n- Provides remove controls that appear on hover/focus for each widget\n- Shows empty state guidance when dashboard has no widgets\n- Integrates with existing storage persistence system\n- Provides visual feedback for add/remove operations\n- Supports keyboard navigation and accessibility requirements\n- Follows existing TypeScript patterns and 4-space indentation\n- Includes comprehensive unit and integration tests",
+  "priority": "high",
+  "type": "implementation",
+  "createdBy": "refinement",
+  "dependencies": ["task-consolidate-models-widgets.json"]
+}

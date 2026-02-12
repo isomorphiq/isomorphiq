@@ -1,0 +1,8 @@
+{
+  "id": "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-014",
+  "title": "Implement Dashboard Widget Customization Integration Tests",
+  "type": "testing",
+  "priority": "medium",
+  "createdBy": "refinement",
+  "description": "Create comprehensive end-to-end tests for dashboard widget customization functionality.\n\nAcceptance Criteria:\n1. Test widget addition from library to dashboard\n2. Test widget removal functionality\n3. Test drag-and-drop rearrangement across different scenarios\n4. Test responsive layout behavior across mobile/desktop breakpoints\n5. Test persistence of widget positions across page reloads\n6. Test empty state interactions and guidance\n7. Test widget controls (resize, edit, remove) functionality\n8. Accessibility testing for keyboard navigation and screen readers"
+}

@@ -5,11 +5,11 @@ export default defineConfig({
     plugins: [pluginReact()],
     source: {
         entry: {
-            index: './web/src/index.tsx'
+            index: './packages/appshell/src/index.tsx'
         }
     },
     html: {
-        template: './web/index.html'
+        template: './packages/appshell/index.html'
     },
     output: {
         distPath: {
@@ -27,7 +27,7 @@ export default defineConfig({
             '/trpc': {
                 target: 'http://localhost:3003',
                 changeOrigin: true,
-                ws: true,
+                ws: false,
                 secure: false,
                 xfwd: true
             },

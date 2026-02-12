@@ -1,0 +1,7 @@
+{
+  "title": "Add Advanced Notification System with Multi-Channel Support",
+  "description": "Problem: The current notification system only supports WebSocket real-time updates, limiting user accessibility and professional integration. Users cannot receive notifications via email, SMS, or third-party platforms like Slack/Microsoft Teams.\n\nRequirements:\n- Implement email notifications for task assignments, status changes, and deadlines\n- Add SMS notifications for high-priority task updates\n- Integrate with Slack and Microsoft Teams for task notifications\n- Create user notification preferences management\n- Add daily/weekly digest emails\n- Implement notification templates and customization\n- Support @mentions and direct messaging\n- Add notification history and management interface\n\nEvidence: Review of daemon.ts:18-21 shows only WebSocket manager, task-monitor.ts:144-164 has basic notification hooks but no external channels, dashboard.ts shows no notification settings UI.\n\nImpacted files:\n- src/daemon.ts (add notification TCP commands)\n- src/web/dashboard.ts (add notification preferences UI)\n- src/services/ (create notification-service.ts)\n- Create notification templates and integration modules\n\nTesting notes:\n- Unit tests for notification service delivery\n- Integration tests for email/Slack/Microsoft Teams\n- UI tests for notification preferences management\n- End-to-end tests for notification workflows",
+  "priority": "high",
+  "type": "feature",
+  "assignedTo": "development"
+}

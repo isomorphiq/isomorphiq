@@ -1,23 +1,22 @@
-import { ProductManager } from "./index.ts";
-import type { Task, TaskType } from "./types.ts";
+// TODO: This test file is too complex (673 lines) and should be refactored into several modules.
+// Current concerns mixed: Test suite management, task CRUD tests, search tests,
+// dependency tests, priority tests, status tests, template tests, automation tests.
+// 
+// Proposed structure:
+// - tests/unit/task-crud.test.ts - Task create, read, update, delete tests
+// - tests/unit/task-search.test.ts - Search and filter tests
+// - tests/unit/task-dependencies.test.ts - Dependency management tests
+// - tests/unit/task-priority.test.ts - Priority handling tests
+// - tests/unit/task-status.test.ts - Status transition tests
+// - tests/unit/task-templates.test.ts - Template functionality tests
+// - tests/unit/task-automation.test.ts - Automation rule tests
+// - tests/unit/test-suite.ts - Shared test infrastructure
 
-// Test utilities
-function _createTestTask(overrides: Partial<Task> = {}): Task {
-	const now = new Date();
-	return {
-		id: `test-task-${Date.now()}-${Math.random()}`,
-		title: "Test Task",
-		description: "A test task for unit testing",
-		status: "todo",
-		priority: "medium",
-		type: "task",
-		dependencies: [],
-		createdBy: "test-user",
-		createdAt: now,
-		updatedAt: now,
-		...overrides,
-	};
-}
+import { ProductManager } from "./index.ts";
+import type { TaskType } from "./types.ts";
+
+const getErrorMessage = (error: unknown): string =>
+	error instanceof Error ? error.message : String(error);
 
 // Test assertions
 function assert(condition: boolean, message: string): void {
@@ -32,53 +31,30 @@ function assertEqual<T>(actual: T, expected: T, message?: string): void {
 	}
 }
 
-function _assertThrows(fn: () => Promise<unknown> | unknown, expectedMessage?: string): void {
-	try {
-		const result = fn();
-		if (result instanceof Promise) {
-			result
-				.then(() => {
-					throw new Error(`Expected function to throw, but it resolved successfully`);
-				})
-				.catch((error) => {
-					if (expectedMessage && !error.message.includes(expectedMessage)) {
-						throw new Error(
-							`Expected error message to contain "${expectedMessage}", got "${error.message}"`,
-						);
-					}
-				});
-		} else {
-			throw new Error(`Expected function to throw, but it returned successfully`);
-		}
-	} catch (error) {
-		if (expectedMessage && !(error as Error).message.includes(expectedMessage)) {
-			throw new Error(
-				`Expected error message to contain "${expectedMessage}", got "${(error as Error).message}"`,
-			);
-		}
-	}
-}
-
 async function assertThrowsAsync(
 	fn: () => Promise<unknown>,
 	expectedMessage?: string,
 ): Promise<void> {
 	try {
 		await fn();
-		throw new Error(`Expected function to throw, but it resolved successfully`);
+		throw new Error("Expected function to throw, but it resolved successfully");
 	} catch (error) {
-		if (expectedMessage && !(error as Error).message.includes(expectedMessage)) {
+		const message = getErrorMessage(error);
+		if (expectedMessage && !message.includes(expectedMessage)) {
 			throw new Error(
-				`Expected error message to contain "${expectedMessage}", got "${(error as Error).message}"`,
+				`Expected error message to contain "${expectedMessage}", got "${message}"`,
 			);
 		}
 	}
 }
 
 // Test suite
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 class TestSuite {
 	private pm: ProductManager;
-	private testResults: { name: string; passed: boolean; error?: string; duration: number }[] = [];
+	testResults: { name: string; passed: boolean; error?: string; duration: number }[] = [];
 
 	constructor() {
 		this.pm = new ProductManager();
@@ -94,7 +70,7 @@ class TestSuite {
 			console.log(`[TEST] ✅ ${name} (${duration}ms)`);
 		} catch (error) {
 			const duration = Date.now() - startTime;
-			const errorMessage = (error as Error).message;
+			const errorMessage = getErrorMessage(error);
 			this.testResults.push({ name, passed: false, error: errorMessage, duration });
 			console.log(`[TEST] ❌ ${name} (${duration}ms): ${errorMessage}`);
 		}
@@ -210,7 +186,15 @@ class TestSuite {
 			);
 			assert(["low", "medium", "high"].includes(task.priority), "Task should have valid priority");
 			assert(
-				["feature", "story", "task", "integration", "research"].includes(task.type),
+				[
+					"feature",
+					"story",
+					"task",
+					"implementation",
+					"integration",
+					"testing",
+					"research",
+				].includes(task.type),
 				"Task should have valid type",
 			);
 			assert(Array.isArray(task.dependencies), "Dependencies should be an array");
@@ -584,7 +568,15 @@ class TestSuite {
 
 	// Test 20: Task type inference and validation
 	async testTaskTypes(): Promise<void> {
-		const types: TaskType[] = ["feature", "story", "task", "integration", "research"];
+		const types: TaskType[] = [
+			"feature",
+			"story",
+			"task",
+			"implementation",
+			"integration",
+			"testing",
+			"research",
+		];
 
 		for (const type of types) {
 			const task = await this.pm.createTask(
@@ -685,7 +677,7 @@ async function main(): Promise<void> {
 			console.log(`\n[TEST] 💥 ${failed} tests failed!`);
 			process.exit(1);
 		} else {
-			console.log(`\n[TEST] 🎉 All tests passed!`);
+			console.log("\n[TEST] 🎉 All tests passed!");
 			process.exit(0);
 		}
 	} catch (error) {
@@ -696,3 +688,4 @@ async function main(): Promise<void> {
 
 // Run if this file is executed directly
 main().catch(console.error);
+

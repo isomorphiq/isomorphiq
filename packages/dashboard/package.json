@@ -1,0 +1,39 @@
+{
+    "name": "@isomorphiq/dashboard",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        },
+        "./react": {
+            "import": "./src/react/index.ts",
+            "types": "./src/react/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "start": "node --experimental-strip-types src/web/dashboard-service.ts",
+        "start:watch": "node --watch --experimental-strip-types src/web/dashboard-service.ts",
+        "lint": "echo \"Lint not configured yet for @isomorphiq/dashboard\"",
+        "test": "node --experimental-strip-types --test src/**/*.spec.ts"
+    },
+    "dependencies": {
+        "@isomorphiq/core": "workspace:*",
+        "@isomorphiq/persistence-level": "workspace:*",
+        "@isomorphiq/profiles": "workspace:*",
+        "@isomorphiq/realtime": "workspace:*",
+        "@isomorphiq/tasks": "workspace:*",
+        "level": "^10.0.0",
+        "react": "^18.3.1",
+        "ws": "^8.18.3"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
+    }
+}

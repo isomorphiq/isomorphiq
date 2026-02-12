@@ -1,62 +1,213 @@
+// TODO: This file is too complex (2019 lines) and should be refactored into several modules.
+// Current concerns mixed: Database initialization, ACP session management, task CRUD operations,
+// workflow execution, automation rules, search functionality, WebSocket handling.
+// 
+// Proposed structure:
+// - core/database.ts - LevelDB initialization and connection management
+// - core/acp-session.ts - ACP connection and session lifecycle
+// - tasks/crud-service.ts - Task create, read, update, delete operations
+// - tasks/search-service.ts - Task search and filtering logic
+// - tasks/automation-service.ts - Automation rule engine and triggers
+// - workflow/engine.ts - Workflow execution and token management
+// - websocket/handler.ts - WebSocket event handling
+// - api/routes.ts - API endpoint definitions
+// - types/index.ts - Centralized type definitions
+// - index.ts - Main application composition
+
 import path from "node:path";
+import { z } from "zod";
 import { Effect } from "effect";
 import { Level } from "level";
-import { ACPConnectionManager } from "./acp-connection.ts";
+import { ACPConnectionManager, startAcpSession, type AcpSession } from "@isomorphiq/acp";
 import {
-	type ACPProfile,
-	ProfileManager,
-	type ProfileMetrics,
-	type ProfileState,
-} from "./acp-profiles.ts";
-import { startAcpSession } from "./acp-session.ts";
-import { AutomationRuleEngine } from "./automation-rule-engine.ts";
-import { acpCleanupEffect } from "./effects/acp-cleanup.ts";
-import { acpTurnEffect } from "./effects/acp-turn.ts";
+    type ACPProfile,
+    ProfileManager,
+    type ProfileMetrics,
+    type ProfileState,
+} from "@isomorphiq/profiles";
+import { AutomationRuleEngine } from "@isomorphiq/tasks";
+import { acpCleanupEffect } from "@isomorphiq/acp";
+import { acpTurnEffect } from "@isomorphiq/acp";
 import { gitCommitIfChanges } from "./git-utils.ts";
-import { runLintAndTests } from "./run-tests.ts";
-import { TemplateManager } from "./template-manager.ts";
-import type {
-	CreateTaskFromTemplateInput,
-	Task,
-	TaskStatus,
-	TaskType,
-	WebSocketEventType,
+import { TemplateManager, optimizedPriorityService } from "@isomorphiq/tasks";
+import { exec as execCallback } from "node:child_process";
+import { promisify } from "node:util";
+import {
+	TaskPrioritySchema,
+	TaskSchema,
+	TaskStatusSchema,
+	TaskStruct,
+	TaskTypeSchema,
+	type CreateTaskFromTemplateInput,
+	type SavedSearch,
+	type Task,
+    type TaskStatus,
+    type TaskType,
+    type WebSocketEventType,
 } from "./types.ts";
-import { buildWorkflowWithEffects } from "./workflow.ts";
-import { advanceToken, createToken } from "./workflow-engine.ts";
-
-interface TaskWebSocketManager {
-	broadcastTaskCreated(task: Task): void;
-	broadcastTaskUpdated(task: Task, updates: Partial<Task>): void;
-	broadcastTaskDeleted(taskId: string): void;
-	broadcastTaskStatusChanged(
-		taskId: string,
-		oldStatus: TaskStatus,
-		newStatus: TaskStatus,
-		task: Task,
-	): void;
-	broadcastTaskPriorityChanged(
-		taskId: string,
-		oldPriority: "low" | "medium" | "high",
-		newPriority: "low" | "medium" | "high",
-		task: Task,
-	): void;
-	broadcastTaskAssigned(task: Task, assignedTo: string, assignedBy: string): void;
-	broadcastTaskCollaboratorsUpdated(task: Task, collaborators: string[], updatedBy: string): void;
-	broadcastTaskWatchersUpdated(task: Task, watchers: string[], updatedBy: string): void;
-}
+import { buildWorkflowWithEffects } from "@isomorphiq/workflow";
+import { advanceToken, createToken } from "@isomorphiq/workflow";
+import type { WebSocketManager } from "@isomorphiq/realtime";
+import { ArchiveService } from "./services/archive-service.ts";
+import { IntegrationService } from "@isomorphiq/integrations";
 
 // Initialize LevelDB
 const dbPath = path.join(process.cwd(), "db");
 const db = new Level<string, Task>(dbPath, { valueEncoding: "json" });
 
+// Initialize separate database for saved searches
+const savedSearchesDbPath = path.join(process.cwd(), "saved-searches-db");
+const savedSearchesDb = new Level<string, SavedSearch>(savedSearchesDbPath, { valueEncoding: "json" });
+
+const automationTaskCreatedSchema = z.object({
+    title: z.string(),
+    description: z.string(),
+    prd: z.string().optional(),
+    priority: TaskPrioritySchema.optional(),
+    dependencies: z.array(z.string()).optional(),
+    createdBy: z.string().optional(),
+    assignedTo: z.string().optional(),
+    collaborators: z.array(z.string()).optional(),
+    watchers: z.array(z.string()).optional(),
+});
+
+const automationTaskUpdatedSchema = z.object({
+    taskId: z.string(),
+    updates: z.record(z.unknown()),
+});
+
+const automationPriorityChangeSchema = z.object({
+    taskId: z.string(),
+    newPriority: TaskPrioritySchema.optional(),
+    priority: TaskPrioritySchema.optional(),
+});
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null;
+
+const readStringArray = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
+const readDate = (value: unknown): Date | undefined => {
+    if (value instanceof Date) {
+        return value;
+    }
+    if (typeof value === "string" || typeof value === "number") {
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+    }
+    return undefined;
+};
+
+const normalizeTask = (value: unknown): Task | null => {
+    const parsed = TaskSchema.safeParse(value);
+    if (parsed.success) {
+        return TaskStruct.from(parsed.data);
+    }
+
+    if (!isRecord(value)) {
+        return null;
+    }
+
+    const priorityResult = TaskPrioritySchema.safeParse(value.priority);
+    const statusResult = TaskStatusSchema.safeParse(value.status);
+    const typeResult = TaskTypeSchema.safeParse(value.type);
+
+    const normalized = {
+        id: typeof value.id === "string" ? value.id : "",
+        title: typeof value.title === "string" ? value.title : "",
+        description: typeof value.description === "string" ? value.description : "",
+        prd: typeof value.prd === "string" ? value.prd : undefined,
+        status: statusResult.success ? statusResult.data : "todo",
+        priority: priorityResult.success ? priorityResult.data : "medium",
+        type: typeResult.success ? typeResult.data : "task",
+        dependencies: readStringArray(value.dependencies),
+        createdBy: typeof value.createdBy === "string" ? value.createdBy : "system",
+        assignedTo: typeof value.assignedTo === "string" ? value.assignedTo : undefined,
+        collaborators: readStringArray(value.collaborators),
+        watchers: readStringArray(value.watchers),
+        createdAt: readDate(value.createdAt) ?? new Date(),
+        updatedAt: readDate(value.updatedAt) ?? new Date(),
+    };
+
+    const normalizedResult = TaskSchema.safeParse(normalized);
+    return normalizedResult.success ? TaskStruct.from(normalizedResult.data) : null;
+};
+
+const getContextTaskId = (context: Record<string, unknown>): string | undefined => {
+    const taskValue = context.task;
+    if (isRecord(taskValue) && typeof taskValue.id === "string") {
+        return taskValue.id;
+    }
+    if (typeof context.taskId === "string") {
+        return context.taskId;
+    }
+    return undefined;
+};
+
+const getErrorMessage = (error: unknown): string =>
+    error instanceof Error ? error.message : String(error);
+
+const execAsync = promisify(execCallback);
+
+const getLastTestResult = (
+    value: unknown,
+): { output?: string; passed?: boolean; success?: boolean } | undefined => {
+    if (!isRecord(value)) {
+        return undefined;
+    }
+    const output = typeof value.output === "string" ? value.output : undefined;
+    const passed = typeof value.passed === "boolean" ? value.passed : undefined;
+    const success = typeof value.success === "boolean" ? value.success : undefined;
+    if (output === undefined && passed === undefined && success === undefined) {
+        return undefined;
+    }
+    return { output, passed, success };
+};
+
+const getLastTestResultFromToken = (
+    tokenValue: unknown,
+): { output?: string; passed?: boolean; success?: boolean } | undefined => {
+    if (!isRecord(tokenValue)) {
+        return undefined;
+    }
+    const contextValue = tokenValue.context;
+    return isRecord(contextValue) ? getLastTestResult(contextValue.lastTestResult) : undefined;
+};
+
+const getLastTestResultFromPayload = (
+    payload: unknown,
+): { output?: string; passed?: boolean; success?: boolean } | undefined => {
+    if (!isRecord(payload)) {
+        return undefined;
+    }
+    return getLastTestResultFromToken(payload.token);
+};
+
+const getErrorCode = (error: unknown): string | undefined => {
+    if (!isRecord(error)) {
+        return undefined;
+    }
+    const code = typeof error.code === "string" ? error.code : undefined;
+    const cause = isRecord(error.cause) ? error.cause : undefined;
+    const causeCode = cause && typeof cause.code === "string" ? cause.code : undefined;
+    return code ?? causeCode;
+};
+
 // Product Manager class to handle task operations
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class ProductManager {
 	private profileManager: ProfileManager;
 	private templateManager: TemplateManager;
 	private automationEngine: AutomationRuleEngine;
 	private dbReady = false;
-	private wsManager: TaskWebSocketManager | null = null;
+	private wsManager: WebSocketManager | null = null;
+	private priorityService = optimizedPriorityService;
+	private archiveService: ArchiveService;
+	private integrationService: IntegrationService;
+	private integrationDb: Level<string, unknown>;
 
 	private async ensureDbOpen(): Promise<void> {
 		if (this.dbReady) return;
@@ -64,6 +215,9 @@ export class ProductManager {
 			await db.open();
 			this.dbReady = true;
 			console.log("[DB] Database opened successfully");
+			await this.integrationDb.open();
+			await this.integrationService.initialize();
+			console.log("[INTEGRATIONS] Integration service initialized");
 		} catch (error) {
 			console.error("[DB] Failed to open database:", error);
 			// Crash fast so supervisor restarts us; avoids running without persistence
@@ -73,58 +227,81 @@ export class ProductManager {
 
 	constructor() {
 		this.profileManager = new ProfileManager();
-		this.profileSequence = this.profileManager.getProfileSequence();
 		this.templateManager = new TemplateManager();
 		this.automationEngine = new AutomationRuleEngine();
+		this.archiveService = new ArchiveService();
+		this.integrationDb = new Level(path.join(dbPath, "integrations"), { valueEncoding: "json" });
+		this.integrationService = new IntegrationService(this.integrationDb);
 		this.setupAutomationEngine();
 		// Database will be opened on first use
 	}
 
 	// Set WebSocket manager for broadcasting
-	setWebSocketManager(wsManager: TaskWebSocketManager): void {
+	setWebSocketManager(wsManager: WebSocketManager): void {
 		this.wsManager = wsManager;
 	}
 
-	getWebSocketManager(): TaskWebSocketManager | null {
+	getWebSocketManager(): WebSocketManager | null {
 		return this.wsManager;
+	}
+
+	getIntegrationService(): IntegrationService {
+		return this.integrationService;
 	}
 
 	// Setup automation engine with event handlers
 	private setupAutomationEngine(): void {
 		// Register event handlers for automation
 		this.automationEngine.onTaskEvent(
-			async (eventType: WebSocketEventType, data: Record<string, unknown>) => {
+			async (eventType: WebSocketEventType, data: unknown) => {
 				console.log(`[AUTOMATION] Received task event: ${eventType}`);
 
 				switch (eventType) {
-					case "task_created":
-						if (data.title && data.description) {
-							await this.createTask(
-								data.title as string,
-								data.description as string,
-								(data.priority as "low" | "medium" | "high") || "medium",
-								(data.dependencies as string[]) || [],
-								data.createdBy as string | undefined,
-								data.assignedTo as string | undefined,
-							);
+					case "task_created": {
+						const created = automationTaskCreatedSchema.safeParse(data);
+						if (!created.success) {
+							console.log("[AUTOMATION] Invalid task_created payload");
+							break;
 						}
-						break;
-					case "task_updated":
-						if (data.taskId && data.updates) {
-							await this.handleTaskUpdate(
-								data.taskId as string,
-								data.updates as Record<string, unknown>,
-							);
+						const payload = created.data;
+                        await this.createTask(
+                            payload.title,
+                            payload.description,
+                            payload.priority ?? "medium",
+                            payload.dependencies ?? [],
+                            payload.createdBy,
+                            payload.assignedTo,
+                            payload.collaborators,
+                            payload.watchers,
+                            "task",
+                            payload.prd,
+                        );
+                        break;
+                    }
+					case "task_updated": {
+						const updated = automationTaskUpdatedSchema.safeParse(data);
+						if (!updated.success) {
+							console.log("[AUTOMATION] Invalid task_updated payload");
+							break;
 						}
+						await this.handleTaskUpdate(updated.data.taskId, updated.data.updates);
 						break;
-					case "task_priority_changed":
-						if (data.taskId && data.newPriority) {
-							await this.updateTaskPriority(
-								data.taskId as string,
-								data.newPriority as "low" | "medium" | "high",
-							);
+					}
+					case "task_priority_changed": {
+						const priorityChange = automationPriorityChangeSchema.safeParse(data);
+						if (!priorityChange.success) {
+							console.log("[AUTOMATION] Invalid task_priority_changed payload");
+							break;
 						}
+						const newPriority =
+							priorityChange.data.newPriority ?? priorityChange.data.priority;
+						if (!newPriority) {
+							console.log("[AUTOMATION] Missing priority in task_priority_changed payload");
+							break;
+						}
+						await this.updateTaskPriority(priorityChange.data.taskId, newPriority);
 						break;
+					}
 				}
 			},
 		);
@@ -199,28 +376,30 @@ export class ProductManager {
 	}
 
 	// Create a new task
-	async createTask(
-		title: string,
-		description: string,
-		priority: "low" | "medium" | "high" = "medium",
-		dependencies: string[] = [],
-		createdBy?: string,
-		assignedTo?: string,
-		collaborators?: string[],
-		watchers?: string[],
-		type: TaskType = "task",
-	): Promise<Task> {
+    async createTask(
+        title: string,
+        description: string,
+        priority: "low" | "medium" | "high" = "medium",
+        dependencies: string[] = [],
+        createdBy?: string,
+        assignedTo?: string,
+        collaborators?: string[],
+        watchers?: string[],
+        type: TaskType = "task",
+        prd?: string,
+    ): Promise<Task> {
 		// Ensure database is open
 		await this.ensureDbOpen();
 
 		const id = `task-${Date.now()}`;
-		const task: Task = {
-			id,
-			title,
-			description,
-			status: "todo",
-			priority,
-			type,
+        const task: Task = {
+            id,
+            title,
+            description,
+            ...(typeof prd === "string" ? { prd } : {}),
+            status: "todo",
+            priority,
+            type,
 			dependencies,
 			createdBy: createdBy || "system",
 			...(assignedTo && { assignedTo }),
@@ -275,7 +454,7 @@ export class ProductManager {
 
 			return task;
 		} catch (error) {
-			console.error(`[DB] Failed to create task:`, error);
+			console.error("[DB] Failed to create task:", error);
 			throw error;
 		}
 	}
@@ -286,37 +465,29 @@ export class ProductManager {
 		await this.ensureDbOpen();
 
 		const tasks: Task[] = [];
-		let iterator: AsyncIterableIterator<[string, Task]> | undefined;
+		const iterator = db.iterator();
 		try {
-			iterator = db.iterator();
 			for await (const [, value] of iterator) {
-				// Normalize missing fields (legacy tasks may lack dependencies)
-				const raw = value as Partial<Task>;
-				tasks.push({
-					...(raw as Task),
-					dependencies: Array.isArray(raw.dependencies) ? raw.dependencies : [],
-					priority: raw.priority || "medium",
-					status: raw.status || "todo",
-					type: raw.type || "task",
-				});
+				const normalized = normalizeTask(value);
+				if (normalized) {
+					tasks.push(normalized);
+				}
 			}
 		} catch (error) {
 			console.error("[DB] Error reading tasks:", error);
 			throw error;
 		} finally {
-			if (iterator) {
-				try {
-					await iterator.close();
-				} catch (closeError) {
-					console.error("[DB] Error closing iterator:", closeError);
-				}
+			try {
+				await iterator.close();
+			} catch (closeError) {
+				console.error("[DB] Error closing iterator:", closeError);
 			}
 		}
 		return tasks;
 	}
 
 	// Update task status
-	async updateTaskStatus(id: string, status: "todo" | "in-progress" | "done"): Promise<Task> {
+	async updateTaskStatus(id: string, status: TaskStatus): Promise<Task> {
 		// Ensure database is open
 		if (!this.dbReady) {
 			await db.open();
@@ -396,7 +567,7 @@ export class ProductManager {
 		return task;
 	}
 
-	// Update task priority
+	// Update task priority with optimized service
 	async updateTaskPriority(id: string, priority: "low" | "medium" | "high"): Promise<Task> {
 		// Ensure database is open
 		if (!this.dbReady) {
@@ -404,36 +575,51 @@ export class ProductManager {
 			this.dbReady = true;
 		}
 
-		const task = await db.get(id);
-		const oldPriority = task.priority;
-		task.priority = priority;
-		task.updatedAt = new Date();
-		await db.put(id, task);
+		// Get current task for priority comparison
+		const currentTask = await db.get(id);
+		const oldPriority = currentTask.priority;
 
-		// Process automation rules for priority change
-		const allTasks = await this.getAllTasks();
-		const automationResults = await this.automationEngine.processTaskEvent(
-			"task_priority_changed",
-			{
-				taskId: id,
-				oldPriority,
-				newPriority: priority,
-				task,
+		// Use optimized priority service for update
+		return await this.priorityService.updateTaskPriority(
+			id,
+			priority,
+			oldPriority,
+			async (taskId: string, newPriority: "low" | "medium" | "high") => {
+				// Perform the actual database update
+				const task = currentTask;
+				task.priority = newPriority;
+				task.updatedAt = new Date();
+				await db.put(taskId, task);
+
+				// Process automation rules for priority change (optimized)
+				// Only process if priority actually changed
+				if (oldPriority !== newPriority) {
+					const automationResults = await this.automationEngine.processTaskEvent(
+						"task_priority_changed",
+						{
+							taskId,
+							oldPriority,
+							newPriority,
+							task,
+						},
+						[task], // Pass just the updated task to reduce processing
+					);
+					
+					if (automationResults.length > 0) {
+						console.log(
+							`[AUTOMATION] Processed ${automationResults.length} automation rules for priority change`,
+						);
+					}
+
+					// Broadcast priority change to WebSocket clients
+					if (this.wsManager) {
+						this.wsManager.broadcastTaskPriorityChanged(taskId, oldPriority, newPriority, task);
+					}
+				}
+
+				return task;
 			},
-			allTasks,
 		);
-		if (automationResults.length > 0) {
-			console.log(
-				`[AUTOMATION] Processed ${automationResults.length} automation rules for priority change`,
-			);
-		}
-
-		// Broadcast priority change to WebSocket clients
-		if (this.wsManager) {
-			this.wsManager.broadcastTaskPriorityChanged(id, oldPriority, priority, task);
-		}
-
-		return task;
 	}
 
 	// Delete a task
@@ -479,7 +665,6 @@ export class ProductManager {
 		}
 
 		const task = await db.get(id);
-		const _oldAssignedTo = task.assignedTo;
 		task.assignedTo = assignedTo;
 		task.updatedAt = new Date();
 		await db.put(id, task);
@@ -490,6 +675,11 @@ export class ProductManager {
 		}
 
 		return task;
+	}
+
+	// Update task assignment (alias for assignTask)
+	async updateTaskAssignment(id: string, assignedTo: string, assignedBy?: string): Promise<Task> {
+		return await this.assignTask(id, assignedTo, assignedBy);
 	}
 
 	// Update task collaborators
@@ -505,7 +695,6 @@ export class ProductManager {
 		}
 
 		const task = await db.get(id);
-		const _oldCollaborators = task.collaborators || [];
 		task.collaborators = collaborators;
 		task.updatedAt = new Date();
 		await db.put(id, task);
@@ -527,7 +716,6 @@ export class ProductManager {
 		}
 
 		const task = await db.get(id);
-		const _oldWatchers = task.watchers || [];
 		task.watchers = watchers;
 		task.updatedAt = new Date();
 		await db.put(id, task);
@@ -597,7 +785,7 @@ export class ProductManager {
 			};
 		}
 
-		const currentTaskId = context?.task?.id ?? context?.taskId ?? "n/a";
+		const currentTaskId = getContextTaskId(context) ?? "n/a";
 		const prompt = `${profile.systemPrompt}\n\n${profile.getTaskPrompt(context)}`;
 		console.log(`[ACP] Starting ${profile.role} profile communication (taskId=${currentTaskId})`);
 
@@ -611,7 +799,7 @@ export class ProductManager {
 			console.error(
 				`[ACP] ${profile.role} profile communication error (taskId=${currentTaskId}): ${error}`,
 			);
-			const errorMsg = `Task execution failed: ACP connection failed: ${(error as Error).message}`;
+			const errorMsg = `Task execution failed: ACP connection failed: ${getErrorMessage(error)}`;
 			return { output: "", errorOutput: errorMsg };
 		}
 	}
@@ -633,7 +821,7 @@ export class ProductManager {
 			console.error(`[ACP] ACP communication error (taskId=${taggedTask}): ${error}`);
 
 			// Fail with error - no fallbacks
-			const errorMsg = `Task execution failed: ACP connection failed: ${(error as Error).message}`;
+			const errorMsg = `Task execution failed: ACP connection failed: ${getErrorMessage(error)}`;
 			return { output: "", errorOutput: errorMsg };
 		}
 	}
@@ -645,9 +833,18 @@ export class ProductManager {
 	): Promise<{ output: string; errorOutput: string }> {
 		type ConnectionResult = Awaited<ReturnType<typeof ACPConnectionManager.createConnection>>;
 		let connectionResult: ConnectionResult | null = null;
+        const profile = this.profileManager.getProfile(profileName);
 		try {
 			// Create ACP connection
-			connectionResult = await ACPConnectionManager.createConnection();
+			connectionResult = await ACPConnectionManager.createConnection(undefined, {
+                modelName: profile?.modelName,
+                runtimeName: profile?.runtimeName,
+                modeName: profile?.acpMode,
+                sandbox: profile?.acpSandbox,
+                approvalPolicy: profile?.acpApprovalPolicy,
+                mcpServers: profile?.mcpServers,
+            });
+			connectionResult.taskClient.profileName = profileName;
 
 			// Send prompt
 			const promptResult = await ACPConnectionManager.sendPrompt(
@@ -659,12 +856,14 @@ export class ProductManager {
 			// Mark the task client as complete as soon as the prompt returns a stop reason
 			if (promptResult?.stopReason) {
 				console.log(`[ACP] Prompt completed with stop reason: ${promptResult.stopReason}`);
-				connectionResult.taskClient.markTurnComplete(promptResult.stopReason);
+				const stopReason =
+					typeof promptResult.stopReason === "string"
+						? promptResult.stopReason
+						: String(promptResult.stopReason);
+				connectionResult.taskClient.markTurnComplete(stopReason);
 			}
 
 			// Get task client from connection for response checking
-			const profile = this.profileManager.getProfile(profileName);
-
 			// Wait for completion using the actual task client that receives updates
 			const result = await ACPConnectionManager.waitForTaskCompletion(
 				connectionResult.taskClient,
@@ -693,7 +892,7 @@ export class ProductManager {
 	// Workflow-driven loop placeholder
 	private async runWorkflowLoop(): Promise<void> {
 		type WorkflowContext = {
-			session?: { profile: string } & Record<string, unknown>;
+			session?: AcpSession;
 			lastTestResult?: unknown;
 		} & Record<string, unknown>;
 
@@ -706,7 +905,20 @@ export class ProductManager {
 				// cleanup old session if switching profiles
 				await Effect.runPromise(acpCleanupEffect(existing));
 			}
-			const session = await startAcpSession(profile, { state: token.state });
+            const profileConfig = this.profileManager.getProfile(profile);
+			const session = await startAcpSession(
+                profile,
+                { state: token.state },
+                undefined,
+                {
+                    modelName: profileConfig?.modelName,
+                    runtimeName: profileConfig?.runtimeName,
+                    modeName: profileConfig?.acpMode,
+                    sandbox: profileConfig?.acpSandbox,
+                    approvalPolicy: profileConfig?.acpApprovalPolicy,
+                    mcpServers: profileConfig?.mcpServers,
+                },
+            );
 			token.context.session = session;
 			return session;
 		};
@@ -720,25 +932,82 @@ export class ProductManager {
 				return result;
 			});
 
-		const runTestsEffect = (payload?: { token?: typeof token }) =>
-			Effect.promise(async () => {
-				const res = await runLintAndTests();
-				if (payload?.token) {
-					if (!payload.token.context) payload.token.context = {};
-					payload.token.context.lastTestResult = res;
-				}
-				if (!res.passed) {
-					const summary = [
-						res.lintPassed ? "lint:pass" : "lint:fail",
-						res.testPassed ? "tests:pass" : "tests:fail",
-					].join(" ");
-					console.log(`[TESTS] failed -> ${summary}`);
-					// Do not throw; allow workflow to advance to tests-completed and let the decider route to tests-failed.
-					return res;
-				}
-				console.log("[TESTS] passed");
-				return res;
-			});
+			const runQaGateEffect = (
+				stage: "lint" | "typecheck" | "unit-tests" | "e2e-tests" | "coverage",
+				command: string,
+				payload?: { token?: typeof token },
+			) =>
+				Effect.promise(async () => {
+					let output = "";
+					let success = false;
+					try {
+						const result = await execAsync(command, {
+							timeout: stage === "lint" || stage === "typecheck" ? 300_000 : 900_000,
+							maxBuffer: 10 * 1024 * 1024,
+						});
+						const stdout = (result.stdout ?? "").toString();
+						const stderr = (result.stderr ?? "").toString();
+						output = [
+							`[${stage}] command: ${command}`,
+							`[${stage}] stdout:`,
+							stdout.length > 0 ? stdout : "(empty)",
+							`[${stage}] stderr:`,
+							stderr.length > 0 ? stderr : "(empty)",
+						].join("\n");
+						success = true;
+					} catch (error) {
+						const errorRecord = isRecord(error) ? error : {};
+						const stdout = typeof errorRecord.stdout === "string" ? errorRecord.stdout : "";
+						const stderr = typeof errorRecord.stderr === "string" ? errorRecord.stderr : "";
+						const message =
+							typeof errorRecord.message === "string"
+								? errorRecord.message
+								: getErrorMessage(error);
+						output = [
+							`[${stage}] command: ${command}`,
+							`[${stage}] error: ${message}`,
+							`[${stage}] stdout:`,
+							stdout.length > 0 ? stdout : "(empty)",
+							`[${stage}] stderr:`,
+							stderr.length > 0 ? stderr : "(empty)",
+						].join("\n");
+						success = false;
+					}
+					const statusLine = `Test status: ${success ? "passed" : "failed"}`;
+					const qaResult = {
+						passed: success,
+						success,
+						stage,
+						output: `${output}\n${statusLine}`.trim(),
+					};
+					if (payload?.token) {
+						if (!payload.token.context) payload.token.context = {};
+						payload.token.context.lastTestResult = qaResult;
+					}
+					console.log(`[QA:${stage}] ${success ? "passed" : "failed"}`);
+					return qaResult;
+				});
+
+				const runQaFailureEffect = (
+					stageLabel: string,
+					payload?: unknown,
+				) =>
+					(() => {
+						const lastOutput = getLastTestResultFromPayload(payload)?.output;
+						return acpEffect(
+							"development",
+							`${stageLabel} failed. Root-cause remediation is the priority.
+
+Failure output:
+${lastOutput ?? "No output"}
+
+Required workflow:
+1) Identify the specific failing checks and write a root-cause hypothesis.
+2) Implement the smallest targeted fix for that root cause.
+3) Re-run the failing scope first.
+4) Summarize root cause, files changed, and test results.`,
+						)();
+					})();
 
 		const workflow = buildWorkflowWithEffects({
 			"new-feature-proposed": {
@@ -746,10 +1015,26 @@ export class ProductManager {
 					Effect.gen(function* () {
 						const eff = acpEffect(
 							"product-manager",
-							`Generate exactly ONE Feature ticket.
-- Title should read like a feature request (avoid story/task phrasing).
-- Include: description, user value, acceptance criteria, priority.
-- Do NOT output stories or tasks here.`,
+							`Generate exactly ONE feature using MCP tools.
+
+You MUST use MCP tool calls (no XML tags like <parameter>). Do NOT output a plain-text ticket without tool calls.
+
+Step-by-step:
+1) Call create_task exactly once with JSON parameters:
+   {
+     "title": "<feature request title>",
+     "description": "<concise summary with user value + acceptance criteria>",
+     "prd": "# Product Requirements Document\\n<minimum 2800 words (roughly 7-8 A4 pages) including goals, scope, requirements, UX flows, API/contracts, rollout, risks, and testing>",
+     "type": "feature",
+     "priority": "low|medium|high",
+     "createdBy": "product-manager"
+   }
+2) Call list_tasks to confirm it exists.
+
+Tool names are namespaced by MCP server. Use the exact tool name shown in the ACP tool list
+(for example: functions.mcp__task-manager__create_task).
+
+Return a short summary after tool calls.`,
 						);
 						// swallow ACP failures to allow retry via state loop
 						yield* Effect.catchAll(eff(), (err) =>
@@ -757,7 +1042,7 @@ export class ProductManager {
 						);
 					}),
 				"prioritize-features": acpEffect(
-					"product-manager",
+					"product-prioritization-lead",
 					"Prioritize newly proposed features and push the top one to UX.",
 				),
 			},
@@ -770,13 +1055,13 @@ export class ProductManager {
 - Do NOT produce tasks here.`,
 				),
 				"prioritize-stories": acpEffect(
-					"ux-specialist",
+					"story-prioritization-lead",
 					"Re-prioritize existing Stories only; do not create tasks here.",
 				),
 			},
 			"stories-created": {
 				"prioritize-stories": acpEffect(
-					"ux-specialist",
+					"story-prioritization-lead",
 					"Draft 3-5 user stories (title, description, AC) and rank them.",
 				),
 				"request-feature": acpEffect(
@@ -788,8 +1073,18 @@ export class ProductManager {
 				"refine-into-tasks": acpEffect(
 					"refinement",
 					`Take the highest-priority Story and break it into 3-7 executable Tasks.
-- Tasks should be implementation-ready, small, and testable.
-- Do NOT create new stories or features here.`,
+- Do NOT create new stories or features here.
+- Tasks must be implementation-ready, small, and testable.
+- For each implementation task description, include:
+  - objective and user impact
+  - explicit scope + non-goals
+  - relevant file paths with why each file matters
+  - APIs/contracts involved, plus example payloads when applicable
+  - interaction/gotcha notes across files/services
+  - concrete testing plan (unit/integration/e2e + commands)
+  - future-state notes that should influence current implementation
+  - AGENTS.md constraints relevant to execution (4-space indentation, double quotes, functional style, .ts local import extensions)
+- Descriptions must be actionable without unresolved architecture questions.`,
 				),
 			},
 			"tasks-prepared": {
@@ -802,55 +1097,85 @@ export class ProductManager {
 					"No stories ready. Request more stories or unblock refinement.",
 				),
 			},
-			"task-in-progress": {
-				"run-tests": (payload) =>
-					Effect.catchAll(runTestsEffect(payload), (err) =>
-						Effect.sync(() => {
-							console.error("[TESTS] run-tests effect failed", err);
-						}),
+				"task-in-progress": {
+					"run-lint": (payload) =>
+						Effect.catchAll(runQaGateEffect("lint", "yarn run lint", payload), (err) =>
+							Effect.sync(() => {
+								console.error("[QA] run-lint effect failed", err);
+							}),
+						),
+					"refine-task": acpEffect(
+						"refinement",
+						"No actionable task; request refinement or split work.",
 					),
-				"refine-task": acpEffect(
-					"refinement",
-					"No actionable task; request refinement or split work.",
-				),
-			},
-			"tests-completed": {
-				"tests-passing": (_payload) =>
-					Effect.gen(function* () {
-						const commitMsg = `Automated: tests passing (${new Date().toISOString()})`;
-						try {
-							const result = yield* Effect.promise(() => gitCommitIfChanges(commitMsg));
-							console.log("[GIT] Commit result:", result);
-						} catch (err) {
-							console.error("[GIT] Commit failed:", err);
-						}
+				},
+				"lint-completed": {
+					"run-typecheck": (payload) =>
+						Effect.catchAll(runQaGateEffect("typecheck", "yarn run typecheck", payload), (err) =>
+							Effect.sync(() => {
+								console.error("[QA] run-typecheck effect failed", err);
+							}),
+						),
+					"lint-failed": (payload) => runQaFailureEffect("Lint", payload),
+				},
+				"typecheck-completed": {
+					"run-unit-tests": (payload) =>
+						Effect.catchAll(runQaGateEffect("unit-tests", "yarn run test", payload), (err) =>
+							Effect.sync(() => {
+								console.error("[QA] run-unit-tests effect failed", err);
+							}),
+						),
+					"typecheck-failed": (payload) => runQaFailureEffect("Typecheck", payload),
+				},
+				"unit-tests-completed": {
+					"run-e2e-tests": (payload) =>
+						Effect.catchAll(runQaGateEffect("e2e-tests", "npx playwright test", payload), (err) =>
+							Effect.sync(() => {
+								console.error("[QA] run-e2e-tests effect failed", err);
+							}),
+						),
+					"unit-tests-failed": (payload) => runQaFailureEffect("Unit tests", payload),
+				},
+				"e2e-tests-completed": {
+					"ensure-coverage": (payload) =>
+						Effect.catchAll(
+							runQaGateEffect("coverage", "yarn run test -- --coverage", payload),
+							(err) =>
+								Effect.sync(() => {
+									console.error("[QA] ensure-coverage effect failed", err);
+								}),
+						),
+					"e2e-tests-failed": (payload) => runQaFailureEffect("E2E tests", payload),
+				},
+				"coverage-completed": {
+					"tests-passing": () =>
+						Effect.gen(function* () {
+							const commitMsg = `Automated: tests passing (${new Date().toISOString()})`;
+							try {
+								const result = yield* Effect.promise(() => gitCommitIfChanges(commitMsg));
+								console.log("[GIT] Commit result:", result);
+							} catch (err) {
+								console.error("[GIT] Commit failed:", err);
+							}
 
-						yield* acpEffect(
-							"qa-specialist",
-							"Tests passed. Confirm readiness and summarize what was validated.",
-						)();
-					}),
-				"tests-failed": (payload) =>
-					acpEffect(
-						"qa-specialist",
-						`Tests failed. Here is the output:\n${payload?.token?.context?.lastTestResult?.output ?? "No output"}\nPropose fixes and plan next steps.`,
-					)(),
-			},
-			"task-completed": {
+							yield* acpEffect(
+								"qa-specialist",
+								"All QA gates passed. Confirm readiness and summarize what was validated.",
+							)();
+						}),
+					"coverage-failed": (payload) => runQaFailureEffect("Coverage", payload),
+				},
+				"task-completed": {
 				"pick-up-next-task": acpEffect(
 					"development",
 					"Task closed. Announce completion and request next task.",
 				),
-				"research-new-features": acpEffect(
-					"product-manager",
-					"Identify new feature opportunities now that a task was delivered.",
-				),
 				"prioritize-features": acpEffect(
-					"product-manager",
+					"product-prioritization-lead",
 					"Revisit feature priorities after recent deliveries.",
 				),
 				"prioritize-stories": acpEffect(
-					"ux-specialist",
+					"story-prioritization-lead",
 					"Re-rank stories based on the latest delivery context.",
 				),
 			},
@@ -865,15 +1190,18 @@ export class ProductManager {
 				const tasks = await this.getAllTasks();
 
 				// Decide transition for the current state
-				const decider = workflow[token.state]?.decider;
-				let transition = decider ? decider(tasks) : undefined;
-
-				if (token.state === "tests-completed") {
-					const lastResult = token.context?.lastTestResult as { passed?: boolean } | undefined;
-					const passed = lastResult?.passed === true;
-					transition = passed ? "tests-passing" : "tests-failed";
+				const state = workflow[token.state];
+				const deciderContext = { tasks };
+				let transition: string | undefined;
+				for (const { transitionName, decider } of state?.deciders ?? []) {
+					if (await decider(deciderContext)) {
+						transition = transitionName;
+						break;
+					}
 				}
-
+				if (!transition) {
+					transition = state?.defaultTransition ?? Object.keys(state?.transitions ?? {})[0];
+				}
 				if (!transition) {
 					throw new Error(`No transition chosen for state ${token.state}`);
 				}
@@ -890,8 +1218,7 @@ export class ProductManager {
 			} catch (error) {
 				console.error("[WORKFLOW] Error in loop:", error);
 				// Crash fast if DB is locked/unavailable so supervisor can restart cleanly
-				const errObj = error as { code?: string; cause?: { code?: string } };
-				const code = errObj.code || errObj.cause?.code;
+				const code = getErrorCode(error);
 				if (code === "LEVEL_DATABASE_NOT_OPEN" || code === "LEVEL_LOCKED") {
 					throw error;
 				}
@@ -1227,6 +1554,629 @@ export class ProductManager {
 		} catch (error) {
 			console.error(`[PROFILE] Failed to assign task to ${profileName}:`, error);
 			return false;
+		}
+	}
+
+	// Advanced search functionality
+	async searchTasks(query: import("./types.ts").SearchQuery): Promise<import("./types.ts").SearchResult> {
+		await this.ensureDbOpen();
+		
+		const allTasks = await this.getAllTasks();
+		let filteredTasks = [...allTasks];
+
+		// Apply filters
+		if (query.status && query.status.length > 0) {
+			filteredTasks = filteredTasks.filter(task => query.status!.includes(task.status));
+		}
+
+		if (query.priority && query.priority.length > 0) {
+			filteredTasks = filteredTasks.filter(task => query.priority!.includes(task.priority));
+		}
+
+		if (query.type && query.type.length > 0) {
+			filteredTasks = filteredTasks.filter(task => query.type!.includes(task.type));
+		}
+
+		if (query.assignedTo && query.assignedTo.length > 0) {
+			filteredTasks = filteredTasks.filter(task => 
+				task.assignedTo && query.assignedTo!.includes(task.assignedTo)
+			);
+		}
+
+		if (query.createdBy && query.createdBy.length > 0) {
+			filteredTasks = filteredTasks.filter(task => 
+				query.createdBy!.includes(task.createdBy)
+			);
+		}
+
+		if (query.collaborators && query.collaborators.length > 0) {
+			filteredTasks = filteredTasks.filter(task => 
+				task.collaborators && task.collaborators.some(col => query.collaborators!.includes(col))
+			);
+		}
+
+		if (query.watchers && query.watchers.length > 0) {
+			filteredTasks = filteredTasks.filter(task => 
+				task.watchers && task.watchers.some(watcher => query.watchers!.includes(watcher))
+			);
+		}
+
+		if (query.dateFrom) {
+			const fromDate = new Date(query.dateFrom);
+			filteredTasks = filteredTasks.filter(task => new Date(task.createdAt) >= fromDate);
+		}
+
+		if (query.dateTo) {
+			const toDate = new Date(query.dateTo);
+			filteredTasks = filteredTasks.filter(task => new Date(task.createdAt) <= toDate);
+		}
+
+		if (query.updatedFrom) {
+			const fromDate = new Date(query.updatedFrom);
+			filteredTasks = filteredTasks.filter(task => new Date(task.updatedAt) >= fromDate);
+		}
+
+		if (query.updatedTo) {
+			const toDate = new Date(query.updatedTo);
+			filteredTasks = filteredTasks.filter(task => new Date(task.updatedAt) <= toDate);
+		}
+
+		if (query.dependencies && query.dependencies.length > 0) {
+			filteredTasks = filteredTasks.filter(task => 
+				query.dependencies!.some(dep => task.dependencies.includes(dep))
+			);
+		}
+
+		if (query.hasDependencies !== undefined) {
+			filteredTasks = filteredTasks.filter(task => 
+				query.hasDependencies ? task.dependencies.length > 0 : task.dependencies.length === 0
+			);
+		}
+
+		// Apply text search with relevance scoring
+		let searchResults: {
+			task: import("./types.ts").Task;
+			score: number;
+			matches?: { title: number[]; description: number[] };
+		}[];
+
+		if (query.q && query.q.trim().length > 0) {
+			searchResults = this.performTextSearch(filteredTasks, query.q);
+		} else {
+			searchResults = filteredTasks.map(task => ({ task, score: 0 }));
+		}
+
+		// Apply sorting
+		if (query.sort) {
+			searchResults = this.sortSearchResults(searchResults, query.sort);
+		} else {
+			// Default sort: relevance (if search query) then priority then creation date
+			searchResults.sort((a, b) => {
+				if (query.q && query.q.trim().length > 0) {
+					if (a.score !== b.score) return b.score - a.score;
+				}
+				const priorityOrder = { high: 3, medium: 2, low: 1 };
+				const priorityDiff = priorityOrder[b.task.priority] - priorityOrder[a.task.priority];
+				if (priorityDiff !== 0) return priorityDiff;
+				return new Date(b.task.createdAt).getTime() - new Date(a.task.createdAt).getTime();
+			});
+		}
+
+		// Apply pagination
+		const total = searchResults.length;
+		const offset = query.offset || 0;
+		const limit = query.limit || 50;
+		const paginatedResults = searchResults.slice(offset, offset + limit);
+
+		// Prepare highlights
+		const highlights: Record<string, { titleMatches?: number[]; descriptionMatches?: number[] }> = {};
+		paginatedResults.forEach(result => {
+			if (result.matches) {
+				highlights[result.task.id] = {
+					titleMatches: result.matches.title,
+					descriptionMatches: result.matches.description,
+				};
+			}
+		});
+
+		// Generate facets
+		const facets = this.generateSearchFacets(allTasks, filteredTasks);
+
+		// Generate suggestions based on query
+		const suggestions = this.generateSearchSuggestions(query.q, allTasks);
+
+		return {
+			tasks: paginatedResults.map(result => result.task),
+			total,
+			query,
+			highlights: Object.keys(highlights).length > 0 ? highlights : undefined,
+			facets,
+			suggestions: suggestions.length > 0 ? suggestions : undefined,
+		};
+	}
+
+	private performTextSearch(
+		tasks: import("./types.ts").Task[],
+		query: string
+	): {
+		task: import("./types.ts").Task;
+		score: number;
+		matches?: { title: number[]; description: number[] };
+	}[] {
+		const searchTerms = query
+			.toLowerCase()
+			.split(/\s+/)
+			.filter(term => term.length > 0);
+
+		return tasks
+			.map(task => {
+				const title = task.title.toLowerCase();
+				const description = task.description.toLowerCase();
+
+				let score = 0;
+				const titleMatches: number[] = [];
+				const descriptionMatches: number[] = [];
+
+				searchTerms.forEach(term => {
+					// Title matches (higher weight)
+					let titleIndex = title.indexOf(term);
+					while (titleIndex !== -1) {
+						score += 10; // Title matches get 10 points
+						titleMatches.push(titleIndex);
+						titleIndex = title.indexOf(term, titleIndex + 1);
+					}
+
+					// Description matches (lower weight)
+					let descIndex = description.indexOf(term);
+					while (descIndex !== -1) {
+						score += 5; // Description matches get 5 points
+						descriptionMatches.push(descIndex);
+						descIndex = description.indexOf(term, descIndex + 1);
+					}
+				});
+
+				// Exact phrase match bonus
+				if (title.includes(query.toLowerCase()) || description.includes(query.toLowerCase())) {
+					score += 20;
+				}
+
+				// Priority bonus
+				if (task.priority === "high") score += 2;
+				else if (task.priority === "medium") score += 1;
+
+				// Recent task bonus (created in last 7 days)
+				const weekAgo = new Date();
+				weekAgo.setDate(weekAgo.getDate() - 7);
+				if (new Date(task.createdAt) > weekAgo) score += 1;
+
+				const result: {
+					task: import("./types.ts").Task;
+					score: number;
+					matches?: { title: number[]; description: number[] };
+				} = {
+					task,
+					score,
+				};
+
+				if (titleMatches.length > 0 || descriptionMatches.length > 0) {
+					result.matches = {
+						title: titleMatches,
+						description: descriptionMatches,
+					};
+				}
+
+				return result;
+			})
+			.filter(result => result.score > 0)
+			.sort((a, b) => b.score - a.score);
+	}
+
+	private sortSearchResults(
+		results: {
+			task: import("./types.ts").Task;
+			score: number;
+			matches?: { title: number[]; description: number[] };
+		}[], 
+		sort: import("./types.ts").SearchSort
+	): typeof results {
+		const { field, direction } = sort;
+		const multiplier = direction === "asc" ? 1 : -1;
+
+		return results.sort((a, b) => {
+			let comparison = 0;
+
+			switch (field) {
+				case "relevance":
+					comparison = a.score - b.score;
+					break;
+				case "title":
+					comparison = a.task.title.localeCompare(b.task.title);
+					break;
+				case "createdAt":
+					comparison = new Date(a.task.createdAt).getTime() - new Date(b.task.createdAt).getTime();
+					break;
+				case "updatedAt":
+					comparison = new Date(a.task.updatedAt).getTime() - new Date(b.task.updatedAt).getTime();
+					break;
+				case "priority": {
+					const priorityOrder = { high: 3, medium: 2, low: 1 };
+					comparison = priorityOrder[a.task.priority] - priorityOrder[b.task.priority];
+					break;
+				}
+				case "status": {
+					const statusOrder = { "todo": 1, "in-progress": 2, "done": 3 };
+					comparison = statusOrder[a.task.status] - statusOrder[b.task.status];
+					break;
+				}
+			}
+
+			return comparison * multiplier;
+		});
+	}
+
+	private generateSearchFacets(
+		allTasks: import("./types.ts").Task[],
+		filteredTasks: import("./types.ts").Task[]
+	): import("./types.ts").SearchFacets {
+		const statusCounts: Record<import("./types.ts").TaskStatus, number> = {
+			"todo": 0,
+			"in-progress": 0,
+			"done": 0,
+		};
+
+		const priorityCounts: Record<import("./types.ts").Task["priority"], number> = {
+			"low": 0,
+			"medium": 0,
+			"high": 0,
+		};
+
+		const typeCounts: Record<import("./types.ts").TaskType, number> = {
+			"theme": 0,
+			"initiative": 0,
+			"feature": 0,
+			"story": 0,
+			"task": 0,
+			"implementation": 0,
+			"integration": 0,
+			"testing": 0,
+			"research": 0,
+		};
+
+		const assignedToCounts: Record<string, number> = {};
+		const createdByCounts: Record<string, number> = {};
+
+		filteredTasks.forEach(task => {
+			statusCounts[task.status]++;
+			priorityCounts[task.priority]++;
+			typeCounts[task.type]++;
+			
+			if (task.assignedTo) {
+				assignedToCounts[task.assignedTo] = (assignedToCounts[task.assignedTo] || 0) + 1;
+			}
+			
+			createdByCounts[task.createdBy] = (createdByCounts[task.createdBy] || 0) + 1;
+		});
+
+		return {
+			status: statusCounts,
+			priority: priorityCounts,
+			type: typeCounts,
+			assignedTo: assignedToCounts,
+			createdBy: createdByCounts,
+		};
+	}
+
+	generateSearchSuggestions(query: string | undefined, tasks: import("./types.ts").Task[]): string[] {
+		if (!query || query.trim().length < 2) return [];
+
+		const suggestions = new Set<string>();
+		const queryLower = query.toLowerCase();
+
+		// Extract words from task titles and descriptions
+		tasks.forEach(task => {
+			const titleWords = task.title.toLowerCase().split(/\s+/);
+			const descWords = task.description.toLowerCase().split(/\s+/);
+
+			[...titleWords, ...descWords].forEach(word => {
+				if (word.includes(queryLower) && word.length > queryLower.length) {
+					suggestions.add(word);
+				}
+			});
+		});
+
+		return Array.from(suggestions).slice(0, 10); // Limit to 10 suggestions
+	}
+
+	// Saved searches functionality
+	private async ensureSavedSearchesDbOpen(): Promise<void> {
+		try {
+			await savedSearchesDb.open();
+		} catch (error) {
+			console.error("[SAVED_SEARCHES_DB] Failed to open database:", error);
+			throw error;
+		}
+	}
+
+	async createSavedSearch(input: import("./types.ts").CreateSavedSearchInput, createdBy: string): Promise<import("./types.ts").SavedSearch> {
+		await this.ensureSavedSearchesDbOpen();
+
+		const id = `saved-search-${Date.now()}`;
+		const savedSearch: import("./types.ts").SavedSearch = {
+			id,
+			name: input.name,
+			description: input.description,
+			query: input.query,
+			createdBy,
+			isPublic: input.isPublic || false,
+			createdAt: new Date(),
+			updatedAt: new Date(),
+			usageCount: 0,
+		};
+
+		await savedSearchesDb.put(id, savedSearch);
+		console.log(`[SAVED_SEARCHES_DB] Created saved search: ${id}`);
+		return savedSearch;
+	}
+
+	async getSavedSearches(userId?: string): Promise<import("./types.ts").SavedSearch[]> {
+		await this.ensureSavedSearchesDbOpen();
+
+		const searches: import("./types.ts").SavedSearch[] = [];
+		const iterator = savedSearchesDb.iterator();
+
+		try {
+			for await (const [, value] of iterator) {
+				// Include public searches or user's own searches
+				if (value.isPublic || (userId && value.createdBy === userId)) {
+					searches.push(value);
+				}
+			}
+		} catch (error) {
+			console.error("[SAVED_SEARCHES_DB] Error reading saved searches:", error);
+			throw error;
+		} finally {
+			try {
+				await iterator.close();
+			} catch (closeError) {
+				console.error("[SAVED_SEARCHES_DB] Error closing iterator:", closeError);
+			}
+		}
+
+		return searches.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+	}
+
+	async getSavedSearch(id: string, userId?: string): Promise<import("./types.ts").SavedSearch | null> {
+		await this.ensureSavedSearchesDbOpen();
+
+		try {
+			const savedSearch = await savedSearchesDb.get(id);
+
+			// Check access permissions
+			if (!savedSearch.isPublic && (!userId || savedSearch.createdBy !== userId)) {
+				return null;
+			}
+
+			// Increment usage count
+			savedSearch.usageCount++;
+			savedSearch.updatedAt = new Date();
+			await savedSearchesDb.put(id, savedSearch);
+
+			return savedSearch;
+		} catch (_error) {
+			void _error;
+			return null;
+		}
+	}
+
+	async updateSavedSearch(input: import("./types.ts").UpdateSavedSearchInput, userId: string): Promise<import("./types.ts").SavedSearch> {
+		await this.ensureSavedSearchesDbOpen();
+
+		const existingSearch = await savedSearchesDb.get(input.id).catch(() => null);
+		if (!existingSearch) {
+			throw new Error("Saved search not found");
+		}
+
+		if (existingSearch.createdBy !== userId) {
+			throw new Error("Not authorized to update this saved search");
+		}
+
+		const updatedSearch: import("./types.ts").SavedSearch = {
+			...existingSearch,
+			...(input.name && { name: input.name }),
+			...(input.description !== undefined && { description: input.description }),
+			...(input.query && { query: input.query }),
+			...(input.isPublic !== undefined && { isPublic: input.isPublic }),
+			updatedAt: new Date(),
+		};
+
+		await savedSearchesDb.put(input.id, updatedSearch);
+		console.log(`[SAVED_SEARCHES_DB] Updated saved search: ${input.id}`);
+		return updatedSearch;
+	}
+
+	async deleteSavedSearch(id: string, userId: string): Promise<void> {
+		await this.ensureSavedSearchesDbOpen();
+
+		const existingSearch = await savedSearchesDb.get(id).catch(() => null);
+		if (!existingSearch) {
+			throw new Error("Saved search not found");
+		}
+
+		if (existingSearch.createdBy !== userId) {
+			throw new Error("Not authorized to delete this saved search");
+		}
+
+		await savedSearchesDb.del(id);
+		console.log(`[SAVED_SEARCHES_DB] Deleted saved search: ${id}`);
+	}
+
+	// Archive management methods
+	
+	// Initialize archive service
+	async initializeArchiveService(): Promise<void> {
+		try {
+			await this.archiveService.initialize();
+			console.log("[PRODUCT-MANAGER] Archive service initialized");
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to initialize archive service:", error);
+			throw error;
+		}
+	}
+
+	// Archive a task
+	async archiveTask(taskId: string, reason: string, archivedBy: string, options?: {
+		retentionPolicyId?: string;
+		tags?: string[];
+	}): Promise<import("./services/archive-service.ts").ArchivedTask> {
+		try {
+			const archivedTask = await this.archiveService.archiveTask(taskId, reason, archivedBy, options);
+			
+			// Broadcast task archived event
+			if (this.wsManager) {
+				this.wsManager.broadcast({
+					type: "task_archived",
+					timestamp: new Date(),
+					data: {
+						taskId,
+						reason,
+						archivedBy,
+						archivedAt: archivedTask.archivedAt,
+					},
+				});
+			}
+			
+			return archivedTask;
+		} catch (error) {
+			console.error(`[PRODUCT-MANAGER] Failed to archive task ${taskId}:`, error);
+			throw error;
+		}
+	}
+
+	// Restore an archived task
+	async restoreTask(archivedTaskId: string, restoredBy: string): Promise<Task> {
+		try {
+			const restoredTask = await this.archiveService.restoreTask(archivedTaskId, restoredBy);
+			
+			// Broadcast task restored event
+			if (this.wsManager) {
+				this.wsManager.broadcast({
+					type: "task_restored",
+					timestamp: new Date(),
+					data: {
+						taskId: restoredTask.id,
+						restoredBy,
+						restoredAt: new Date().toISOString(),
+					},
+				});
+			}
+			
+			return restoredTask;
+		} catch (error) {
+			console.error(`[PRODUCT-MANAGER] Failed to restore task ${archivedTaskId}:`, error);
+			throw error;
+		}
+	}
+
+	// Create retention policy
+	async createRetentionPolicy(policy: Omit<import("./services/archive-service.ts").RetentionPolicy, "id" | "createdAt" | "updatedAt">): Promise<import("./services/archive-service.ts").RetentionPolicy> {
+		try {
+			return await this.archiveService.createRetentionPolicy(policy);
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to create retention policy:", error);
+			throw error;
+		}
+	}
+
+	// Get retention policies
+	async getRetentionPolicies(): Promise<import("./services/archive-service.ts").RetentionPolicy[]> {
+		try {
+			return await this.archiveService.getRetentionPolicyList();
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to get retention policies:", error);
+			throw error;
+		}
+	}
+
+	// Execute retention policy
+	async executeRetentionPolicy(policyId: string, executedBy: string): Promise<{
+		archived: import("./services/archive-service.ts").ArchivedTask[];
+		deleted: string[];
+		flagged: string[];
+	}> {
+		try {
+			const result = await this.archiveService.executeRetentionPolicy(policyId, executedBy);
+			
+			// Broadcast policy execution event
+			if (this.wsManager) {
+				this.wsManager.broadcast({
+					type: "retention_policy_executed",
+					timestamp: new Date(),
+					data: {
+						policyId,
+						executedBy,
+						result: {
+							archivedCount: result.archived.length,
+							deletedCount: result.deleted.length,
+							flaggedCount: result.flagged.length,
+						},
+					},
+				});
+			}
+			
+			return result;
+		} catch (error) {
+			console.error(`[PRODUCT-MANAGER] Failed to execute retention policy ${policyId}:`, error);
+			throw error;
+		}
+	}
+
+	// Search archived tasks
+	async searchArchivedTasks(query: {
+		text?: string;
+		archivedBy?: string;
+		dateFrom?: Date;
+		dateTo?: Date;
+		retentionPolicyId?: string;
+		originalStatus?: import("./types.ts").TaskStatus;
+	}): Promise<import("./services/archive-service.ts").ArchivedTask[]> {
+		try {
+			return await this.archiveService.searchArchivedTasks(query);
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to search archived tasks:", error);
+			throw error;
+		}
+	}
+
+	// Get archive statistics
+	async getArchiveStats(): Promise<import("./services/archive-service.ts").ArchiveStats> {
+		try {
+			return await this.archiveService.getArchiveStats();
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to get archive stats:", error);
+			throw error;
+		}
+	}
+
+	// Cleanup old archived tasks
+	async cleanupOldArchivedTasks(olderThanDays: number): Promise<string[]> {
+		try {
+			const deletedIds = await this.archiveService.cleanupOldArchivedTasks(olderThanDays);
+			
+			console.log(`[PRODUCT-MANAGER] Cleaned up ${deletedIds.length} old archived tasks`);
+			return deletedIds;
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to cleanup old archived tasks:", error);
+			throw error;
+		}
+	}
+
+	// Export archived tasks
+	async exportArchivedTasks(format: "json" | "csv" = "json"): Promise<string | Buffer> {
+		try {
+			return await this.archiveService.exportArchivedTasks(format);
+		} catch (error) {
+			console.error("[PRODUCT-MANAGER] Failed to export archived tasks:", error);
+			throw error;
 		}
 	}
 }

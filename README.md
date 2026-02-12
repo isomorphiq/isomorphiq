@@ -1,4 +1,4 @@
-# Opencode Task Manager
+# Isomorphiq Task Manager
 
 A TypeScript application that uses LevelDB to track task progress and delegates to an opencode ACP server via stdio.
 
@@ -20,19 +20,19 @@ The application follows this workflow:
 ## Requirements
 
 - opencode CLI installed and available in PATH
-- Node.js 14+ with TypeScript support
+- Node.js 24+ (uses native TypeScript type stripping)
 
 ## Usage
 
 ```bash
 # Install dependencies
-npm install
+yarn install
 
 # Build the application
-npm run build
+yarn run build
 
 # Run the application
-npm start
+yarn start
 ```
 
 ## Implementation Details
@@ -47,15 +47,17 @@ Note: The current implementation spawns the opencode process for each command. E
 
 ## MCP Server Integration
 
-The application includes an MCP (Model Context Protocol) server that allows OpenCode agents to directly manage tasks. The MCP server exposes tools for creating, reading, updating, and prioritizing tasks stored in LevelDB.
+The application includes an MCP (Model Context Protocol) server that allows Isomorphiq agents to directly manage tasks. The MCP server exposes tools for creating, reading, updating, and prioritizing tasks stored in LevelDB via the tasks microservice.
+
+Note: MCP task and context operations currently talk directly to the tasks/context microservices (tRPC) to avoid daemon-held LevelDB locks. The long-term plan is to route these operations through the gateway once it exposes orchestration endpoints (see TODO in `packages/mcp/src/mcp-server.ts`).
 
 ### Starting the MCP Server
 ```bash
 # Build the project first
-npm run build
+yarn run build
 
 # Start MCP server with helpful output
-npm run start-mcp
+yarn run start-mcp
 ```
 
 ### Configuring OpenCode to Use MCP
@@ -63,12 +65,12 @@ npm run start-mcp
 # Option 1: Global configuration
 opencode config set mcp.servers.task-manager '{
   "command": "node",
-  "args": ["src/mcp-server.ts"],
+  "args": ["packages/mcp/src/mcp-server.ts"],
   "env": {}
 }'
 
 # Option 2: Inline configuration
-opencode run --mcp-server '{"name": "task-manager", "command": "node", "args": ["src/mcp-server.ts"]}' "Your prompt here"
+opencode run --mcp-server '{"name": "task-manager", "command": "node", "args": ["packages/mcp/src/mcp-server.ts"]}' "Your prompt here"
 ```
 
 ### MCP Tools Available
@@ -83,10 +85,10 @@ See `mcp-config.md` and `opencode-mcp-setup.md` for detailed configuration instr
 
 ## 🚀 Launch Status: READY FOR PRODUCTION
 
-The OpenCode Task Manager MCP app is now **launch-ready** with full MCP server functionality and automated task processing.
+The Isomorphiq Task Manager MCP app is now **launch-ready** with full MCP server functionality and automated task processing.
 
 ### ✅ Launch Checklist Completed
-- [x] MCP server with 9 working tools
+- [x] MCP server with task + context tools
 - [x] Daemon task processing with realistic simulation
 - [x] Comprehensive error handling and detection
 - [x] End-to-end integration testing
@@ -96,22 +98,23 @@ The OpenCode Task Manager MCP app is now **launch-ready** with full MCP server f
 
 1. **Install dependencies:**
    ```bash
-   npm install
+   yarn install
    ```
 
 2. **Start the MCP server:**
    ```bash
-   npm run start-mcp
+   yarn run start-mcp
    ```
 
 3. **Start the task daemon:**
    ```bash
-   npm run daemon
+   yarn run supervisor
    ```
+   This starts the daemon and the tasks microservice together.
 
 4. **Test MCP tools:**
    ```bash
-   npm run test-mcp
+   yarn run test-mcp
    ```
 
 ### MCP Tools Available
@@ -124,6 +127,12 @@ The OpenCode Task Manager MCP app is now **launch-ready** with full MCP server f
 | `update_task_status` | Update task status | ✅ Working |
 | `update_task_priority` | Change task priority | ✅ Working |
 | `delete_task` | Remove tasks | ✅ Working |
+| `create_context` | Create a workflow context record | ✅ Working |
+| `get_context` | Retrieve a context record | ✅ Working |
+| `update_context` | Merge updates into context data | ✅ Working |
+| `replace_context` | Replace full context data | ✅ Working |
+| `delete_context` | Remove a context record | ✅ Working |
+| `list_contexts` | List context records | ✅ Working |
 | `check_daemon_status` | Check daemon health | ✅ Working |
 | `start_daemon` | Start daemon if stopped | ✅ Working |
 | `restart_daemon` | Gracefully restart daemon | ✅ Working |
@@ -131,7 +140,10 @@ The OpenCode Task Manager MCP app is now **launch-ready** with full MCP server f
 ### Architecture
 
 - **MCP Server**: Provides tools for task management to OpenCode agents
-- **Task Daemon**: Processes tasks in background with realistic simulation
+- **Gateway**: Orchestrates cross-service requests and proxies `/trpc` to the tasks microservice
+- **Tasks Microservice**: Owns task-only logic, holds the LevelDB lock, and exposes the tRPC API
+- **Context Microservice**: Owns workflow context storage, holds the LevelDB lock, and exposes the tRPC API
+- **Task Daemon**: Processes tasks in background with realistic simulation (non-task orchestration stays in gateway)
 - **LevelDB Storage**: Persistent task storage with priority management
 - **TCP Communication**: Reliable inter-process communication
 
@@ -139,11 +151,12 @@ The OpenCode Task Manager MCP app is now **launch-ready** with full MCP server f
 
 ```bash
 # Build for production
-npm run build
+yarn run build
 
 # Start services
-npm run start-mcp &
-npm run daemon &
+yarn run start-mcp &
+yarn run supervisor &
+yarn run gateway &
 
 # Monitor logs
 tail -f mcp-server.log daemon.log

@@ -1,0 +1,8 @@
+{
+  "id": "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-016",
+  "title": "Define Widget Registry and Core Widget Types",
+  "type": "implementation",
+  "priority": "high",
+  "createdBy": "refinement",
+  "description": "Create the widget registry that defines the 5 required widget types (My Tasks, Recent Activity, Priority Breakdown, Search, System Health) with their configurations, default sizes, and metadata. This task provides the foundational widget definitions that the UI components will consume.\n\nAcceptance Criteria:\n1. WidgetRegistry class that manages all available widget definitions\n2. Definition for 'My Tasks' widget (default: 4x3, shows user's active tasks)\n3. Definition for 'Recent Activity' widget (default: 6x2, shows system activity log)\n4. Definition for 'Priority Breakdown' widget (default: 4x4, shows task priority chart)\n5. Definition for 'Search' widget (default: 6x2, provides global search interface)\n6. Definition for 'System Health' widget (default: 4x2, shows system status metrics)\n7. Each widget includes metadata: display name, description, icon, category, default size, min/max sizes\n8. Registry integrates with existing dashboard-model.ts WidgetDefinition schema\n9. Extensible design for future widget additions\n10. Widget validation and type safety throughout the registry"
+}

@@ -1,0 +1,8 @@
+{
+  "id": "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-004",
+  "title": "Create Widget Library UI and Interactive Controls",
+  "description": "Build the interactive user interface for the widget library and widget controls that integrates with the existing addWidgetFromLibrary and removeWidgetFromDashboard services. This includes creating a widget browser component, add/remove controls that appear on hover/focus, empty state guidance for first-time users, and proper accessibility patterns. Acceptance criteria: Interactive widget library displays all 5 available widget types with descriptions, users can add widgets via the browser interface, widgets show remove/edit controls on hover/focus, empty state guides users to add first widget, all interactions are accessible and keyboard-navigable, UI integrates seamlessly with existing dashboard-service.ts functions.",
+  "priority": "high",
+  "type": "implementation",
+  "createdBy": "refinement"
+}

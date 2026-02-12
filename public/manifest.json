@@ -1,6 +1,6 @@
 {
-  "name": "Isomorphia Task Manager",
-  "short_name": "Isomorphia",
+  "name": "Isomorphiq Task Manager",
+  "short_name": "Isomorphiq",
   "description": "Command the Flow - Mobile-responsive task management with offline support",
   "start_url": "/",
   "display": "standalone",

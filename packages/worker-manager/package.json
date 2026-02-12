@@ -1,0 +1,35 @@
+{
+    "name": "@isomorphiq/worker-manager",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "start": "node --experimental-strip-types src/worker-manager-server.ts",
+        "start:watch": "node --watch --experimental-strip-types src/worker-manager-server.ts",
+        "lint": "echo \"Lint not configured yet for @isomorphiq/worker-manager\"",
+        "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts"
+    },
+    "dependencies": {
+        "@isomorphiq/core": "workspace:*",
+        "@isomorphiq/core-microservice": "workspace:*",
+        "@isomorphiq/core-supervision": "workspace:*",
+        "@tsimpl/core": "0.1.1",
+        "@tsimpl/runtime": "0.1.1",
+        "@tsimpl/validation": "0.1.1",
+        "level": "^10.0.0",
+        "zod": "^3.24.2"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
+    }
+}

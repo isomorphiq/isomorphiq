@@ -1,0 +1,8 @@
+{
+  "id": "task-9137a3bc-ca1a-45a3-982d-72fe3a063584-003",
+  "title": "Implement Drag-and-Drop Widget Rearrangement with Visual Feedback",
+  "description": "Build complete drag-and-drop functionality for dashboard widgets that integrates with the existing state management and layout systems. This requires creating drag event handlers, visual feedback components (ghost previews, drop zones), smooth animations, and collision detection that works with the existing dashboard-service.ts and layout computation functions. Acceptance criteria: Users can drag widgets with visual ghost preview, drop zones highlight when dragging over valid areas, widgets animate smoothly to new positions, layout updates persist immediately on drop using existing storage, drag-and-drop works on both desktop (mouse) and mobile (touch) devices, collision detection prevents widget overlap using existing algorithms.",
+  "priority": "high",
+  "type": "implementation",
+  "createdBy": "refinement"
+}

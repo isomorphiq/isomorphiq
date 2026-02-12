@@ -1,0 +1,7 @@
+{
+  "title": "Define Complete Widget Library with Required Widget Types",
+  "description": "Create comprehensive widget definitions for all required widget types (My Tasks, Recent Activity, Priority Breakdown, Search, System Health) with appropriate default sizes, minimum/maximum sizes, and metadata. This includes extending the WidgetLibrary type and creating a default widget library instance that can be used across the application. Acceptance criteria: All 5 widget types are defined with proper metadata, each widget has appropriate size constraints, widget library exports as a singleton that can be imported by other components, TypeScript types are complete and validated.",
+  "priority": "high",
+  "type": "implementation",
+  "createdBy": "refinement"
+}

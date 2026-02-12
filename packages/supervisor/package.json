@@ -1,0 +1,38 @@
+{
+    "name": "@isomorphiq/supervisor",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/init.ts",
+    "types": "src/init.ts",
+    "exports": {
+        ".": {
+            "import": "./src/init.ts",
+            "types": "./src/init.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "start": "node --experimental-strip-types src/init.ts",
+        "start:watch": "SUPERVISOR_WATCH=1 node --experimental-strip-types src/init.ts",
+        "ps": "node --experimental-strip-types src/ps.ts",
+        "reset_workers": "node --experimental-strip-types src/reset-workers.ts",
+        "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts"
+    },
+    "dependencies": {
+        "@isomorphiq/context": "workspace:*",
+        "@isomorphiq/core-supervision": "workspace:*",
+        "@isomorphiq/persistence-level": "workspace:*",
+        "@isomorphiq/tasks": "workspace:*",
+        "@isomorphiq/worker-manager": "workspace:*",
+        "@tsimpl/core": "0.1.1",
+        "@tsimpl/runtime": "0.1.1",
+        "@tsimpl/validation": "0.1.1",
+        "ink": "^4.3.0",
+        "react": "^18.3.1"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
+    }
+}

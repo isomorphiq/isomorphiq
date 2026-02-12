@@ -1,0 +1,35 @@
+{
+    "name": "@isomorphiq/http-server",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts"
+    },
+    "dependencies": {
+        "@isomorphiq/api-prelude": "workspace:*",
+        "@isomorphiq/auth": "workspace:*",
+        "@isomorphiq/http-api": "workspace:*",
+        "@isomorphiq/integrations": "workspace:*",
+        "@isomorphiq/realtime": "workspace:*",
+        "@isomorphiq/tasks": "workspace:*",
+        "@isomorphiq/workflow": "workspace:*",
+        "@trpc/server": "^11.7.2",
+        "cors": "^2.8.5",
+        "express": "^5.2.1",
+        "ws": "^8.18.3"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
+    }
+}

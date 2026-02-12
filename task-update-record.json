@@ -1,0 +1,12 @@
+{
+  "taskId": "task-1765516228776-i0emhswko",
+  "title": "Task 3",
+  "description": "Third task",
+  "previousStatus": "todo",
+  "newStatus": "in-progress",
+  "assignedTo": "development",
+  "priority": "high",
+  "timestamp": "2025-12-12T05:35:00.000Z",
+  "reason": "Highest priority task assigned to development for implementation",
+  "manualUpdateRequired": true
+}

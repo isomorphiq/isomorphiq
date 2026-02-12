@@ -2,14 +2,25 @@
 
 ## Code Refactoring Prompt
 ```
-Refactor [COMPONENT/MODULE] to improve:
-- Code readability and maintainability
-- Performance bottlenecks
+Refactor [COMPONENT/MODULE] using atomic, incremental edits:
+
+Editing approach:
+- Use the `edit` tool for targeted changes, never `write` entire files
+- Make one logical change per edit call
+- Verify each change before proceeding
+
+Refactoring goals:
+- Break down large functions (target 20-50 lines, max 80)
+- Split large files (target 100-200 lines, refactor at 300+)
+- Extract complex logic into focused helper functions
 - Remove code duplication
 - Improve error handling
 - Enhance type safety
 
-Maintain existing functionality while improving code quality.
+Organization:
+- Group related functionality by domain
+- Use clear, descriptive naming
+- Maintain existing functionality while improving code quality
 ```
 
 ## Legacy Code Modernization Prompt

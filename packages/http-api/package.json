@@ -1,0 +1,40 @@
+{
+    "name": "@isomorphiq/http-api",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "lint": "echo \"Lint not configured yet for @isomorphiq/http-api\"",
+        "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts"
+    },
+    "dependencies": {
+        "@isomorphiq/acp": "workspace:*",
+        "@isomorphiq/analytics": "workspace:*",
+        "@isomorphiq/auth": "workspace:*",
+        "@isomorphiq/core": "workspace:*",
+        "@isomorphiq/integrations": "workspace:*",
+        "@isomorphiq/plugins": "workspace:*",
+        "@isomorphiq/profiles": "workspace:*",
+        "@isomorphiq/realtime": "workspace:*",
+        "@isomorphiq/scheduling": "workspace:*",
+        "@isomorphiq/tasks": "workspace:*",
+        "@isomorphiq/workflow": "workspace:*",
+        "@trpc/server": "^11.7.2",
+        "cors": "^2.8.5",
+        "express": "^5.2.1",
+        "ws": "^8.18.3"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
+    }
+}

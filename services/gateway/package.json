@@ -1,0 +1,32 @@
+{
+    "name": "@isomorphiq/gateway",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "start": "node --experimental-strip-types src/index.ts",
+        "start:watch": "node --watch --experimental-strip-types src/index.ts",
+        "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts"
+    },
+"dependencies": {
+         "@isomorphiq/auth": "workspace:*",
+         "@isomorphiq/context": "workspace:*",
+         "@isomorphiq/core": "workspace:*",
+         "@isomorphiq/http-server": "workspace:*",
+         "@isomorphiq/realtime": "workspace:*",
+        "@isomorphiq/tasks": "workspace:*"
+     },
+    "devDependencies": {
+        "typescript": "^5.9.3"
+    }
+}

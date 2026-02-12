@@ -1,9 +1,11 @@
-import { ProductManager } from "./index.ts";
+import { ProductManager } from "@isomorphiq/profiles";
+import path from "node:path";
 
 async function runTests() {
 	console.log("[TEST] Starting test suite...");
 
-	const pm = new ProductManager();
+	const testDbPath = path.join(process.cwd(), "test-db");
+	const pm = new ProductManager(testDbPath);
 
 	try {
 		// Test 1: Create a task

@@ -1,5 +1,5 @@
-import type { ACPProfile } from "./acp-profiles.ts";
-import { ProfileManager } from "./acp-profiles.ts";
+import type { ACPProfile } from "@isomorphiq/profiles";
+import { ProfileManager } from "@isomorphiq/profiles";
 import { PluginManager } from "./plugin-manager.ts";
 import { PluginSecurityManager } from "./plugin-sandbox.ts";
 import type { PluginConfig, PluginHealth, ProfilePlugin } from "./plugin-system.ts";
@@ -12,6 +12,7 @@ type RoutedTask = Record<string, unknown> & {
 
 /**
  * Enhanced profile manager that integrates with the plugin system
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
  */
 export class EnhancedProfileManager extends ProfileManager {
 	private pluginManager: PluginManager;
@@ -99,6 +100,7 @@ export class EnhancedProfileManager extends ProfileManager {
 			this.registerProfile({
 				name: profile.name,
 				role: profile.role,
+				principalType: profile.principalType,
 				capabilities: profile.capabilities,
 				maxConcurrentTasks: profile.maxConcurrentTasks,
 				priority: profile.priority,
@@ -150,6 +152,7 @@ export class EnhancedProfileManager extends ProfileManager {
 		return Array.from(this.pluginProfiles.values()).map((profile) => ({
 			name: profile.name,
 			role: profile.role,
+			principalType: profile.principalType,
 			capabilities: profile.capabilities,
 			maxConcurrentTasks: profile.maxConcurrentTasks,
 			priority: profile.priority,
@@ -167,6 +170,7 @@ export class EnhancedProfileManager extends ProfileManager {
 			? {
 					name: profile.name,
 					role: profile.role,
+					principalType: profile.principalType,
 					capabilities: profile.capabilities,
 					maxConcurrentTasks: profile.maxConcurrentTasks,
 					priority: profile.priority,
@@ -222,11 +226,10 @@ export class EnhancedProfileManager extends ProfileManager {
 		const pluginProfiles = this.getPluginProfiles();
 		const availablePluginProfiles = pluginProfiles.filter((profile) => {
 			const state = profile.plugin.state;
-			return (
-				state === "active" &&
-				profile.plugin.getConfig().enabled &&
-				this.isProfileAvailable(profile.name)
-			);
+			const config =
+				this.pluginManager.getPluginConfig(profile.plugin.metadata.name) ??
+				profile.plugin.defaultConfig;
+			return state === "active" && config.enabled && this.isProfileAvailable(profile.name);
 		});
 
 		if (availablePluginProfiles.length > 0) {
@@ -298,7 +301,9 @@ export class EnhancedProfileManager extends ProfileManager {
 				name: plugin.metadata.name,
 				version: plugin.metadata.version,
 				state: plugin.state,
-				enabled: plugin.getConfig().enabled,
+				enabled:
+					this.pluginManager.getPluginConfig(plugin.metadata.name)?.enabled ??
+					plugin.defaultConfig.enabled,
 				health: healthMap.get(plugin.metadata.name),
 				hasProfile: this.pluginProfiles.has(plugin.metadata.name),
 			})),
@@ -343,3 +348,4 @@ interface PluginSystemStatus {
 
 // Export for use in other modules
 export { EnhancedProfileManager as default };
+

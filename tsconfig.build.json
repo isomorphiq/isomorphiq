@@ -1,23 +1,15 @@
 {
+	"extends": "./tsconfig.base.json",
 	"compilerOptions": {
 		"outDir": "./dist",
 		"module": "es2020",
 		"target": "es2020",
 		"moduleResolution": "node",
-		"types": ["node"],
-		"sourceMap": true,
-		"declaration": true,
-		"strict": false,
-		"noImplicitAny": false,
-		"strictNullChecks": false,
-		"skipLibCheck": true,
-		"noImplicitReturns": false,
-		"noFallthroughCasesInSwitch": false,
 		"esModuleInterop": true,
 		"allowSyntheticDefaultImports": true,
 		"verbatimModuleSyntax": false,
-		"allowImportingTsExtensions": true
+		"noEmit": true
 	},
 	"include": ["src/**/*"],
-	"exclude": ["node_modules", "dist", "web", "scripts"]
+	"exclude": ["node_modules", "dist", "web", "scripts", "packages", "apps"]
 }

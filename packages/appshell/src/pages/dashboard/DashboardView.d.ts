@@ -1,0 +1,22 @@
+import type { Task } from "@isomorphiq/tasks/types";
+import type { AuthState, DashboardTotals } from "../../hooks/useDashboardTasks.ts";
+import type { OfflineTask } from "../../hooks/useOfflineSync.ts";
+type DashboardViewProps = {
+    auth: AuthState;
+    isMobile: boolean;
+    showCreateForm: boolean;
+    onToggleCreate: () => void;
+    onCreateSuccess: () => void;
+    totals: DashboardTotals;
+    totalTaskCount: number;
+    queue: Array<Task | OfflineTask>;
+    tasks: Array<Task | OfflineTask>;
+    onStatusChange: (taskId: string, newStatus: Task["status"]) => void;
+    onPriorityChange: (taskId: string, newPriority: Task["priority"]) => void;
+    onDelete: (taskId: string) => void;
+    isLoading: boolean;
+    isOnline: boolean;
+    syncInProgress: boolean;
+};
+export declare function DashboardView({ auth, isMobile, showCreateForm, onToggleCreate, onCreateSuccess, totals, totalTaskCount, queue, tasks, onStatusChange, onPriorityChange, onDelete, isLoading, isOnline, syncInProgress, }: DashboardViewProps): import("react/jsx-runtime").JSX.Element;
+export {};

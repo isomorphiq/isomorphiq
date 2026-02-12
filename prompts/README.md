@@ -45,6 +45,13 @@ This directory contains various prompt templates for instructing the OpenCode ag
 - User guides
 - Technical specifications
 
+### 🔧 MCP Tooling (`mcp-tool-calling.md`)
+**Recommended Mode:** `build` or `ask`
+- Tool calling format (JSON arguments)
+- Read/write/verify sequencing
+- Expected responses from list/get/create/update tools
+- File context tracking via `get_file_context`
+
 ## Usage Instructions
 
 1. **Choose the appropriate prompt template** based on your task type
@@ -73,15 +80,23 @@ All prompts work with the MCP task management server. The agent can:
 - Update task status as work progresses
 - Prioritize tasks based on importance
 - Track completion and dependencies
+- Attach and update file-level context using `get_file_context`
 
 ## Best Practices
 
+### Task Definition
 1. **Be specific** - Provide detailed requirements and constraints
 2. **Include context** - Reference existing code, patterns, and standards
 3. **Specify technologies** - Mention frameworks, libraries, and tools
 4. **Define success criteria** - What constitutes completion
 5. **Request deliverables** - Tests, documentation, examples
-6. **Module resolution** - Node runs ESM with no transpilation; all local TS imports must include the `.ts` extension (e.g., `import { foo } from "./foo.ts"`). Omitting extensions will break the app.
+
+### Code Organization & Editing
+6. **Prefer atomic edits** - Use the `edit` tool for targeted changes; avoid rewriting entire files with `write`
+7. **Small functions** - Each function should do one thing (target 20-50 lines, max 80)
+8. **Small files** - Keep files focused (target 100-200 lines, refactor at 300+)
+9. **Clear organization** - Group by domain/feature, use descriptive names, avoid deep nesting
+10. **Module resolution** - Node runs ESM with no transpilation; all local TS imports must include the `.ts` extension (e.g., `import { foo } from "./foo.ts"`). Omitting extensions will break the app.
 
 ## Monitoring Agent Work
 

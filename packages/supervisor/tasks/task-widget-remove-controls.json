@@ -1,0 +1,7 @@
+{
+  "title": "Build Widget Remove Controls with Hover/Focus Interactions",
+  "description": "Implement remove controls for dashboard widgets that appear on hover or focus, including remove buttons, confirmation dialogs, and smooth animations. The controls should be accessible and provide clear visual feedback for destructive actions. Acceptance criteria: Remove controls appear on widget hover/focus with smooth transitions, remove button is clearly visible and accessible via keyboard, confirmation dialog prevents accidental removal, removal animation provides visual feedback, widget removal updates layout immediately and persists state, empty dashboard state shows guidance to add new widgets, remove functionality works consistently across all widget types.",
+  "priority": "high",
+  "type": "implementation",
+  "createdBy": "refinement"
+}

@@ -1,0 +1,25 @@
+{
+    "name": "@isomorphiq/persistence-antidote",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts"
+    },
+    "dependencies": {
+        "@isomorphiq/persistence-adapter": "workspace:*"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
+    }
+}

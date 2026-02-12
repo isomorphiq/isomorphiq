@@ -1,8 +1,9 @@
-import { AuthService } from "./auth-service.ts";
-import { DatabaseSchemaManager } from "./repositories/auth-schema-manager.ts";
-import { AuthenticationRepository } from "./repositories/authentication-repository.ts";
-import type { CreateUserInput, User } from "./types.ts";
+import { DatabaseSchemaManager, AuthenticationRepository } from "@isomorphiq/auth";
+import type { CreateUserInput, User } from "@isomorphiq/auth";
 
+/**
+ * TODO: Reimplement this class using @tsimpl/core and @tsimpl/runtime's struct/trait/impl pattern inspired by Rust.
+ */
 export class DatabaseInitializer {
 	private schemaManager: DatabaseSchemaManager;
 	private authRepository: AuthenticationRepository;
@@ -10,7 +11,6 @@ export class DatabaseInitializer {
 	constructor(dbPath?: string) {
 		this.schemaManager = new DatabaseSchemaManager(dbPath);
 		this.authRepository = new AuthenticationRepository(dbPath);
-		this.authService = new AuthService();
 	}
 
 	async initialize(): Promise<{ success: boolean; message: string; error?: string }> {
@@ -119,27 +119,12 @@ export class DatabaseInitializer {
 	}
 
 	private async getAllUsers(): Promise<User[]> {
-		// This is a simplified version - in production you'd want proper pagination
-		const users: User[] = [];
-
 		try {
-			const userDb = (
-				this.authRepository as {
-					userDb?: { iterator: () => AsyncIterableIterator<[unknown, User]> };
-				}
-			).userDb;
-			const iterator = userDb.iterator();
-
-			for await (const [, value] of iterator) {
-				users.push(value);
-			}
-
-			await iterator.close();
+			return await this.authRepository.listUsers();
 		} catch (error) {
 			console.error("[DB-INIT] Error getting users:", error);
+			return [];
 		}
-
-		return users;
 	}
 
 	async cleanup(): Promise<void> {
@@ -169,27 +154,7 @@ export class DatabaseInitializer {
 			const userCount = users.length;
 
 			// Get session count (simplified)
-			let sessionCount = 0;
-			try {
-				const sessionDb = (
-					this.authRepository as {
-						sessionDb?: {
-							iterator: () => AsyncIterableIterator<[unknown, { isActive?: boolean }]>;
-						};
-					}
-				).sessionDb;
-				const iterator = sessionDb.iterator();
-
-				for await (const [, value] of iterator) {
-					if (value.isActive) {
-						sessionCount++;
-					}
-				}
-
-				await iterator.close();
-			} catch (error) {
-				console.error("[DB-INIT] Error getting session count:", error);
-			}
+			const sessionCount = await this.authRepository.countActiveSessions();
 
 			// Validate schema
 			const validationResult = await this.schemaManager.validateSchema();
@@ -247,3 +212,4 @@ async function main() {
 if (import.meta.url === `file://${process.argv[1]}`) {
 	main().catch(console.error);
 }
+

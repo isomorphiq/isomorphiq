@@ -1,0 +1,35 @@
+{
+    "name": "@isomorphiq/inference",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "exports": {
+        ".": {
+            "import": "./src/index.ts",
+            "types": "./src/index.ts"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "start": "node --experimental-strip-types src/inference-service-server.ts",
+        "start:watch": "node --watch --experimental-strip-types src/inference-service-server.ts",
+        "lint": "echo \"Lint not configured yet for @isomorphiq/inference\"",
+        "test": "node --test --experimental-strip-types ../../scripts/workspace-test.ts tests/*.test.ts"
+    },
+    "dependencies": {
+        "@isomorphiq/core-microservice": "workspace:*",
+        "@isomorphiq/core-supervision": "workspace:*",
+        "@trpc/client": "^11.7.2",
+        "@trpc/server": "^11.7.2",
+        "@tsimpl/core": "0.1.1",
+        "@tsimpl/runtime": "0.1.1",
+        "@tsimpl/validation": "0.1.1",
+        "zod": "^3.24.2"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.3"
+    }
+}

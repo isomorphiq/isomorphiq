@@ -18,7 +18,7 @@
 	"files": {
 		"includes": [
 			"src/**/*.{ts,tsx,js,jsx}",
-			"web/**/*.{ts,tsx,js,jsx}",
+			"packages/appshell/**/*.{ts,tsx,js,jsx}",
 			"scripts/**/*.{ts,js}",
 			"*.json"
 		]

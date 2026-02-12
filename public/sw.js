@@ -1,6 +1,6 @@
-const CACHE_NAME = "isomorphia-v1";
-const STATIC_CACHE_NAME = "isomorphia-static-v1";
-const DYNAMIC_CACHE_NAME = "isomorphia-dynamic-v1";
+const CACHE_NAME = "isomorphiq-v1";
+const STATIC_CACHE_NAME = "isomorphiq-static-v1";
+const DYNAMIC_CACHE_NAME = "isomorphiq-dynamic-v1";
 
 const STATIC_ASSETS = [
   "/",
@@ -175,7 +175,7 @@ async function handlePageRequest(request) {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>Offline - Isomorphia</title>
+          <title>Offline - Isomorphiq</title>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <style>
@@ -301,7 +301,7 @@ self.addEventListener("push", (event) => {
   };
 
   event.waitUntil(
-    self.registration.showNotification("Isomorphia", options)
+    self.registration.showNotification("Isomorphiq", options)
   );
 });
 
